@@ -5,9 +5,9 @@ alwaysApply: true
 
 # Harness project
 
-This repo is a file agent: an OpenAI-compatible chat loop, tools confined to one workspace, and a JSONL trace in that workspace's `log.txt`.
+This repo is a file agent: an OpenAI-compatible chat loop, tools confined to one workspace, and a JSONL trace in that workspace's `session.log`.
 
-- `src/harness/config.py` holds `MODEL`, `MAX_TURNS`, `MAX_TOOL_RESULT`, and `LOG_PATH`.
+- `src/harness/config.py` holds `MODEL`, `MAX_TURNS`, and `MAX_TOOL_RESULT`.
 - `src/harness/prompt.py` builds the system prompt.
 - `src/harness/tools.py` defines the tool schema and the sandbox.
 - `src/harness/agent.py` owns `Session` and `run`.

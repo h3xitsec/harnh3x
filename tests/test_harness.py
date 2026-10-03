@@ -129,8 +129,7 @@ def test_max_turns_closes_with_an_assistant_message(tmp_path, monkeypatch):
     client = SimpleNamespace(
         chat=SimpleNamespace(completions=SimpleNamespace(create=create))
     )
-    log_path = tmp_path / "log.txt"
-    session = agent.Session(workspace=tmp_path, log_path=str(log_path))
+    session = agent.Session(workspace=tmp_path)
 
     text = agent.run("read missing.txt", session, client=client)
 
@@ -140,6 +139,7 @@ def test_max_turns_closes_with_an_assistant_message(tmp_path, monkeypatch):
         "content": "Max turns reached.",
     }
     assert session.messages[-2]["role"] == "tool"
+    log_path = tmp_path / "session.log"
     events = [json.loads(line)["event"] for line in log_path.read_text().splitlines()]
     assert events == ["turn", "model", "tool_call", "tool_result", "model"]
 
@@ -271,8 +271,11 @@ def test_session_log_lives_in_the_workspace(tmp_path, monkeypatch):
     monkeypatch.delenv("WORKSPACE", raising=False)
 
     session = agent.Session()
+    agent.write_log({"event": "turn", "turn": 0}, session.workspace)
 
-    assert session.log_path == str(session.workspace / "log.txt")
+    log_file = session.workspace / "session.log"
+    assert json.loads(log_file.read_text().strip()) == {"event": "turn", "turn": 0}
+    assert not (tmp_path / "session.log").exists()
     assert session.workspace.parent == (tmp_path / "workspaces").resolve()
 
 
@@ -280,8 +283,8 @@ def test_session_defaults_to_a_unique_workspace(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("WORKSPACE", raising=False)
 
-    first = agent.Session(log_path=str(tmp_path / "a.txt"))
-    second = agent.Session(log_path=str(tmp_path / "b.txt"))
+    first = agent.Session()
+    second = agent.Session()
 
     root = (tmp_path / "workspaces").resolve()
     assert first.workspace.is_dir()
@@ -296,13 +299,13 @@ def test_session_defaults_to_a_unique_workspace(tmp_path, monkeypatch):
 def test_session_workspace_argument_and_env_override_the_default(tmp_path, monkeypatch):
     explicit = tmp_path / "explicit"
     monkeypatch.setenv("WORKSPACE", str(tmp_path / "from-env"))
-    chosen = agent.Session(workspace=explicit, log_path=str(tmp_path / "log.txt"))
+    chosen = agent.Session(workspace=explicit)
     assert chosen.workspace == explicit.resolve()
     assert explicit.is_dir()
 
     monkeypatch.chdir(tmp_path)
     from_env = tmp_path / "from-env"
-    session = agent.Session(log_path=str(tmp_path / "log.txt"))
+    session = agent.Session()
     assert session.workspace == from_env.resolve()
     assert from_env.is_dir()
     assert not (tmp_path / "workspaces").exists()

@@ -1,8 +1,7 @@
-MODEL = "llama3.1:8b"  # Cheap and fast for learning
+MODEL = "llama3.1:8b"
 MAX_TURNS = 15
 MAX_TOOL_RESULT = 8_000
 FETCH_TIMEOUT = 15
 FETCH_MAX_BYTES = 2_000_000
 FETCH_MAX_REDIRECTS = 5
-LOG_PATH = "log.txt"
 WORKSPACES_DIR = "workspaces"
