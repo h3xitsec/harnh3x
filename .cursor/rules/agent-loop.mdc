@@ -1,0 +1,31 @@
+---
+description: Chat loop, message shape, JSONL log, and prompt contract
+globs: src/harness/agent.py,src/harness/prompt.py,src/harness/config.py,src/harness.py
+alwaysApply: false
+---
+
+# Agent loop
+
+`Session` resolves the workspace and starts `messages` with `system_prompt`. `run` takes an injected client; production uses the lazy `get_client()` singleton.
+
+Store model turns only through `assistant_message`: `role`, `content`, and `tool_calls` of `{id, type, function: {name, arguments}}`. Drop SDK extras such as `index`. Append tool results as `{"role": "tool", "tool_call_id", "content"}`.
+
+Log one JSON object per line to `log.txt` inside the workspace unless `log_path` is passed: `turn`, `model`, `tool_call` (truncate arg previews past 500 chars), `tool_result`. When `MAX_TURNS` is exhausted, append and return the assistant message `Max turns reached.` and log that model event.
+
+Prompt contract: reads give the user the file content; writes confirm success without echoing content; deletes use `delete_file`; always confirm what was done. News calls `parse_page` with the article URL; summarize only the extracted text and confirm the URL. If the tool returns an error, report it. Do not paste the raw page or invent the article.
+
+```python
+# BAD: forwarding the raw SDK message
+session.messages.append(msg.model_dump())
+
+# GOOD: the stored shape tests assert
+stored = {
+    "role": "assistant",
+    "content": msg.content,
+    "tool_calls": [{
+        "id": tc.id,
+        "type": "function",
+        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+    }],
+}
+```

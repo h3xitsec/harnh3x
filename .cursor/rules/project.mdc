@@ -1,0 +1,27 @@
+---
+description: Harness layout, public API, and sandbox invariants
+alwaysApply: true
+---
+
+# Harness project
+
+This repo is a file agent: an OpenAI-compatible chat loop, tools confined to one workspace, and a JSONL trace in that workspace's `log.txt`.
+
+- `src/harness/config.py` holds `MODEL`, `MAX_TURNS`, `MAX_TOOL_RESULT`, and `LOG_PATH`.
+- `src/harness/prompt.py` builds the system prompt.
+- `src/harness/tools.py` defines the tool schema and the sandbox.
+- `src/harness/agent.py` owns `Session` and `run`.
+- `src/harness.py` is the CLI. Tests live in `tests/test_harness.py`.
+- Export new public symbols from `src/harness/__init__.py` `__all__`.
+
+Poetry with `package-mode = false`. Pytest uses `pythonpath = ["src"]`. Format with Black. Do not commit `src/.env`.
+
+A new tool, or a looser path or shell check, needs a matching test.
+
+```python
+# BAD: a second model constant next to the loop
+MODEL = "other"
+
+# GOOD: change the constant in src/harness/config.py
+from harness.config import MODEL
+```

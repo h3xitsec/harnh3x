@@ -1,0 +1,29 @@
+---
+description: Workspace jail, shell deny list, and tool error strings
+globs: src/harness/tools.py
+alwaysApply: false
+---
+
+# Tool sandbox
+
+Register every tool in both `TOOLS` and `TOOL_FNS`.
+
+Resolve every file path with `resolve_in_workspace` (`Path.resolve` plus `is_relative_to`). Reject empty paths and anything outside the workspace.
+
+Return failures as `Error: ...` strings. `execute_tool` catches `ValueError` and `OSError`. `_tool_result` turns bad JSON into a tool error and still returns `(args_or_none, result)`.
+
+`read_file` and `delete_file` refuse directories. `write_file` creates parents, writes UTF-8 bytes, and reports the byte count. Cap model-facing text with `cap_result` (`MAX_TOOL_RESULT`).
+
+`run_shell` stays `shell=False`, 30s timeout, allowlisted env. Block `SHELL_META` and `DENIED_COMMANDS` (`rm`, `mv`, `chmod`, `sudo`). Reject `..` in argv parts. Check absolute args with `resolve_in_workspace`.
+
+`fetch_url` allows only `http` and `https`, with no userinfo. Resolve the host and reject any address that is not global, and do the same on every redirect. Disable proxies. Save the body in the workspace (default `downloads/<host>-<hash>.html`) and return status, content type, byte count, and path. Cap the body at `FETCH_MAX_BYTES` and the request at `FETCH_TIMEOUT`. Accept only `text/html` and `application/xhtml+xml`.
+
+`parse_page` fetches when given `url` (or an http(s) value in `path`) and returns the saved path plus title, author, date, and article text from trafilatura. A `path` that is not a file path, such as the tool name `fetch_url`, is not used as the save location. With only `path`, it reads that workspace HTML file. Cap the text with `cap_result`. Missing files, directories, and empty extracts are `Error: ...`.
+
+```python
+# BAD: shell=True, or raising into the loop
+subprocess.run(command, shell=True, cwd=workspace)
+
+# GOOD: argv from prepare_shell, errors as strings
+return f"Error: {exc}"
+```

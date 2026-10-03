@@ -1,0 +1,24 @@
+---
+description: Offline pytest style for the harness loop and sandbox
+globs: tests/**/*.py
+alwaysApply: false
+---
+
+# Harness tests
+
+Use pytest. Workspaces are `tmp_path`. Patch limits with `monkeypatch` on `harness.agent`.
+
+Do not call the real API. Pass a `SimpleNamespace` client into `run`.
+
+Assert message shape, `Error:` / `outside workspace` / `blocked` strings, truncation length, and the JSONL event order: `turn`, `model`, `tool_call`, `tool_result`, plus the closing `model` when turns run out.
+
+```python
+# BAD: constructing OpenAI() inside a test
+client = OpenAI()
+
+# GOOD: a fake client and an isolated workspace
+client = SimpleNamespace(
+    chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+)
+text = agent.run("read missing.txt", session, client=client)
+```
