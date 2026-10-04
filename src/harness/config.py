@@ -1,4 +1,7 @@
-MODEL = "llama3.1:8b"
+MODEL = "qwen3.5:9b"
+#MODEL = "hf.co/unsloth/gpt-oss-20b-GGUF:Q4_K_M"
+#MODEL = "gpt-oss:20b"
+#MODEL = "gemma4:12b-it-qat"
 MAX_TURNS = 15
 MAX_TOOL_RESULT = 8_000
 FETCH_TIMEOUT = 15

@@ -8,10 +8,11 @@ alwaysApply: true
 This repo is a file agent: an OpenAI-compatible chat loop, tools confined to one workspace, and a JSONL trace in that workspace's `session.log`.
 
 - `src/harness/config.py` holds `MODEL`, `MAX_TURNS`, and `MAX_TOOL_RESULT`.
-- `src/harness/prompt.py` builds the system prompt.
-- `src/harness/tools.py` defines the tool schema and the sandbox.
+- `src/harness/prompt.py` builds the system prompt, including the skill menu.
+- `src/harness/tools.py` defines the tool schema and the sandbox. `TOOLS` is the full domain catalog.
+- `src/harness/skills/` holds `SkillRegistry` plus the `file_ops`, `shell`, and `news` skill docs. The loop sends `load_skill`, `unload_skill`, and schemas for loaded skills only.
 - `src/harness/agent.py` owns `Session` and `run`.
-- `src/harness.py` is the CLI. Tests live in `tests/test_harness.py`.
+- `src/harness.py` is the CLI. When a turn sends reasoning that is not the answer, a three-line thinking panel (scrolled to the end) sits above the answer. Ctrl+T expands it. One-shot on a terminal waits for Enter to close. Tests live in `tests/test_harness.py`.
 - Export new public symbols from `src/harness/__init__.py` `__all__`.
 
 Poetry with `package-mode = false`. Pytest uses `pythonpath = ["src"]`. Format with Black. Do not commit `src/.env`.

@@ -1,4 +1,4 @@
-from harness.agent import Session, assistant_message, run
+from harness.agent import Session, assistant_message, list_models, run
 from harness.config import (
     FETCH_MAX_BYTES,
     FETCH_MAX_REDIRECTS,
@@ -9,6 +9,7 @@ from harness.config import (
     WORKSPACES_DIR,
 )
 from harness.prompt import system_prompt
+from harness.skills import SkillRegistry
 from harness.tools import TOOLS, execute_tool
 
 __all__ = [
@@ -20,9 +21,11 @@ __all__ = [
     "MODEL",
     "WORKSPACES_DIR",
     "Session",
+    "SkillRegistry",
     "TOOLS",
     "assistant_message",
     "execute_tool",
+    "list_models",
     "run",
     "system_prompt",
 ]

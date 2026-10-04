@@ -106,21 +106,17 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "parse_page",
-            "description": "Fetch a news article URL and return its title and text. Pass the article URL as url. You can also pass path to an HTML file already saved in the workspace.",
+            "name": "parse_html",
+            "description": "Read an HTML file already saved in the workspace and return its title and text. Does not download.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "http or https article URL. When set, the page is fetched and extracted in this call.",
-                    },
                     "path": {
                         "type": "string",
-                        "description": "Optional path to an HTML file already saved in the workspace",
+                        "description": "Workspace path to the HTML file saved by fetch_url",
                     },
                 },
-                "required": ["url"],
+                "required": ["path"],
             },
         },
     },
@@ -316,23 +312,6 @@ def _http_get(url: str) -> tuple[int, str, bytes]:
         raise ValueError("timed out") from exc
 
 
-def _looks_like_url(value: str) -> bool:
-    parsed = urllib.parse.urlsplit(value.strip())
-    return parsed.scheme in {"http", "https"} and bool(parsed.hostname)
-
-
-def _explicit_save_path(path_arg) -> str | None:
-    if not isinstance(path_arg, str):
-        return None
-    raw = path_arg.strip()
-    if not raw or _looks_like_url(raw):
-        return None
-    suffix = Path(raw).suffix.lower()
-    if "/" in raw or "\\" in raw or suffix in {".html", ".htm", ".xhtml"}:
-        return raw
-    return None
-
-
 def _write_fetched(workspace: Path, url: str, path_arg) -> tuple[Path, int, str]:
     parsed = validate_url(url)
     if path_arg is None:
@@ -401,26 +380,9 @@ def _format_article(html: bytes) -> str:
     )
 
 
-def parse_page(workspace: Path, args: dict) -> str:
+def parse_html(workspace: Path, args: dict) -> str:
     workspace = workspace.resolve()
-    url = args.get("url")
     path_arg = args.get("path")
-    if not isinstance(url, str) or not url.strip():
-        if isinstance(path_arg, str) and _looks_like_url(path_arg):
-            url = path_arg
-            path_arg = None
-        else:
-            url = ""
-    if isinstance(url, str) and url.strip():
-        path, _status, _content_type = _write_fetched(
-            workspace, url.strip(), _explicit_save_path(path_arg)
-        )
-        rendered = _format_article(path.read_bytes())
-        if rendered.startswith("Error:"):
-            return rendered
-        return cap_result(
-            f"url: {url.strip()}\npath: {path.relative_to(workspace)}\n{rendered}"
-        )
     path = resolve_in_workspace(
         workspace, path_arg if isinstance(path_arg, str) else ""
     )
@@ -456,7 +418,7 @@ TOOL_FNS = {
     "delete_file": delete_file,
     "run_shell": run_shell,
     "fetch_url": fetch_url,
-    "parse_page": parse_page,
+    "parse_html": parse_html,
 }
 
 
@@ -472,11 +434,15 @@ def execute_tool(name: str, args: dict, workspace: Path) -> str:
         return f"Error: {exc}"
 
 
-def _tool_result(name: str, arguments: str, workspace: Path) -> tuple[dict | None, str]:
+def _tool_result(
+    name: str, arguments: str, workspace: Path, registry=None
+) -> tuple[dict | None, str]:
     try:
         args = json.loads(arguments)
     except json.JSONDecodeError as exc:
         return None, f"Error: invalid tool arguments: {exc}"
     if not isinstance(args, dict):
         return None, "Error: tool arguments must be an object"
-    return args, execute_tool(name, args, workspace)
+    if registry is None:
+        return args, execute_tool(name, args, workspace)
+    return args, registry.execute(name, args, workspace)

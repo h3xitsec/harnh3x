@@ -6,13 +6,15 @@ alwaysApply: false
 
 # Agent loop
 
-`Session` resolves the workspace and starts `messages` with `system_prompt`. `run` takes an injected client; production uses the lazy `get_client()` singleton.
+`Session` resolves the workspace, owns a `SkillRegistry`, and starts `messages` with `system_prompt` plus `get_menu()`. Nothing is loaded at the start. `run` takes an injected client; production uses the lazy `get_client()` singleton. Each completion receives `session.skills.schemas()`, not the full `TOOLS` list. After `load_skill` or `unload_skill`, refresh `messages[0]` so the menu marks the active skills.
 
-Store model turns only through `assistant_message`: `role`, `content`, and `tool_calls` of `{id, type, function: {name, arguments}}`. Drop SDK extras such as `index`. Append tool results as `{"role": "tool", "tool_call_id", "content"}`.
+Store model turns only through `assistant_message`: `role`, `content`, and `tool_calls` of `{id, type, function: {name, arguments}}`. When the model sent non-empty `reasoning` or `reasoning_content`, store it as `reasoning` and send that field back on the next completion. Omit `reasoning` when it is missing or empty. Drop SDK extras such as `index`. Append tool results as `{"role": "tool", "tool_call_id", "content"}`.
 
-Log one JSON object per line to `session.log` inside the workspace: `turn`, `model`, `tool_call` (truncate arg previews past 500 chars), `tool_result`. When `MAX_TURNS` is exhausted, append and return the assistant message `Max turns reached.` and log that model event.
+A turn with no tool calls returns `content` when it is non-empty, otherwise `reasoning`, otherwise `The model returned an empty answer.`
 
-Prompt contract: reads give the user the file content; writes confirm success without echoing content; deletes use `delete_file`; always confirm what was done. News calls `parse_page` with the article URL; summarize only the extracted text and confirm the URL. If the tool returns an error, report it. Do not paste the raw page or invent the article.
+Log one JSON object per line to `session.log` inside the workspace: `turn`, `model` (pass the stored message through `_log_preview` so long `reasoning` is truncated at 500 chars), `tool_call` (truncate arg previews past 500 chars), `tool_result`. When `MAX_TURNS` is exhausted, append and return the assistant message `Max turns reached.` and log that model event.
+
+Prompt contract: call `load_skill` before using a capability and `unload_skill` when that capability is finished. A skill name is not a tool. The menu says so, and a loaded skill lists its tool names. Call those tools through the tool interface. Report tool errors. Always confirm what was done. File, shell, and news conventions live in that skill's `SKILL.md` and come back in the `load_skill` result.
 
 ```python
 # BAD: forwarding the raw SDK message
@@ -22,6 +24,7 @@ session.messages.append(msg.model_dump())
 stored = {
     "role": "assistant",
     "content": msg.content,
+    "reasoning": msg.reasoning,  # only when the model sent non-empty thinking
     "tool_calls": [{
         "id": tc.id,
         "type": "function",
