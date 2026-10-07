@@ -14,7 +14,7 @@ A turn with no tool calls returns `content` when it is non-empty, otherwise `rea
 
 Log one JSON object per line to `session.log` inside the workspace: `turn`, `model` (pass the stored message through `_log_preview` so long `reasoning` is truncated at 500 chars), `tool_call` (truncate arg previews past 500 chars), `tool_result`. When `MAX_TURNS` is exhausted, append and return the assistant message `Max turns reached.` and log that model event.
 
-Prompt contract: call `load_skill` before using a capability and `unload_skill` when that capability is finished. A skill name is not a tool. The menu says so, and a loaded skill lists its tool names. Call those tools through the tool interface. Report tool errors. Always confirm what was done. File, shell, and news conventions live in that skill's `SKILL.md` and come back in the `load_skill` result.
+Prompt contract: the prompt states the date, the OS, a one-line workspace listing, and the saved memory keys. Call `load_skill` before using a capability; several skills can stay loaded, and `unload_skill` is for skills that will not be needed again. A skill name is not a tool. The menu says so, and a loaded skill lists its tool names. Call those tools through the tool interface. Report tool errors. Answer from sources that were read, not from search snippets. Use the `tasks` skill for multi-step jobs. Always confirm what was done. Per-skill conventions live in that skill's `SKILL.md` and come back in the `load_skill` result.
 
 ```python
 # BAD: forwarding the raw SDK message

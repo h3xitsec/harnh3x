@@ -4,10 +4,10 @@ from collections.abc import Callable
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import VerticalScroll
+from textual.containers import Vertical, VerticalScroll
 from textual.events import Key
 from textual.screen import Screen
-from textual.widgets import OptionList, Static, TextArea
+from textual.widgets import Markdown, OptionList, Static, TextArea
 
 THINKING_ROWS = 3
 
@@ -111,6 +111,16 @@ class Thinking(Static):
             )
         )
         self.update(self.plain)
+
+
+class AgentAnswer(Vertical):
+    def __init__(self, source: str) -> None:
+        super().__init__()
+        self.source = source
+
+    def compose(self) -> ComposeResult:
+        yield Static("Agent", markup=False)
+        yield Markdown(self.source, open_links=False)
 
 
 class ToolBox(Static):
@@ -278,6 +288,9 @@ class HarnessApp(App):
         color: $text-muted;
         height: auto;
     }
+    AgentAnswer {
+        height: auto;
+    }
     """
 
     def __init__(
@@ -348,7 +361,9 @@ class HarnessApp(App):
     def transcript_plain(self) -> str:
         parts = []
         for child in self.query_one("#transcript").children:
-            if isinstance(child, Thinking):
+            if isinstance(child, AgentAnswer):
+                parts.append(f"Agent: {child.source}")
+            elif isinstance(child, Thinking):
                 parts.append(child.plain)
             elif isinstance(child, Static):
                 parts.append(str(child.content))
@@ -390,7 +405,7 @@ class HarnessApp(App):
             block = Thinking(reasoning, hold=self.review is not None)
             self.latest = block
             transcript.mount(block)
-        transcript.mount(Static(f"Agent: {answer}", markup=False))
+        transcript.mount(AgentAnswer(answer))
         transcript.scroll_end(animate=False)
         if refocus and self.review is None:
             composer = self.query_one(Composer)

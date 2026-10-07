@@ -1,6 +1,7 @@
 import json
 import os
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -115,6 +116,7 @@ def run(
     session: Session,
     client: OpenAI | None = None,
     show_tools: bool = True,
+    on_tool: Callable[[str, object], None] | None = None,
 ) -> str:
     session.messages.append({"role": "user", "content": user_message})
     api = client or get_client()
@@ -146,9 +148,11 @@ def run(
             if tc.function.name in {"load_skill", "unload_skill"} and args is not None:
                 session.sync_prompt()
             if show_tools:
-                print(
-                    f"  🔧 {tc.function.name}({args if args is not None else tc.function.arguments})"
-                )
+                shown = args if args is not None else tc.function.arguments
+                if on_tool is not None:
+                    on_tool(tc.function.name, shown)
+                else:
+                    print(f"  🔧 {tc.function.name}({shown})")
             write_log(
                 {
                     "event": "tool_call",

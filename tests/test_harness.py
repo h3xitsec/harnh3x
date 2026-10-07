@@ -1,11 +1,13 @@
+import asyncio
 import importlib.util
+import io
 import json
-import os
 import re
-import select
-import subprocess
 import sys
+import urllib.parse
 import uuid
+import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,20 +16,11 @@ import pytest
 import harness.agent as agent
 import harness.skills as skills
 import harness.tools as tools
-from harness.config import MAX_TOOL_RESULT, MODEL
-from harness.line_input import (
-    Down,
-    Editor,
-    Ignore,
-    Insert,
-    Submit,
-    ToggleThinking,
-    Up,
-    parse_keys,
-    render,
-)
+from harness.config import MAX_TOOL_RESULT, MODEL, PDF_MAX_PAGES, SEARCH_FILES_MAX
+from harness.prompt import system_prompt
 from harness.skills import SkillRegistry
 from harness.tools import _tool_result, execute_tool
+from harness.tui import HarnessApp, ModelApp, ReviewApp
 
 ARTICLE_HTML = """<!DOCTYPE html>
 <html lang="en">
@@ -91,7 +84,8 @@ def test_tool_result_truncation_keeps_a_suffix(tmp_path):
     result = execute_tool("read_file", {"path": "big.txt"}, tmp_path)
 
     assert len(result) <= MAX_TOOL_RESULT
-    assert result.endswith("chars omitted]")
+    assert "chars omitted" in result
+    assert result.endswith("]")
 
 
 def test_assistant_message_drops_null_metadata():
@@ -317,18 +311,34 @@ def test_fetch_url_saves_html_in_workspace(tmp_path, monkeypatch):
     assert not (tmp_path.parent / "secret.html").exists()
 
 
-def test_fetch_url_rejects_non_html(tmp_path, monkeypatch):
+def test_fetch_url_rejects_unsupported_types(tmp_path, monkeypatch):
     monkeypatch.setattr(
         tools,
         "_http_get",
-        lambda url: (200, "application/json", b"{}"),
+        lambda url: (200, "image/png", b"\x89PNG"),
     )
 
-    result = execute_tool("fetch_url", {"url": "https://1.1.1.1/data"}, tmp_path)
+    result = execute_tool("fetch_url", {"url": "https://1.1.1.1/pic"}, tmp_path)
 
     assert result.startswith("Error:")
     assert "unsupported content type" in result
     assert list(tmp_path.iterdir()) == []
+
+
+def test_fetch_url_saves_json_and_pdf_with_matching_extensions(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        tools, "_http_get", lambda url: (200, "application/json", b'{"a": 1}')
+    )
+    as_json = execute_tool("fetch_url", {"url": "https://1.1.1.1/data"}, tmp_path)
+    assert "content_type: application/json" in as_json
+    assert "path: downloads/1.1.1.1-" in as_json
+    assert as_json.rstrip().endswith(".json")
+
+    monkeypatch.setattr(
+        tools, "_http_get", lambda url: (200, "application/pdf", b"%PDF-1.4")
+    )
+    as_pdf = execute_tool("fetch_url", {"url": "https://1.1.1.1/paper"}, tmp_path)
+    assert as_pdf.rstrip().endswith(".pdf")
 
 
 def test_parse_html_reads_saved_html_and_does_not_download(tmp_path, monkeypatch):
@@ -385,6 +395,175 @@ def test_parse_html_errors_for_missing_directory_and_empty(tmp_path):
     (tmp_path / "empty.html").write_text("<html><head></head><body></body></html>")
     result = execute_tool("parse_html", {"path": "empty.html"}, tmp_path)
     assert result == "Error: no article text extracted"
+
+
+def _search_page(rows):
+    parts = ["<html><body>"]
+    for title, href, snippet in rows:
+        parts.append(
+            "<div class='result'>"
+            f"<a class='result__a' href='{href}'>{title}</a>"
+            f"<a class='result__snippet'>{snippet}</a>"
+            "</div>"
+        )
+    parts.append("</body></html>")
+    return "".join(parts)
+
+
+def _ddg_href(url):
+    return "https://duckduckgo.com/l/?uddg=" + urllib.parse.quote(url, safe="")
+
+
+def test_web_search_returns_unwrapped_results(tmp_path, monkeypatch):
+    page = _search_page(
+        [
+            ("Alpha Title", _ddg_href("https://1.1.1.1/alpha"), "Alpha snippet"),
+            (
+                "Beta Title",
+                "//duckduckgo.com/l/?uddg="
+                + urllib.parse.quote("https://8.8.8.8/beta", safe=""),
+                "Beta snippet",
+            ),
+            ("Secret", _ddg_href("http://127.0.0.1/secret"), "hidden"),
+            ("Bad Scheme", "javascript:alert(1)", "nope"),
+            ("Gamma Title", "https://9.9.9.9/gamma", "Gamma snippet"),
+        ]
+    )
+    monkeypatch.setattr(tools, "_search_html", lambda query, recency=None: page)
+
+    result = execute_tool(
+        "web_search",
+        {"query": "transit", "max_results": 2},
+        tmp_path,
+    )
+
+    assert result == (
+        "1. Alpha Title\n"
+        "   url: https://1.1.1.1/alpha\n"
+        "   snippet: Alpha snippet\n"
+        "2. Beta Title\n"
+        "   url: https://8.8.8.8/beta\n"
+        "   snippet: Beta snippet\n"
+        "\n" + tools.SEARCH_HINT
+    )
+    assert "127.0.0.1" not in result
+    assert "javascript" not in result
+    assert "Gamma" not in result
+
+
+def test_web_search_caps_results_and_rejects_bad_input(tmp_path, monkeypatch):
+    rows = [
+        (f"Result {index}", f"https://1.1.1.1/{index}", f"snippet {index}")
+        for index in range(1, 11)
+    ]
+    monkeypatch.setattr(
+        tools, "_search_html", lambda query, recency=None: _search_page(rows)
+    )
+
+    capped = execute_tool(
+        "web_search",
+        {"query": "transit", "max_results": 100},
+        tmp_path,
+    )
+    assert capped.startswith("1. Result 1\n")
+    assert "8. Result 8\n" in capped
+    assert "9. Result 9" not in capped
+
+    calls = {"n": 0}
+
+    def fail(query, recency=None):
+        calls["n"] += 1
+        raise AssertionError("search should not run")
+
+    monkeypatch.setattr(tools, "_search_html", fail)
+    assert execute_tool("web_search", {}, tmp_path) == "Error: query is required"
+    assert execute_tool("web_search", {"query": "  "}, tmp_path) == (
+        "Error: query is required"
+    )
+    assert calls["n"] == 0
+
+    bad_limit = execute_tool(
+        "web_search",
+        {"query": "transit", "max_results": 0},
+        tmp_path,
+    )
+    assert bad_limit == "Error: max_results must be a positive integer"
+    assert calls["n"] == 0
+
+
+def test_web_search_errors_when_nothing_parseable(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        tools,
+        "_search_html",
+        lambda query, recency=None: _search_page(
+            [("Secret", _ddg_href("http://127.0.0.1/secret"), "hidden")]
+        ),
+    )
+    private_only = execute_tool("web_search", {"query": "transit"}, tmp_path)
+    assert private_only == "Error: no results"
+
+    monkeypatch.setattr(
+        tools, "_search_html", lambda query, recency=None: "<html><body></body></html>"
+    )
+    empty = execute_tool("web_search", {"query": "transit"}, tmp_path)
+    assert empty == "Error: no results"
+
+
+def test_web_search_site_and_time_filters(tmp_path, monkeypatch):
+    seen = []
+
+    def fake_search(query, recency=None):
+        seen.append((query, recency))
+        return _search_page([("Alpha", "https://1.1.1.1/alpha", "snippet")])
+
+    monkeypatch.setattr(tools, "_search_html", fake_search)
+
+    result = execute_tool(
+        "web_search",
+        {"query": "asyncio", "site": "docs.python.org", "time": "w"},
+        tmp_path,
+    )
+    assert "url: https://1.1.1.1/alpha" in result
+    assert seen == [("asyncio site:docs.python.org", "w")]
+
+    plain = execute_tool("web_search", {"query": "asyncio"}, tmp_path)
+    assert "Alpha" in plain
+    assert seen[-1] == ("asyncio", None)
+
+    bad = execute_tool("web_search", {"query": "asyncio", "time": "hour"}, tmp_path)
+    assert bad == "Error: time must be one of d, w, m, y"
+    assert len(seen) == 2
+
+
+def test_research_skill_gates_web_search(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        tools,
+        "_search_html",
+        lambda query, recency=None: _search_page(
+            [("Alpha Title", "https://1.1.1.1/alpha", "Alpha snippet")]
+        ),
+    )
+    registry = SkillRegistry()
+
+    blocked = registry.execute("web_search", {"query": "transit"}, tmp_path)
+    assert blocked == "Error: Tool 'web_search' not found. Is the skill loaded?"
+
+    loaded = registry.load_skill("research")
+    assert loaded.startswith(
+        "Loaded skill 'research' with 5 tools: "
+        "web_search, read_url, fetch_url, parse_html, read_feed"
+    )
+    assert "Snippets are not answers" in loaded
+    assert "[loaded: web_search, read_url, fetch_url, parse_html, read_feed]" in (
+        registry.get_menu()
+    )
+
+    result = registry.execute("web_search", {"query": "transit"}, tmp_path)
+    assert "url: https://1.1.1.1/alpha" in result
+
+    assert registry.unload_skill("research") == "Unloaded skill 'research'."
+    blocked_again = registry.execute("web_search", {"query": "transit"}, tmp_path)
+    assert blocked_again == "Error: Tool 'web_search' not found. Is the skill loaded?"
 
 
 def test_parse_html_truncates_long_article(tmp_path):
@@ -446,6 +625,12 @@ def test_session_workspace_argument_and_env_override_the_default(tmp_path, monke
     assert not (tmp_path / "workspaces").exists()
 
 
+FILE_OPS_LOADED = (
+    "[loaded: read_file, write_file, edit_file, append_file, "
+    "delete_file, move_file, list_files, search_files]"
+)
+
+
 def _tool_names(schemas):
     return [tool["function"]["name"] for tool in schemas]
 
@@ -454,10 +639,22 @@ def test_skill_menu_starts_unloaded():
     registry = SkillRegistry()
     menu = registry.get_menu()
 
-    assert "file_ops:" in menu
-    assert "shell:" in menu
-    assert "news:" in menu
-    assert "[loaded]" not in menu
+    for name in (
+        "file_ops",
+        "shell",
+        "python",
+        "research",
+        "reference",
+        "api",
+        "documents",
+        "data",
+        "memory",
+        "tasks",
+    ):
+        assert f"- {name}:" in menu
+    assert "news:" not in menu
+    assert "- search:" not in menu
+    assert "[loaded" not in menu
     assert _tool_names(registry.schemas()) == ["load_skill", "unload_skill"]
 
 
@@ -471,12 +668,12 @@ def test_skill_load_unload_and_gated_execute(tmp_path):
     assert blocked == "Error: Tool 'read_file' not found. Is the skill loaded?"
 
     loaded = registry.load_skill("file_ops")
-    assert loaded.startswith("Loaded skill 'file_ops' with 3 tools: ")
+    assert loaded.startswith("Loaded skill 'file_ops' with 8 tools: ")
     assert "read_file" in loaded
     assert "Documentation:" in loaded
     assert "give the user the content of the file" in loaded
     assert registry.load_skill("file_ops") == "Skill 'file_ops' is already loaded."
-    assert "[loaded: read_file, write_file, delete_file]" in registry.get_menu()
+    assert FILE_OPS_LOADED in registry.get_menu()
 
     (tmp_path / "a.txt").write_text("hi")
     assert registry.execute("read_file", {"path": "a.txt"}, tmp_path) == "hi"
@@ -533,7 +730,7 @@ def test_run_sends_skill_schemas_after_load(tmp_path):
         for line in session.messages[0]["content"].splitlines()
         if line.startswith("- file_ops:")
     )
-    assert file_ops_line.endswith("[loaded: read_file, write_file, delete_file]")
+    assert file_ops_line.endswith(FILE_OPS_LOADED)
     assert "- shell:" in session.messages[0]["content"]
     assert " [loaded]" not in next(
         line
@@ -583,6 +780,23 @@ def test_show_tools_can_hide_tool_call_output(tmp_path, capsys):
     text = agent.run("load file ops", session, client=client, show_tools=False)
 
     assert text == "loaded"
+    assert capsys.readouterr().out == ""
+
+
+def test_on_tool_receives_the_call_instead_of_printing(tmp_path, capsys):
+    session = agent.Session(workspace=tmp_path)
+    client = _tool_client("load_skill", '{"name": "file_ops"}', "loaded")
+    seen = []
+
+    text = agent.run(
+        "load file ops",
+        session,
+        client=client,
+        on_tool=lambda name, args: seen.append((name, args)),
+    )
+
+    assert text == "loaded"
+    assert seen == [("load_skill", {"name": "file_ops"})]
     assert capsys.readouterr().out == ""
 
 
@@ -656,19 +870,19 @@ def test_thinking_panel_keeps_the_tail_until_expanded():
     plain = re.sub(r"\x1b\[[0-9;]*m", "", tail)
     for line in plain.split("\n"):
         assert len(line) < 12
-    assert cli.thinking_rewind(2, 4, prompt_gap=True) == 7
-    assert cli.thinking_rewind(0, 4, prompt_gap=False) == 4
-    assert cli.ReplyView().toggle(3, prompt_gap=True) == 3
 
 
-def test_reply_lines_stay_short_of_the_terminal(monkeypatch):
+def test_reply_lines_stay_short_of_the_terminal():
     cli = _load_cli()
-    monkeypatch.setattr(cli, "terminal_width", lambda: 20)
-    view = cli.ReplyView()
-    view.reasoning = "r" * 100
-    view.answer = "a" * 80
-    view.expanded = True
-    plain = re.sub(r"\x1b\[[0-9;]*m", "", view.render())
+    text = cli.format_reply(
+        "a" * 80,
+        "r" * 100,
+        answer_only=False,
+        hold=False,
+        width=20,
+        expanded=True,
+    )
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", text)
     for line in plain.split("\n"):
         assert len(line) < 20
 
@@ -763,17 +977,6 @@ def test_reasoning_used_as_the_answer_is_not_repeated(monkeypatch, capsys, tmp_p
     assert "Agent: only thought" in output
 
 
-def test_ctrl_t_toggles_thinking():
-    events, rest = parse_keys(b"\x14")
-    assert rest == b""
-    assert events == [ToggleThinking()]
-    events, rest = parse_keys(b"\x1b[116;5u")
-    assert rest == b""
-    assert events == [ToggleThinking()]
-    events, rest = parse_keys(b"\x1b[116;5:3u")
-    assert events == [Ignore()]
-
-
 def test_run_uses_the_session_model(tmp_path):
     seen = {}
 
@@ -848,32 +1051,6 @@ def test_model_flag_without_a_name_prompts(monkeypatch, capsys, tmp_path):
     assert "Model: beta" in output
 
 
-def test_model_menu_moves_with_arrows_and_accepts_a_number():
-    cli = _load_cli()
-    menu = cli.ModelMenu(["alpha", "beta", "gamma"])
-    assert menu.handle(Down()) is None
-    assert menu.handle(Down()) is None
-    assert menu.handle(Down()) is None
-    assert "> 3. gamma" in menu.render()
-    assert menu.handle(Submit()) == "gamma"
-
-    menu = cli.ModelMenu(["alpha", "beta", "gamma"])
-    menu.handle(Up())
-    menu.handle(Insert("2"))
-    assert menu.selected == 1
-    assert "Number: 2" in menu.render()
-    menu.handle(Down())
-    assert menu.digits == ""
-    assert menu.handle(Submit()) == "gamma"
-
-    menu = cli.ModelMenu(["alpha", "beta"])
-    menu.handle(Insert("9"))
-    assert menu.handle(Submit()) is None
-    assert menu.error == "Enter a number from 1 to 2."
-    menu.handle(Insert("1"))
-    assert menu.handle(Submit()) == "alpha"
-
-
 def test_model_menu_exits_when_the_api_has_no_models(monkeypatch):
     cli = _load_cli()
     monkeypatch.setattr(cli, "list_models", lambda: [])
@@ -882,178 +1059,1027 @@ def test_model_menu_exits_when_the_api_has_no_models(monkeypatch):
         cli.main(["--model"])
 
 
-def _typed(payload: bytes) -> str:
-    editor = Editor()
-    events, rest = parse_keys(payload)
-    assert rest == b""
-    submitted = None
-    for event in events:
-        submitted = editor.handle(event)
-    assert submitted is not None
-    return submitted
+def _run(app, keys: list[str]):
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            if keys:
+                await pilot.press(*keys)
+            return app
+
+    asyncio.run(drive())
 
 
-def test_enter_submits_one_line():
-    assert _typed(b"sadasd\r") == "sadasd"
+def test_model_screen_accepts_arrows_or_a_number():
+    app = ModelApp(["alpha", "beta", "gamma"])
+    _run(app, ["down", "down", "enter"])
+    assert app.return_value == "gamma"
+
+    app = ModelApp(["alpha", "beta"])
+
+    async def invalid_then_one():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press("9", "enter")
+            status = str(app.screen.query_one("#status").content)
+            assert "Enter a number from 1 to 2." in status
+            await pilot.press("1", "enter")
+
+    asyncio.run(invalid_then_one())
+    assert app.return_value == "alpha"
 
 
-def test_shift_enter_stays_in_one_request():
-    assert _typed(b"sadasd\nsfdfdfde\nsdfdfdf\r") == "sadasd\nsfdfdfde\nsdfdfdf"
-    assert _typed(b"sadasd\x1b[13;2usfdfdfde\x1b[13;2:1usdfdfdf\r") == (
-        "sadasd\nsfdfdfde\nsdfdfdf"
+def test_submit_shows_the_request_and_the_answer():
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+    seen = []
+
+    def fake_run(message, session, show_tools=True, on_tool=None):
+        seen.append(message)
+        return "final answer"
+
+    app = HarnessApp(session, fake_run, show_tools=True)
+    captured = {}
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press("a", "shift+enter", "b")
+            assert app.query_one("#composer").text == "a\nb"
+            await pilot.press("enter")
+            for _ in range(40):
+                if "Agent: final answer" in app.transcript_plain():
+                    break
+                await pilot.pause(0.05)
+            else:
+                raise AssertionError(app.transcript_plain())
+            captured["plain"] = app.transcript_plain()
+
+    asyncio.run(drive())
+    assert seen == ["a\nb"]
+    assert "You: a\nb" in captured["plain"]
+    assert "Agent: final answer" in captured["plain"]
+
+
+def test_ctrl_t_reveals_the_head_of_the_thinking_text():
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+    app = ReviewApp(
+        session,
+        "fix the notes",
+        [],
+        "alpha\nbeta\ngamma\ndelta",
+        "final answer",
     )
-    assert _typed(b"sadasd\x1b[27;2;13~sfdfdfde\r") == "sadasd\nsfdfdfde"
-    assert _typed(b"sadasd\r\n") == "sadasd"
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            thinking = app.query_one("Thinking")
+            assert "alpha" not in thinking.plain
+            assert "delta" in thinking.plain
+            await pilot.press("ctrl+t")
+            assert "alpha" in thinking.plain
+
+    asyncio.run(drive())
 
 
-def test_shift_enter_release_does_not_add_a_line():
-    assert _typed(b"sadasd\x1b[13;2:3usfdfdfde\r") == "sadasdsfdfdfde"
+def test_tool_callback_line_shows_in_the_transcript():
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+
+    def fake_run(message, session, show_tools=True, on_tool=None):
+        on_tool("load_skill", {"name": "file_ops"})
+        return "loaded"
+
+    app = HarnessApp(session, fake_run, show_tools=True)
+    captured = {}
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press(*"hello", "enter")
+            for _ in range(40):
+                if "Agent: loaded" in app.transcript_plain():
+                    break
+                await pilot.pause(0.05)
+            else:
+                raise AssertionError(app.transcript_plain())
+            captured["plain"] = app.transcript_plain()
+
+    asyncio.run(drive())
+    assert "🔧 load_skill({'name': 'file_ops'})" in captured["plain"]
 
 
-def test_pasted_newlines_submit_once():
-    assert _typed(b"\x1b[200~sadasd\r\nsfdfdfde\x1b[201~\r") == "sadasd\nsfdfdfde"
+def test_agent_answer_renders_markdown():
+    answer = "\n".join(
+        [
+            "### **Ransomware**",
+            "- **Australia**: 18%",
+            "",
+            "| Date | Event |",
+            "|------|-------|",
+            "| Sep 2019 | First ABCD |",
+        ]
+    )
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+    app = ReviewApp(session, "summarize", [], "", answer)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            assert app.query_one("MarkdownH3")
+            assert app.query_one("MarkdownBulletList")
+            assert app.query_one("MarkdownTable")
+            assert answer in app.transcript_plain()
+
+    asyncio.run(drive())
 
 
-def test_backspace_removes_a_shift_enter_break():
-    assert _typed(b"sadasd\x1b[13;2u\x7fsfdfdfde\r") == "sadasdsfdfdfde"
+# --- file_ops additions ---------------------------------------------------
 
 
-def test_partial_shift_enter_sequence_resumes():
-    editor = Editor()
-    events, rest = parse_keys(b"sadasd\x1b[13")
-    assert rest == b"\x1b[13"
-    for event in events:
-        editor.handle(event)
-    events, rest = parse_keys(rest + b";2usfdfdfde\r")
-    assert rest == b""
-    submitted = None
-    for event in events:
-        submitted = editor.handle(event)
-    assert submitted == "sadasd\nsfdfdfde"
+def test_read_file_pages_with_offset_and_limit(tmp_path):
+    (tmp_path / "lines.txt").write_text("".join(f"line {n}\n" for n in range(1, 11)))
+
+    page = execute_tool(
+        "read_file", {"path": "lines.txt", "offset": 3, "limit": 2}, tmp_path
+    )
+    assert (
+        page
+        == "line 3\nline 4\n\n...[showing lines 3-4 of 10; call read_file with offset=5 to continue]"
+    )
+
+    tail = execute_tool("read_file", {"path": "lines.txt", "offset": 9}, tmp_path)
+    assert tail == "line 9\nline 10\n"
+
+    assert execute_tool("read_file", {"path": "lines.txt", "offset": 11}, tmp_path) == (
+        "Error: offset 11 is past the last line (10)"
+    )
+    assert execute_tool("read_file", {"path": "lines.txt", "offset": 0}, tmp_path) == (
+        "Error: offset must be a positive integer"
+    )
 
 
-def test_render_keeps_shift_enter_lines_under_the_prompt():
-    text = "sadasd\nsfdfdfde"
-    frame = render(text, len(text), "You: ", 80)
-    assert frame.output == "You: sadasd\n     sfdfdfde"
-    assert (frame.cursor_row, frame.cursor_col) == (1, 5 + len("sfdfdfde"))
+def test_read_file_long_file_cuts_on_a_line_and_names_the_next_offset(tmp_path):
+    line = "x" * 100 + "\n"
+    (tmp_path / "big.txt").write_text(line * 200)
+
+    result = execute_tool("read_file", {"path": "big.txt"}, tmp_path)
+
+    assert len(result) <= MAX_TOOL_RESULT
+    match = re.search(
+        r"showing lines 1-(\d+) of 200; call read_file with offset=(\d+)", result
+    )
+    assert match
+    shown = int(match.group(1))
+    assert int(match.group(2)) == shown + 1
+    assert result.startswith(line * shown)
 
 
-def test_render_cursor_tracks_terminal_wrap():
-    frame = render("abcdef", 6, "You: ", 8)
-    assert frame.output == "You: abcdef"
-    assert (frame.end_row, frame.end_col) == (1, 3)
+def test_edit_file_replaces_exactly_one_match(tmp_path):
+    (tmp_path / "notes.md").write_text("alpha beta alpha\n")
 
-    exact = render("abc", 3, "You: ", 8)
-    assert (exact.end_row, exact.end_col) == (1, 0)
+    ambiguous = execute_tool(
+        "edit_file",
+        {"path": "notes.md", "old_text": "alpha", "new_text": "gamma"},
+        tmp_path,
+    )
+    assert ambiguous.startswith("Error: old_text matches 2 places")
+    assert (tmp_path / "notes.md").read_text() == "alpha beta alpha\n"
+
+    one = execute_tool(
+        "edit_file",
+        {"path": "notes.md", "old_text": "beta", "new_text": "delta"},
+        tmp_path,
+    )
+    assert one == "Replaced 1 occurrence(s) in notes.md"
+    assert (tmp_path / "notes.md").read_text() == "alpha delta alpha\n"
+
+    everything = execute_tool(
+        "edit_file",
+        {"path": "notes.md", "old_text": "alpha", "new_text": "z", "replace_all": True},
+        tmp_path,
+    )
+    assert everything == "Replaced 2 occurrence(s) in notes.md"
+    assert (tmp_path / "notes.md").read_text() == "z delta z\n"
+
+    missing = execute_tool(
+        "edit_file",
+        {"path": "notes.md", "old_text": "nope", "new_text": "x"},
+        tmp_path,
+    )
+    assert missing == "Error: old_text not found in notes.md"
+    assert "outside workspace" in execute_tool(
+        "edit_file",
+        {"path": "../notes.md", "old_text": "a", "new_text": "b"},
+        tmp_path,
+    )
+    assert "Error: not found" == execute_tool(
+        "edit_file",
+        {"path": "missing.md", "old_text": "a", "new_text": "b"},
+        tmp_path,
+    )
 
 
-def _read_until(fd: int, marker: bytes, timeout: float = 5) -> bytes:
-    import time
+def test_append_file_creates_and_extends(tmp_path):
+    first = execute_tool(
+        "append_file", {"path": "log/out.txt", "content": "one\n"}, tmp_path
+    )
+    second = execute_tool(
+        "append_file", {"path": "log/out.txt", "content": "two\n"}, tmp_path
+    )
 
-    data = b""
-    deadline = time.time() + timeout
-    while marker not in data:
-        if time.time() > deadline:
-            raise AssertionError(f"missing {marker!r} in {data!r}")
-        ready, _, _ = select.select([fd], [], [], 0.2)
-        if not ready:
-            continue
-        chunk = os.read(fd, 4096)
-        if chunk == b"":
-            raise AssertionError(f"eof before {marker!r} in {data!r}")
-        data += chunk
-    return data
+    assert first.startswith("Appended 4 bytes")
+    assert second.startswith("Appended 4 bytes")
+    assert (tmp_path / "log" / "out.txt").read_text() == "one\ntwo\n"
+    assert "outside workspace" in execute_tool(
+        "append_file", {"path": "../x.txt", "content": "no"}, tmp_path
+    )
+    assert execute_tool("append_file", {"path": "a.txt"}, tmp_path) == (
+        "Error: content is required"
+    )
 
 
-def _pty_request(keys: bytes) -> str:
-    import pty
+def test_move_file_renames_without_overwriting(tmp_path):
+    (tmp_path / "a.txt").write_text("a")
+    (tmp_path / "taken.txt").write_text("taken")
+    (tmp_path / "dir").mkdir()
 
-    master, slave = pty.openpty()
-    src = str(Path(__file__).resolve().parents[1] / "src")
-    script = f"""
-import os, sys
-os.dup2({slave}, 0)
-os.dup2({slave}, 1)
-from harness.line_input import read_request
-sys.stdout.write("RESULT:" + read_request("You: ") + "\\nENDRESULT\\n")
-sys.stdout.flush()
+    moved = execute_tool(
+        "move_file", {"source": "a.txt", "destination": "sub/b.txt"}, tmp_path
+    )
+    assert moved == "Moved a.txt to sub/b.txt"
+    assert not (tmp_path / "a.txt").exists()
+    assert (tmp_path / "sub" / "b.txt").read_text() == "a"
+
+    assert (
+        execute_tool(
+            "move_file", {"source": "sub/b.txt", "destination": "taken.txt"}, tmp_path
+        )
+        == "Error: destination exists"
+    )
+    assert (tmp_path / "taken.txt").read_text() == "taken"
+    assert (
+        execute_tool("move_file", {"source": "dir", "destination": "dir2"}, tmp_path)
+        == "Error: is a directory"
+    )
+    assert (
+        execute_tool("move_file", {"source": "missing", "destination": "x"}, tmp_path)
+        == "Error: not found"
+    )
+    outside = execute_tool(
+        "move_file", {"source": "sub/b.txt", "destination": "../escaped.txt"}, tmp_path
+    )
+    assert "outside workspace" in outside
+    assert (tmp_path / "sub" / "b.txt").exists()
+
+
+def test_list_files_shows_tree_with_sizes_and_filters(tmp_path):
+    (tmp_path / "a.md").write_text("hello")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").write_text("print(1)\n")
+    (tmp_path / "src" / "deep").mkdir()
+    (tmp_path / "src" / "deep" / "x.md").write_text("x")
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "HEAD").write_text("ref")
+
+    listing = execute_tool("list_files", {}, tmp_path)
+    assert "src/" in listing
+    assert "a.md (5 bytes)" in listing
+    assert "src/main.py (9 bytes)" in listing
+    assert "src/deep/x.md (1 bytes)" in listing
+    assert "HEAD" not in listing
+
+    only_md = execute_tool("list_files", {"pattern": "*.md"}, tmp_path)
+    assert "a.md" in only_md
+    assert "x.md" in only_md
+    assert "main.py" not in only_md
+    assert "src/\n" not in only_md and not only_md.endswith("src/")
+
+    shallow = execute_tool("list_files", {"max_depth": 1}, tmp_path)
+    assert "src/" in shallow
+    assert "main.py" not in shallow
+
+    assert execute_tool("list_files", {"path": "a.md"}, tmp_path) == (
+        "Error: not a directory"
+    )
+    assert execute_tool("list_files", {"path": "nope"}, tmp_path) == "Error: not found"
+    assert "outside workspace" in execute_tool("list_files", {"path": ".."}, tmp_path)
+    (tmp_path / "empty").mkdir()
+    assert execute_tool("list_files", {"path": "empty"}, tmp_path) == "No files found."
+
+
+def test_search_files_reports_path_line_and_text(tmp_path):
+    (tmp_path / "a.py").write_text("import os\nTODO: fix\n")
+    (tmp_path / "b.txt").write_text("todo later\n")
+    (tmp_path / "bin.dat").write_bytes(b"\xff\xfeTODO")
+
+    result = execute_tool("search_files", {"pattern": "TODO"}, tmp_path)
+    assert result == "a.py:2: TODO: fix"
+
+    loose = execute_tool(
+        "search_files", {"pattern": "todo", "ignore_case": True}, tmp_path
+    )
+    assert "a.py:2: TODO: fix" in loose
+    assert "b.txt:1: todo later" in loose
+
+    globbed = execute_tool(
+        "search_files",
+        {"pattern": "todo", "ignore_case": True, "glob": "*.txt"},
+        tmp_path,
+    )
+    assert globbed == "b.txt:1: todo later"
+
+    assert execute_tool("search_files", {"pattern": "zzz"}, tmp_path) == "No matches."
+    assert execute_tool("search_files", {"pattern": "("}, tmp_path).startswith(
+        "Error: invalid pattern"
+    )
+    assert execute_tool("search_files", {}, tmp_path) == "Error: pattern is required"
+    assert "outside workspace" in execute_tool(
+        "search_files", {"pattern": "x", "path": ".."}, tmp_path
+    )
+
+
+def test_search_files_stops_at_the_match_cap(tmp_path):
+    (tmp_path / "many.txt").write_text("hit\n" * (SEARCH_FILES_MAX + 20))
+
+    result = execute_tool("search_files", {"pattern": "hit"}, tmp_path)
+
+    assert result.count("many.txt:") == SEARCH_FILES_MAX
+    assert f"stopped at {SEARCH_FILES_MAX} matches" in result
+
+
+# --- shell and python -----------------------------------------------------
+
+
+def test_shell_accepts_stdin_and_timeout(tmp_path):
+    result = execute_tool(
+        "run_shell", {"command": "cat", "stdin": "from stdin", "timeout": 5}, tmp_path
+    )
+    assert "exit_code: 0" in result
+    assert "stdout:\nfrom stdin\n" in result
+
+    assert (
+        execute_tool("run_shell", {"command": "true", "timeout": 0}, tmp_path)
+        == "Error: timeout must be a positive integer"
+    )
+    assert (
+        execute_tool("run_shell", {"command": "true", "stdin": 5}, tmp_path)
+        == "Error: stdin must be a string"
+    )
+
+
+def test_shell_timeout_is_capped(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_run(argv, **kwargs):
+        seen["timeout"] = kwargs["timeout"]
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(tools.subprocess, "run", fake_run)
+
+    execute_tool("run_shell", {"command": "true", "timeout": 10_000}, tmp_path)
+    assert seen["timeout"] == tools.SHELL_MAX_TIMEOUT
+
+    execute_tool("run_shell", {"command": "true"}, tmp_path)
+    assert seen["timeout"] == tools.SHELL_TIMEOUT
+
+
+def test_run_python_executes_code_in_the_workspace(tmp_path):
+    (tmp_path / "data.txt").write_text("3\n4\n")
+
+    result = execute_tool(
+        "run_python",
+        {
+            "code": "import sys\nnums=[int(x) for x in open('data.txt')]\nprint(sum(nums) + int(sys.stdin.read()))",
+            "stdin": "5",
+        },
+        tmp_path,
+    )
+    assert "status: success" in result
+    assert "stdout:\n12\n" in result
+
+    failing = execute_tool("run_python", {"code": "raise SystemExit(3)"}, tmp_path)
+    assert "status: error" in failing
+    assert "exit_code: 3" in failing
+
+    assert (
+        execute_tool("run_python", {"code": "  "}, tmp_path)
+        == "Error: code is required"
+    )
+
+
+def test_run_python_times_out(tmp_path):
+    result = execute_tool(
+        "run_python",
+        {"code": "import time\ntime.sleep(5)", "timeout": 1},
+        tmp_path,
+    )
+    assert "exit_code: 124" in result
+    assert "timed out after 1s" in result
+
+
+# --- research additions ---------------------------------------------------
+
+
+def test_read_url_fetches_extracts_and_saves_text(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        tools,
+        "_http_get",
+        lambda url: (200, "text/html; charset=utf-8", ARTICLE_HTML.encode()),
+    )
+
+    result = execute_tool("read_url", {"url": "https://1.1.1.1/news"}, tmp_path)
+
+    assert result.startswith("url: https://1.1.1.1/news\n")
+    assert "title: City Council Approves Transit Plan" in result
+    assert "author: Ada Lovelace" in result
+    assert "harbor district" in result
+    saved = re.search(r"saved: (\S+)", result).group(1)
+    text_file = re.search(r"text_file: (\S+)", result).group(1)
+    assert saved.startswith("downloads/1.1.1.1-") and saved.endswith(".html")
+    assert text_file == saved[: -len(".html")] + ".txt"
+    assert (tmp_path / saved).read_bytes() == ARTICLE_HTML.encode()
+    assert "harbor district" in (tmp_path / text_file).read_text()
+
+    blocked = execute_tool("read_url", {"url": "http://127.0.0.1/"}, tmp_path)
+    assert "blocked" in blocked
+    assert (
+        execute_tool(
+            "read_url", {"url": "https://1.1.1.1/news", "mode": "raw"}, tmp_path
+        )
+        == "Error: mode must be 'article' or 'full'"
+    )
+
+
+def test_read_url_handles_plain_text_and_truncates_with_a_pointer(
+    tmp_path, monkeypatch
+):
+    body = ("word " * 3000).encode()
+    monkeypatch.setattr(tools, "_http_get", lambda url: (200, "text/plain", body))
+
+    result = execute_tool("read_url", {"url": "https://1.1.1.1/notes"}, tmp_path)
+
+    assert len(result) <= MAX_TOOL_RESULT
+    assert "full text is in downloads/1.1.1.1-" in result
+    assert "use read_file with offset to continue" in result
+    text_file = re.search(r"text_file: (\S+)", result).group(1)
+    assert text_file.endswith(".txt")
+    assert (tmp_path / text_file).read_text() == body.decode().strip()
+
+
+def test_read_url_reads_a_pdf(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        tools,
+        "_http_get",
+        lambda url: (200, "application/pdf", _pdf_bytes(["Hello PDF"])),
+    )
+
+    result = execute_tool("read_url", {"url": "https://1.1.1.1/paper"}, tmp_path)
+
+    assert "Hello PDF" in result
+    assert re.search(r"saved: downloads/\S+\.pdf", result)
+
+
+def test_parse_html_full_mode_and_fallback_keep_non_article_text(tmp_path):
+    page = (
+        "<html><head><title>Docs</title></head><body><nav>Home</nav>"
+        "<table><tr><td>Option</td><td>Meaning</td></tr>"
+        "<tr><td>-x</td><td>exit</td></tr></table>"
+        "<script>var hidden = 1;</script></body></html>"
+    )
+    (tmp_path / "docs.html").write_text(page)
+
+    article = execute_tool("parse_html", {"path": "docs.html"}, tmp_path)
+    assert article.startswith("title: Docs")
+    assert "Meaning" in article
+
+    full = execute_tool("parse_html", {"path": "docs.html", "mode": "full"}, tmp_path)
+    assert "Option Meaning" in full
+    assert "hidden" not in full
+
+    assert (
+        execute_tool("parse_html", {"path": "docs.html", "mode": "raw"}, tmp_path)
+        == "Error: mode must be 'article' or 'full'"
+    )
+
+
+RSS_FEED = b"""<?xml version="1.0"?>
+<rss version="2.0"><channel><title>Harbor News</title>
+<item><title>Bus line funded</title><link>https://1.1.1.1/bus</link>
+<pubDate>Tue, 06 Oct 2026 10:00:00 GMT</pubDate>
+<description><![CDATA[<p>The council <b>voted</b> yes.</p>]]></description></item>
+<item><title>Second</title><link>https://1.1.1.1/two</link><description>Two</description></item>
+</channel></rss>
 """
-    env = os.environ.copy()
-    env["PYTHONPATH"] = src + os.pathsep + env.get("PYTHONPATH", "")
-    proc = subprocess.Popen(
-        [sys.executable, "-c", script],
-        pass_fds=(slave,),
-        env=env,
-        close_fds=True,
-    )
-    os.close(slave)
-    try:
-        _read_until(master, b"You: ")
-        os.write(master, keys)
-        data = _read_until(master, b"ENDRESULT")
-    finally:
-        os.close(master)
-        if proc.poll() is None:
-            proc.kill()
-        proc.wait(timeout=5)
-    text = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
-    body = text.split(b"RESULT:", 1)[1]
-    return body.split(b"\nENDRESULT", 1)[0].decode()
 
-
-def test_tty_shift_enter_is_one_request():
-    assert _pty_request(b"sadasd\x1b[13;2usfdfdfde\r") == "sadasd\nsfdfdfde"
-    assert _pty_request(b"sadasd\nsfdfdfde\r") == "sadasd\nsfdfdfde"
-    assert _pty_request(b"sadasd\r") == "sadasd"
-
-
-def _pty_model(keys: bytes) -> str:
-    import pty
-
-    master, slave = pty.openpty()
-    root = Path(__file__).resolve().parents[1]
-    src = str(root / "src")
-    cli = str(root / "src" / "harness.py")
-    script = f"""
-import importlib.util, os, sys
-os.dup2({slave}, 0)
-os.dup2({slave}, 1)
-spec = importlib.util.spec_from_file_location("harness_cli", {cli!r})
-module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
-sys.stdout.write("RESULT:" + module.choose_model(["alpha", "beta", "gamma"]) + "\\nENDRESULT\\n")
-sys.stdout.flush()
+ATOM_FEED = b"""<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom"><title>Atom Blog</title>
+<entry><title>Entry One</title><link rel="alternate" href="https://1.1.1.1/one"/>
+<updated>2026-10-06T10:00:00Z</updated><summary>First summary</summary></entry>
+</feed>
 """
-    env = os.environ.copy()
-    env["PYTHONPATH"] = src + os.pathsep + env.get("PYTHONPATH", "")
-    proc = subprocess.Popen(
-        [sys.executable, "-c", script],
-        pass_fds=(slave,),
-        env=env,
-        close_fds=True,
+
+
+def test_read_feed_parses_rss_and_atom(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        tools, "_http_get", lambda url: (200, "application/rss+xml", RSS_FEED)
     )
-    os.close(slave)
-    try:
-        _read_until(master, b"Available models:")
-        os.write(master, keys)
-        data = _read_until(master, b"ENDRESULT")
-    finally:
-        os.close(master)
-        if proc.poll() is None:
-            proc.kill()
-        proc.wait(timeout=5)
-    text = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
-    body = text.split(b"RESULT:", 1)[1]
-    return body.split(b"\nENDRESULT", 1)[0].decode(), data
+    rss = execute_tool(
+        "read_feed", {"url": "https://1.1.1.1/feed", "max_items": 1}, tmp_path
+    )
+    assert rss.startswith("feed: Harbor News\nentries: 2\n")
+    assert (
+        "1. Bus line funded\n   link: https://1.1.1.1/bus\n   date: Tue, 06 Oct 2026 10:00:00 GMT\n   summary: The council voted yes."
+        in rss
+    )
+    assert "Second" not in rss
+    assert "Call read_url on an entry link" in rss
+
+    monkeypatch.setattr(
+        tools, "_http_get", lambda url: (200, "application/atom+xml", ATOM_FEED)
+    )
+    atom = execute_tool("read_feed", {"url": "https://1.1.1.1/atom"}, tmp_path)
+    assert "feed: Atom Blog" in atom
+    assert "link: https://1.1.1.1/one" in atom
+    assert "date: 2026-10-06T10:00:00Z" in atom
+    assert "summary: First summary" in atom
 
 
-def test_tty_model_menu_uses_arrows_or_a_number():
-    choice, data = _pty_model(b"\x1b[B\x1b[B\r")
-    assert choice == "gamma"
-    tail = data.split(b"RESULT:", 1)[0].rsplit(b"\x1b[J", 1)[-1]
-    assert b"Available models:" not in tail
-    assert b"alpha" not in tail
+def test_read_feed_rejects_bad_xml_and_entities(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        tools,
+        "_http_get",
+        lambda url: (200, "text/xml", b"<rss><channel></channel></rss>"),
+    )
+    assert execute_tool("read_feed", {"url": "https://1.1.1.1/feed"}, tmp_path) == (
+        "Error: no feed entries found"
+    )
 
-    choice, _data = _pty_model(b"2\r")
-    assert choice == "beta"
+    monkeypatch.setattr(
+        tools, "_http_get", lambda url: (200, "text/xml", b"<rss><item>")
+    )
+    assert execute_tool(
+        "read_feed", {"url": "https://1.1.1.1/feed"}, tmp_path
+    ).startswith("Error: invalid XML")
+
+    bomb = b'<?xml version="1.0"?><!DOCTYPE a [<!ENTITY x "y">]><rss><channel><item><title>&x;</title></item></channel></rss>'
+    monkeypatch.setattr(tools, "_http_get", lambda url: (200, "text/xml", bomb))
+    assert "DOCTYPE" in execute_tool(
+        "read_feed", {"url": "https://1.1.1.1/feed"}, tmp_path
+    )
+
+    assert "blocked" in execute_tool(
+        "read_feed", {"url": "http://127.0.0.1/feed"}, tmp_path
+    )
+
+
+# --- reference and api ----------------------------------------------------
+
+
+def _json_get(payloads):
+    seen = []
+
+    def fake_get(url):
+        seen.append(url)
+        for prefix, payload in payloads:
+            if url.startswith(prefix):
+                return (
+                    200,
+                    "application/json; charset=utf-8",
+                    json.dumps(payload).encode(),
+                )
+        raise AssertionError(url)
+
+    return fake_get, seen
+
+
+def test_wikipedia_search_lists_titles_with_urls(tmp_path, monkeypatch):
+    payload = {
+        "query": {
+            "search": [
+                {
+                    "title": "Ada Lovelace",
+                    "snippet": "English <span class='x'>mathematician</span>",
+                },
+                {"title": "Lovelace Medal", "snippet": "award"},
+            ]
+        }
+    }
+    fake_get, seen = _json_get([("https://en.wikipedia.org/w/api.php", payload)])
+    monkeypatch.setattr(tools, "_http_get", fake_get)
+
+    result = execute_tool("wikipedia_search", {"query": "ada lovelace"}, tmp_path)
+
+    assert (
+        "1. Ada Lovelace\n   url: https://en.wikipedia.org/wiki/Ada_Lovelace\n   snippet: English mathematician"
+        in result
+    )
+    assert "2. Lovelace Medal" in result
+    assert "wikipedia_summary" in result
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(seen[0]).query)
+    assert query["srsearch"] == ["ada lovelace"]
+    assert query["srlimit"] == ["5"]
+    assert (
+        execute_tool("wikipedia_search", {"query": " "}, tmp_path)
+        == "Error: query is required"
+    )
+
+
+def test_wikipedia_summary_returns_extract_and_flags_missing(tmp_path, monkeypatch):
+    payload = {
+        "title": "Ada Lovelace",
+        "description": "English mathematician",
+        "extract": "Ada Lovelace was an English mathematician.",
+        "content_urls": {
+            "desktop": {"page": "https://en.wikipedia.org/wiki/Ada_Lovelace"}
+        },
+    }
+    fake_get, seen = _json_get(
+        [("https://en.wikipedia.org/api/rest_v1/page/summary/Ada_Lovelace", payload)]
+    )
+    monkeypatch.setattr(tools, "_http_get", fake_get)
+
+    result = execute_tool("wikipedia_summary", {"title": "Ada Lovelace"}, tmp_path)
+    assert result == (
+        "title: Ada Lovelace\n"
+        "description: English mathematician\n"
+        "url: https://en.wikipedia.org/wiki/Ada_Lovelace\n"
+        "summary:\nAda Lovelace was an English mathematician."
+    )
+
+    def missing(url):
+        raise ValueError("http status 404")
+
+    monkeypatch.setattr(tools, "_http_get", missing)
+    assert execute_tool("wikipedia_summary", {"title": "Nope Nope"}, tmp_path) == (
+        "Error: no Wikipedia article named 'Nope Nope'"
+    )
+    assert execute_tool("wikipedia_summary", {}, tmp_path) == "Error: title is required"
+
+
+def test_http_get_json_adds_params_and_rejects_non_json(tmp_path, monkeypatch):
+    fake_get, seen = _json_get([("https://1.1.1.1/api", {"temp": 21.5, "ok": True})])
+    monkeypatch.setattr(tools, "_http_get", fake_get)
+
+    result = execute_tool(
+        "http_get_json",
+        {
+            "url": "https://1.1.1.1/api?units=metric",
+            "params": {"lat": 45.5, "city": "Montréal", "dry": True},
+        },
+        tmp_path,
+    )
+    assert json.loads(result) == {"temp": 21.5, "ok": True}
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(seen[0]).query)
+    assert query == {
+        "units": ["metric"],
+        "lat": ["45.5"],
+        "city": ["Montréal"],
+        "dry": ["true"],
+    }
+
+    monkeypatch.setattr(
+        tools, "_http_get", lambda url: (200, "text/html", b"<html></html>")
+    )
+    html = execute_tool("http_get_json", {"url": "https://1.1.1.1/page"}, tmp_path)
+    assert html.startswith("Error: unsupported content type")
+
+    monkeypatch.setattr(
+        tools, "_http_get", lambda url: (200, "application/json", b"{nope")
+    )
+    assert execute_tool(
+        "http_get_json", {"url": "https://1.1.1.1/api"}, tmp_path
+    ).startswith("Error: invalid JSON response")
+    assert "blocked" in execute_tool(
+        "http_get_json", {"url": "http://10.0.0.1/api"}, tmp_path
+    )
+    assert (
+        execute_tool(
+            "http_get_json", {"url": "https://1.1.1.1/api", "params": ["a"]}, tmp_path
+        )
+        == "Error: params must be an object"
+    )
+
+
+# --- documents ------------------------------------------------------------
+
+
+def _pdf_bytes(pages):
+    objects = []
+    kids = " ".join(f"{4 + 2 * i} 0 R" for i in range(len(pages)))
+    objects.append("<< /Type /Catalog /Pages 2 0 R >>")
+    objects.append(f"<< /Type /Pages /Kids [{kids}] /Count {len(pages)} >>")
+    objects.append("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    for i, text in enumerate(pages):
+        content = f"BT /F1 12 Tf 72 712 Td ({text}) Tj ET"
+        objects.append(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            f"/Resources << /Font << /F1 3 0 R >> >> /Contents {5 + 2 * i} 0 R >>"
+        )
+        objects.append(f"<< /Length {len(content)} >>\nstream\n{content}\nendstream")
+    out = io.BytesIO()
+    out.write(b"%PDF-1.4\n")
+    offsets = []
+    for index, obj in enumerate(objects, 1):
+        offsets.append(out.tell())
+        out.write(f"{index} 0 obj\n{obj}\nendobj\n".encode("latin-1"))
+    xref = out.tell()
+    out.write(f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode())
+    for offset in offsets:
+        out.write(f"{offset:010d} 00000 n \n".encode())
+    out.write(
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    )
+    return out.getvalue()
+
+
+def test_read_pdf_pages_through_the_document(tmp_path):
+    pages = [f"Page {n} text" for n in range(1, PDF_MAX_PAGES + 3)]
+    (tmp_path / "doc.pdf").write_bytes(_pdf_bytes(pages))
+
+    first = execute_tool("read_pdf", {"path": "doc.pdf"}, tmp_path)
+    assert f"pages: {PDF_MAX_PAGES + 2}" in first
+    assert f"showing: 1-{PDF_MAX_PAGES}" in first
+    assert "--- page 1 ---\nPage 1 text" in first
+    assert f"Page {PDF_MAX_PAGES + 1} text" not in first
+    assert f"call read_pdf with first_page={PDF_MAX_PAGES + 1}" in first
+
+    rest = execute_tool(
+        "read_pdf", {"path": "doc.pdf", "first_page": PDF_MAX_PAGES + 1}, tmp_path
+    )
+    assert f"showing: {PDF_MAX_PAGES + 1}-{PDF_MAX_PAGES + 2}" in rest
+    assert f"Page {PDF_MAX_PAGES + 2} text" in rest
+    assert "remain" not in rest
+
+    one = execute_tool(
+        "read_pdf", {"path": "doc.pdf", "first_page": 2, "last_page": 2}, tmp_path
+    )
+    assert "showing: 2-2" in one
+    assert "Page 2 text" in one
+    assert "Page 3 text" not in one
+
+    assert execute_tool(
+        "read_pdf", {"path": "doc.pdf", "first_page": 99}, tmp_path
+    ) == (f"Error: first_page 99 is past the last page ({PDF_MAX_PAGES + 2})")
+    assert (
+        execute_tool(
+            "read_pdf", {"path": "doc.pdf", "first_page": 3, "last_page": 2}, tmp_path
+        )
+        == "Error: last_page must not be before first_page"
+    )
+    (tmp_path / "bad.pdf").write_bytes(b"not a pdf")
+    assert execute_tool("read_pdf", {"path": "bad.pdf"}, tmp_path).startswith(
+        "Error: could not read PDF"
+    )
+    assert "outside workspace" in execute_tool(
+        "read_pdf", {"path": "../x.pdf"}, tmp_path
+    )
+
+
+def _docx_bytes(paragraphs):
+    ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    body = "".join(f"<w:p><w:r><w:t>{text}</w:t></w:r></w:p>" for text in paragraphs)
+    document = f'<?xml version="1.0"?><w:document xmlns:w="{ns}"><w:body>{body}</w:body></w:document>'
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w") as archive:
+        archive.writestr("[Content_Types].xml", "<Types/>")
+        archive.writestr("word/document.xml", document)
+    return out.getvalue()
+
+
+def test_read_docx_returns_paragraphs(tmp_path):
+    (tmp_path / "memo.docx").write_bytes(_docx_bytes(["Title line", "Body text here"]))
+
+    result = execute_tool("read_docx", {"path": "memo.docx"}, tmp_path)
+    assert result == "file: memo.docx\nparagraphs: 2\ntext:\nTitle line\nBody text here"
+
+    (tmp_path / "bad.docx").write_bytes(b"zip? no")
+    assert (
+        execute_tool("read_docx", {"path": "bad.docx"}, tmp_path)
+        == "Error: not a .docx file"
+    )
+    assert "outside workspace" in execute_tool(
+        "read_docx", {"path": "../m.docx"}, tmp_path
+    )
+
+
+def test_read_docx_truncation_saves_a_text_copy(tmp_path):
+    paragraphs = [f"Paragraph {n} " + "word " * 40 for n in range(100)]
+    (tmp_path / "long.docx").write_bytes(_docx_bytes(paragraphs))
+
+    result = execute_tool("read_docx", {"path": "long.docx"}, tmp_path)
+
+    assert len(result) <= MAX_TOOL_RESULT
+    assert "full text is in long.txt" in result
+    assert (tmp_path / "long.txt").read_text().startswith("Paragraph 0")
+
+
+# --- data -----------------------------------------------------------------
+
+
+def test_inspect_csv_describes_columns_and_previews_rows(tmp_path):
+    (tmp_path / "sales.csv").write_text(
+        "city;amount;note\nParis;10;\nLyon;20;late\nNice;;\n"
+    )
+
+    result = execute_tool("inspect_csv", {"path": "sales.csv", "rows": 2}, tmp_path)
+
+    assert "file: sales.csv" in result
+    assert "delimiter: ';'" in result
+    assert "rows: 3 (excluding header)" in result
+    assert "columns: 3" in result
+    assert "1. city (filled 3/3)" in result
+    assert "2. amount (filled 2/3)" in result
+    assert "3. note (filled 1/3)" in result
+    assert "preview (first 2 rows):" in result
+    assert "  Paris | 10 | " in result
+    assert "Nice" not in result
+
+    forced = execute_tool(
+        "inspect_csv", {"path": "sales.csv", "delimiter": ","}, tmp_path
+    )
+    assert "columns: 1" in forced
+    assert (
+        execute_tool("inspect_csv", {"path": "sales.csv", "delimiter": ";;"}, tmp_path)
+        == "Error: delimiter must be a single character"
+    )
+    (tmp_path / "empty.csv").write_text("")
+    assert (
+        execute_tool("inspect_csv", {"path": "empty.csv"}, tmp_path)
+        == "Error: empty file"
+    )
+
+
+def test_inspect_json_describes_structure(tmp_path):
+    data = {
+        "items": [{"id": 1, "name": "a", "tags": ["x"]}],
+        "count": 1,
+        "ok": False,
+        "none": None,
+    }
+    (tmp_path / "data.json").write_text(json.dumps(data))
+
+    result = execute_tool("inspect_json", {"path": "data.json"}, tmp_path)
+
+    assert result.splitlines()[0] == "file: data.json"
+    assert "object with 4 keys" in result
+    assert "items: array of 1" in result
+    assert "[0]: object with 3 keys" in result
+    assert "id: number 1" in result
+    assert "name: string 'a'" in result
+    assert "tags: array of 1" in result
+    assert "count: number 1" in result
+    assert "ok: boolean false" in result
+    assert "none: null" in result
+
+    shallow = execute_tool(
+        "inspect_json", {"path": "data.json", "max_depth": 1}, tmp_path
+    )
+    assert "items: array of 1" in shallow
+    assert "[0]:" not in shallow
+
+    (tmp_path / "bad.json").write_text("{nope")
+    assert execute_tool("inspect_json", {"path": "bad.json"}, tmp_path).startswith(
+        "Error: invalid JSON"
+    )
+
+
+# --- memory and tasks -----------------------------------------------------
+
+
+def test_remember_and_recall_round_trip_through_memory_md(tmp_path):
+    assert execute_tool("recall", {}, tmp_path) == "Memory is empty."
+
+    first = execute_tool(
+        "remember", {"key": " user  timezone ", "text": "Europe/Paris"}, tmp_path
+    )
+    assert first == "Remembered 'user timezone'. 1 memories stored in memory.md."
+    execute_tool(
+        "remember", {"key": "project", "text": "# harness\nagent loop"}, tmp_path
+    )
+    updated = execute_tool(
+        "remember", {"key": "user timezone", "text": "America/Toronto"}, tmp_path
+    )
+    assert updated == "Updated 'user timezone'. 2 memories stored in memory.md."
+
+    stored = (tmp_path / "memory.md").read_text()
+    assert stored.startswith(
+        "# Memory\n\n## user timezone\nAmerica/Toronto\n\n## project\nharness\nagent loop\n"
+    )
+    assert tools.memory_keys(tmp_path) == ["user timezone", "project"]
+
+    everything = execute_tool("recall", {}, tmp_path)
+    assert "## user timezone\nAmerica/Toronto" in everything
+    assert "## project" in everything
+
+    assert execute_tool("recall", {"query": "toronto"}, tmp_path) == (
+        "## user timezone\nAmerica/Toronto"
+    )
+    assert (
+        execute_tool("recall", {"query": "zzz"}, tmp_path) == "No memories match 'zzz'."
+    )
+    assert execute_tool("remember", {"key": "x"}, tmp_path) == "Error: text is required"
+    assert execute_tool("remember", {"text": "x"}, tmp_path) == "Error: key is required"
+
+
+def test_plan_tools_write_update_and_show(tmp_path):
+    assert execute_tool("show_plan", {}, tmp_path) == (
+        "No plan yet. Call write_plan with a list of steps."
+    )
+    assert execute_tool("update_plan", {"step": 1, "status": "done"}, tmp_path) == (
+        "Error: no plan yet; call write_plan first"
+    )
+
+    written = execute_tool(
+        "write_plan",
+        {"steps": ["search the web", "read two pages", "answer"]},
+        tmp_path,
+    )
+    assert (
+        written
+        == "# Plan\n\n1. [ ] search the web\n2. [ ] read two pages\n3. [ ] answer\n\n0/3 done, 0 skipped"
+    )
+    assert (
+        tmp_path / "plan.md"
+    ).read_text() == "# Plan\n\n1. [ ] search the web\n2. [ ] read two pages\n3. [ ] answer\n"
+
+    done = execute_tool("update_plan", {"step": 1, "status": "done"}, tmp_path)
+    assert "1. [x] search the web" in done
+    assert "1/3 done, 0 skipped" in done
+
+    skipped = execute_tool(
+        "update_plan",
+        {"step": 2, "status": "skipped", "note": "pages unreachable"},
+        tmp_path,
+    )
+    assert "2. [-] read two pages (pages unreachable)" in skipped
+    assert "1/3 done, 1 skipped" in skipped
+
+    shown = execute_tool("show_plan", {}, tmp_path)
+    assert shown == skipped
+
+    assert execute_tool("update_plan", {"step": 9, "status": "done"}, tmp_path) == (
+        "Error: step must be a number from 1 to 3"
+    )
+    assert execute_tool("update_plan", {"step": 1, "status": "later"}, tmp_path) == (
+        "Error: status must be done, todo, or skipped"
+    )
+    assert execute_tool("write_plan", {"steps": []}, tmp_path).startswith(
+        "Error: steps"
+    )
+    assert execute_tool("write_plan", {"steps": ["ok", 3]}, tmp_path).startswith(
+        "Error: steps"
+    )
+
+
+# --- prompt ---------------------------------------------------------------
+
+
+def test_system_prompt_includes_date_listing_and_memory_index(tmp_path):
+    now = datetime(2026, 10, 6, 16, 30, tzinfo=timezone.utc)
+
+    empty = system_prompt(tmp_path, "MENU", now=now)
+    assert "Today is Tuesday, October 06, 2026, 16:30 UTC." in empty
+    assert f"Your workspace is {tmp_path}." in empty
+    assert "The workspace is empty." in empty
+    assert "No saved memories yet." in empty
+    assert "Several skills can stay loaded at once" in empty
+    assert "search snippets are not answers" in empty
+    assert empty.endswith("MENU")
+
+    (tmp_path / "notes.md").write_text("n")
+    (tmp_path / "downloads").mkdir()
+    (tmp_path / "session.log").write_text("{}")
+    (tmp_path / ".hidden").write_text("h")
+    execute_tool("remember", {"key": "user name", "text": "Alex"}, tmp_path)
+
+    filled = system_prompt(tmp_path, "MENU", now=now)
+    assert "Workspace files: downloads/, memory.md, notes.md" in filled
+    assert "session.log" not in filled.split("Workspace files:")[1].split("\n")[0]
+    assert ".hidden" not in filled
+    assert "Saved memories: user name." in filled
+
+
+def test_workspace_listing_caps_the_number_of_names(tmp_path):
+    for index in range(25):
+        (tmp_path / f"f{index:02d}.txt").write_text("x")
+
+    listing = tools.workspace_listing(tmp_path, limit=20)
+
+    assert listing.startswith("Workspace files: f00.txt, ")
+    assert listing.endswith(", and 5 more")
+
+
+def test_session_prompt_refreshes_after_skill_load(tmp_path):
+    session = agent.Session(workspace=tmp_path)
+    assert "The workspace is empty." in session.messages[0]["content"]
+
+    (tmp_path / "new.txt").write_text("x")
+    session.skills.load_skill("tasks")
+    session.sync_prompt()
+
+    assert "Workspace files: new.txt" in session.messages[0]["content"]
+    assert (
+        "[loaded: write_plan, update_plan, show_plan]" in session.messages[0]["content"]
+    )
+
+
+def test_every_tool_belongs_to_exactly_one_skill():
+    assigned = [name for names in skills.SKILL_TOOLS.values() for name in names]
+    assert sorted(assigned) == sorted(set(assigned))
+    assert set(assigned) == set(tools.TOOL_FNS)
+    assert set(assigned) == {tool["function"]["name"] for tool in tools.TOOLS}

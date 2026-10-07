@@ -166,7 +166,9 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if not args.answer_only:
-        print("🤖 File Agent (Shift+Enter for a new line, type 'exit' or press 'ctrl+q' to exit)")
+        print(
+            "🤖 File Agent (Shift+Enter for a new line, type 'exit' or press 'ctrl+q' to exit)"
+        )
         print(f"Workspace: {session.workspace}")
         print(f"Model: {session.model}")
 

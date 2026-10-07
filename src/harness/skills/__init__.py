@@ -6,9 +6,25 @@ from harness.tools import TOOLS, execute_tool
 SKILLS_DIR = Path(__file__).resolve().parent
 
 SKILL_TOOLS = {
-    "file_ops": ("read_file", "write_file", "delete_file"),
+    "file_ops": (
+        "read_file",
+        "write_file",
+        "edit_file",
+        "append_file",
+        "delete_file",
+        "move_file",
+        "list_files",
+        "search_files",
+    ),
     "shell": ("run_shell",),
-    "news": ("fetch_url", "parse_html"),
+    "python": ("run_python",),
+    "research": ("web_search", "read_url", "fetch_url", "parse_html", "read_feed"),
+    "reference": ("wikipedia_search", "wikipedia_summary"),
+    "api": ("http_get_json",),
+    "documents": ("read_pdf", "read_docx"),
+    "data": ("inspect_csv", "inspect_json"),
+    "memory": ("remember", "recall"),
+    "tasks": ("write_plan", "update_plan", "show_plan"),
 }
 
 
