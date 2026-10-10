@@ -25,6 +25,13 @@ from harness.tui import (
     wrap_lines,
 )
 
+_PLAIN_HELP = """\
+Commands
+  /help     show commands
+  /resume   resume a past session
+  /compact  compact context
+  exit      quit"""
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="File agent")
@@ -167,6 +174,12 @@ def _resume_session(session, *, answer_only: bool) -> None:
 
 
 def _handle_command(session, name: str, rest: str, *, answer_only: bool) -> None:
+    if name == "help" and rest == "":
+        print(_PLAIN_HELP)
+        return
+    if name == "help":
+        print("Usage: /help")
+        return
     if name == "resume" and rest == "":
         _resume_session(session, answer_only=answer_only)
         return
@@ -241,10 +254,7 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if not args.answer_only:
-        print(
-            "🤖 File Agent (Shift+Enter for a new line, /resume to resume a session, "
-            "/compact to compact context, type 'exit' or press 'ctrl+q' to exit)"
-        )
+        print("🤖 File Agent")
         print(f"Workspace: {session.workspace}")
         print(f"Model: {session.model}")
 

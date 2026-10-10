@@ -9,7 +9,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.events import Key
-from textual.screen import Screen
+from textual.screen import ModalScreen, Screen
 from textual.widgets import Markdown, OptionList, Static, TextArea
 
 from harness.agent import (
@@ -23,6 +23,19 @@ from harness.agent import (
 )
 
 THINKING_ROWS = 3
+
+_TUI_HELP = """\
+Commands
+  /help     show commands and hotkeys
+  /resume   resume a past session
+  /compact  compact context
+  exit      quit
+
+Hotkeys
+  Shift+Enter  new line
+  Ctrl+N       new session
+  Ctrl+T       expand or collapse thinking
+  Ctrl+Q       quit"""
 
 
 def line_limit(width: int) -> int:
@@ -550,6 +563,33 @@ class ResumeOptions(OptionList):
                 screen.add_digit(event.character)
 
 
+class HelpScreen(ModalScreen):
+    BINDINGS = [
+        Binding("escape", "close", "Close", priority=True),
+    ]
+    DEFAULT_CSS = """
+    HelpScreen {
+        align: center middle;
+    }
+    #help-box {
+        width: auto;
+        height: auto;
+        border: round ansi_bright_black;
+        padding: 1 2;
+        background: $surface;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        yield Static(_TUI_HELP, id="help-box", markup=False)
+
+    def on_mount(self) -> None:
+        self.query_one("#help-box", Static).border_title = "Help"
+
+    def action_close(self) -> None:
+        self.dismiss()
+
+
 class HarnessApp(App):
     BINDINGS = [
         Binding("ctrl+q", "quit", "Quit", priority=True),
@@ -607,11 +647,7 @@ class HarnessApp(App):
     def _banner(self) -> str:
         lines = []
         if self.review is None:
-            lines.append(
-                "🤖 File Agent (Shift+Enter for a new line, ctrl+n for a new session, "
-                "/resume to resume a session, /compact to compact context, "
-                "type 'exit' or press 'ctrl+q' to exit)"
-            )
+            lines.append("🤖 File Agent")
         lines.append(f"Workspace: {self.session.workspace}")
         lines.append(f"Model: {self.session.model}")
         context = context_line(
@@ -707,6 +743,12 @@ class HarnessApp(App):
         self.run_worker(lambda: self._turn(text), thread=True, exclusive=True)
 
     def _command(self, name: str, rest: str) -> None:
+        if name == "help" and rest == "":
+            self.push_screen(HelpScreen())
+            return
+        if name == "help":
+            self._note("Usage: /help")
+            return
         if name == "resume" and rest == "":
             self.push_screen(ResumeScreen(list_sessions()), self._on_resume)
             return

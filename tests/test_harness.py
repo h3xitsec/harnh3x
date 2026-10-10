@@ -31,6 +31,7 @@ from harness.skills import SkillRegistry
 from harness.tools import _tool_result, execute_tool
 from harness.tui import (
     HarnessApp,
+    HelpScreen,
     ModelApp,
     ResumeOptions,
     ResumeScreen,
@@ -1645,6 +1646,28 @@ def test_plain_resume_reprints_the_session(monkeypatch, capsys, tmp_path):
     assert "saved-model" in output
 
 
+def test_plain_help_lists_commands(monkeypatch, capsys, tmp_path):
+    cli = _load_cli()
+    monkeypatch.setattr(cli, "_tty", lambda: False)
+    monkeypatch.setattr(
+        cli,
+        "Session",
+        lambda **kwargs: SimpleNamespace(workspace=tmp_path, model="m", messages=[]),
+    )
+    answers = iter(["/help", "/help extra", "exit"])
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
+
+    cli.main([])
+
+    output = capsys.readouterr().out
+    assert "🤖 File Agent\n" in output
+    assert "Shift+Enter" not in output
+    assert "Ctrl+Q" not in output
+    assert "/resume" in output
+    assert "/compact" in output
+    assert "Usage: /help" in output
+
+
 def test_thinking_panel_keeps_the_tail_until_expanded():
     cli = _load_cli()
     reasoning = "\n".join(["alpha", "beta", "gamma", "delta"])
@@ -2018,6 +2041,34 @@ def test_banner_shows_context_and_updates_after_a_turn():
             await _wait_for(pilot, lambda: "Agent: done" in app.transcript_plain())
             banner = str(app.query_one("#banner").content)
             assert "Context: 5,000 / 8,192" in banner
+            assert "Shift+Enter" not in banner
+            assert "/resume" not in banner
+
+    asyncio.run(drive())
+
+
+def test_help_command_lists_commands_and_hotkeys():
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+    app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press(*"/help", "enter")
+            await pilot.pause()
+            assert isinstance(app.screen, HelpScreen)
+            shown = str(app.screen.query_one("#help-box").content)
+            assert "/resume" in shown
+            assert "/compact" in shown
+            assert "Shift+Enter" in shown
+            assert "Ctrl+N" in shown
+            assert "Ctrl+T" in shown
+            assert "Ctrl+Q" in shown
+            await pilot.press("escape")
+            await pilot.pause()
+            assert not isinstance(app.screen, HelpScreen)
+            assert app.transcript_plain() == ""
+            await pilot.press(*"/help extra", "enter")
+            assert "Usage: /help" in app.transcript_plain()
 
     asyncio.run(drive())
 
