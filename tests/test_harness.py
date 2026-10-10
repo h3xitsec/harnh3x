@@ -28,7 +28,14 @@ from harness.config import (
 from harness.prompt import system_prompt
 from harness.skills import SkillRegistry
 from harness.tools import _tool_result, execute_tool
-from harness.tui import HarnessApp, ModelApp, ResumeOptions, ResumeScreen, ReviewApp
+from harness.tui import (
+    HarnessApp,
+    ModelApp,
+    ResumeOptions,
+    ResumeScreen,
+    ReviewApp,
+    context_line,
+)
 
 ARTICLE_HTML = """<!DOCTYPE html>
 <html lang="en">
@@ -638,6 +645,8 @@ def test_session_reset_starts_a_new_conversation(tmp_path, monkeypatch):
     previous = session.workspace
     session.messages.append({"role": "user", "content": "remember this"})
     session.skills.load_skill("file_ops")
+    session.context_tokens = 40
+    session.context_limit = 8192
 
     session.reset()
 
@@ -647,6 +656,8 @@ def test_session_reset_starts_a_new_conversation(tmp_path, monkeypatch):
     assert previous.is_dir()
     assert str(session.workspace) in session.messages[0]["content"]
     assert session.model == "custom-model"
+    assert session.context_tokens is None
+    assert session.context_limit == 8192
     assert [message["role"] for message in session.messages] == ["system"]
     assert "[loaded:" not in session.messages[0]["content"]
     assert [tool["function"]["name"] for tool in session.skills.schemas()] == [
@@ -705,8 +716,10 @@ def test_run_saves_the_full_transcript(tmp_path):
 
     assert agent.run("think", session, client=client) == "ok"
 
+    assert session.context_tokens is None
     saved = json.loads((tmp_path / TRANSCRIPT_FILE).read_text(encoding="utf-8"))
     assert saved["model"] == "custom-model"
+    assert "context_tokens" not in saved
     assert saved["messages"][-1]["reasoning"] == thinking
     assert not (tmp_path / f".{TRANSCRIPT_FILE}.tmp").exists()
     events = [
@@ -716,6 +729,102 @@ def test_run_saves_the_full_transcript(tmp_path):
         event["message"]["reasoning"] for event in events if event["event"] == "model"
     )
     assert logged == "r" * 500 + "...[truncated]"
+
+
+def test_context_limit_from_show_prefers_num_ctx():
+    payload = {
+        "parameters": "temperature 0.8\nnum_ctx 8192\n",
+        "model_info": {"qwen35.context_length": 131072},
+    }
+    assert agent._context_limit_from_show(payload) == 8192
+    assert (
+        agent._context_limit_from_show(
+            {"model_info": {"qwen35.context_length": 131072, "other": 1}}
+        )
+        == 131072
+    )
+    assert agent._context_limit_from_show({"parameters": "temperature 0.8"}) is None
+    assert agent._context_limit_from_show([]) is None
+    assert (
+        agent._context_limit_from_show({"model_info": {"qwen35.context_length": True}})
+        is None
+    )
+
+
+def test_model_context_limit_reads_ollama_show(monkeypatch):
+    captured = {}
+
+    class Response:
+        def read(self):
+            return json.dumps({"parameters": "num_ctx 8192\n"}).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def urlopen(request, timeout=0):
+        captured["url"] = request.full_url
+        captured["body"] = request.data
+        captured["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr(agent.urllib.request, "urlopen", urlopen)
+    client = SimpleNamespace(base_url="http://host:11434/v1/")
+
+    assert agent.model_context_limit("qwen3.5-128k", client) == 8192
+    assert captured["url"] == "http://host:11434/api/show"
+    assert json.loads(captured["body"]) == {"model": "qwen3.5-128k"}
+    assert captured["timeout"] == agent._SHOW_TIMEOUT
+
+
+def test_model_context_limit_returns_none_when_show_fails(monkeypatch):
+    def urlopen(request, timeout=0):
+        raise OSError("down")
+
+    monkeypatch.setattr(agent.urllib.request, "urlopen", urlopen)
+    client = SimpleNamespace(base_url="http://host:11434/v1")
+
+    assert agent.model_context_limit("m", client) is None
+    assert agent.model_context_limit("m", SimpleNamespace()) is None
+
+
+def test_run_stores_the_latest_context_tokens(tmp_path):
+    step = {"n": 0}
+
+    def create(**kwargs):
+        step["n"] += 1
+        if step["n"] == 1:
+            message = SimpleNamespace(
+                content="",
+                tool_calls=[
+                    SimpleNamespace(
+                        id="call_1",
+                        function=SimpleNamespace(
+                            name="read_file", arguments='{"path": "a.txt"}'
+                        ),
+                    )
+                ],
+            )
+            total = 120
+        else:
+            message = SimpleNamespace(content="ready", tool_calls=None)
+            total = 340
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=message)],
+            usage=SimpleNamespace(total_tokens=total),
+        )
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    session = agent.Session(workspace=tmp_path, model="custom-model")
+
+    assert agent.run("read a.txt", session, client=client) == "ready"
+    assert session.context_tokens == 340
+    saved = json.loads((tmp_path / TRANSCRIPT_FILE).read_text(encoding="utf-8"))
+    assert saved["context_tokens"] == 340
 
 
 def test_transcript_survives_a_failed_turn(tmp_path):
@@ -884,6 +993,34 @@ def test_resume_restores_messages_model_and_skills(tmp_path, monkeypatch):
         "notes",
     ]
     assert session.messages[-3]["reasoning"] == "look at the notes"
+    assert session.context_tokens is None
+    assert session.context_limit is None
+
+
+def test_resume_restores_context_tokens(tmp_path):
+    past = tmp_path / "past"
+    past.mkdir()
+    (past / TRANSCRIPT_FILE).write_text(
+        json.dumps(
+            {
+                "model": "saved-model",
+                "context_tokens": 4321,
+                "messages": [
+                    {"role": "system", "content": "s"},
+                    {"role": "user", "content": "hello"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    session = agent.Session(workspace=tmp_path / "current", model="custom-model")
+    session.context_limit = 8192
+    session.context_tokens = 10
+
+    session.resume(past)
+
+    assert session.context_tokens == 4321
+    assert session.context_limit is None
 
 
 def test_resume_rejects_a_broken_transcript(tmp_path):
@@ -1398,6 +1535,41 @@ def test_model_screen_accepts_arrows_or_a_number():
 
     asyncio.run(invalid_then_one())
     assert app.return_value == "alpha"
+
+
+def test_context_line_formats_used_and_limit():
+    assert context_line(1234, 8192) == "Context: 1,234 / 8,192"
+    assert context_line(None, 8192) == "Context: — / 8,192"
+    assert context_line(50, None) == "Context: 50"
+    assert context_line(None, None) is None
+
+
+def test_banner_shows_context_and_updates_after_a_turn():
+    session = SimpleNamespace(
+        workspace="ws",
+        model="m",
+        messages=[],
+        context_tokens=1234,
+        context_limit=8192,
+    )
+
+    def fake_run(message, active, show_tools=True, on_tool=None):
+        active.context_tokens = 5000
+        if on_tool is not None:
+            on_tool("read_file", {"path": "a.txt"})
+        return "done"
+
+    app = HarnessApp(session, fake_run, show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            assert "Context: 1,234 / 8,192" in str(app.query_one("#banner").content)
+            await pilot.press(*"hi", "enter")
+            await _wait_for(pilot, lambda: "Agent: done" in app.transcript_plain())
+            banner = str(app.query_one("#banner").content)
+            assert "Context: 5,000 / 8,192" in banner
+
+    asyncio.run(drive())
 
 
 def test_submit_shows_the_request_and_the_answer():

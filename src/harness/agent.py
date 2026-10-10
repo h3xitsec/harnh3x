@@ -1,5 +1,8 @@
 import json
 import os
+import re
+import urllib.error
+import urllib.request
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -32,6 +35,87 @@ def list_models(client: OpenAI | None = None) -> list[str]:
     return sorted(names)
 
 
+_SHOW_TIMEOUT = 3
+_NUM_CTX = re.compile(r"(?m)^num_ctx\s+(\d+)\s*$")
+
+
+def _show_url(client) -> str | None:
+    base = getattr(client, "base_url", None)
+    if base is None:
+        return None
+    text = str(base).strip().rstrip("/")
+    if not text:
+        return None
+    if text.endswith("/v1"):
+        text = text[: -len("/v1")]
+    return f"{text}/api/show"
+
+
+def _context_limit_from_show(payload: object) -> int | None:
+    if not isinstance(payload, dict):
+        return None
+    parameters = payload.get("parameters")
+    if isinstance(parameters, str):
+        match = _NUM_CTX.search(parameters)
+        if match:
+            return int(match.group(1))
+    info = payload.get("model_info")
+    if not isinstance(info, dict):
+        return None
+    lengths = [
+        value
+        for key, value in info.items()
+        if isinstance(key, str)
+        and key.endswith(".context_length")
+        and isinstance(value, int)
+        and not isinstance(value, bool)
+    ]
+    if not lengths:
+        return None
+    return max(lengths)
+
+
+def model_context_limit(model: str, client: OpenAI | None = None) -> int | None:
+    api = client or get_client()
+    url = _show_url(api)
+    if url is None:
+        return None
+    body = json.dumps({"model": model}).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=_SHOW_TIMEOUT) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError, urllib.error.URLError):
+        return None
+    return _context_limit_from_show(payload)
+
+
+def _count(value: object) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
+
+
+def _stored_context_tokens(data: dict) -> int | None:
+    return _count(data.get("context_tokens"))
+
+
+def _remember_context(session, response, client) -> None:
+    usage = getattr(response, "usage", None)
+    total = _count(getattr(usage, "total_tokens", None))
+    if total is not None:
+        session.context_tokens = total
+    if session.context_limit is None:
+        limit = model_context_limit(session.model, client)
+        if limit is not None:
+            session.context_limit = limit
+
+
 def _session_workspace(workspace: Path | None) -> Path:
     if workspace is not None:
         raw = workspace
@@ -48,6 +132,8 @@ class Session:
         self.workspace = _session_workspace(workspace)
         self.model = model or MODEL
         self.skills = SkillRegistry()
+        self.context_tokens: int | None = None
+        self.context_limit: int | None = None
         self.messages: list[dict] = [
             {
                 "role": "system",
@@ -58,6 +144,7 @@ class Session:
     def reset(self) -> None:
         self.workspace = _session_workspace(Path(WORKSPACES_DIR) / str(uuid.uuid4()))
         self.skills = SkillRegistry()
+        self.context_tokens = None
         self.messages = [
             {
                 "role": "system",
@@ -76,6 +163,8 @@ class Session:
         self.workspace = path
         self.model = data["model"]
         self.messages = data["messages"]
+        self.context_tokens = _stored_context_tokens(data)
+        self.context_limit = None
         self.skills = SkillRegistry()
         _replay_skills(self)
         self.sync_prompt()
@@ -222,6 +311,8 @@ def _replay_skills(session: Session) -> None:
 def _save_transcript(session: Session) -> None:
     path = session.workspace / TRANSCRIPT_FILE
     payload = {"model": session.model, "messages": session.messages}
+    if _count(session.context_tokens) is not None:
+        payload["context_tokens"] = session.context_tokens
     temporary = path.with_name(f".{TRANSCRIPT_FILE}.tmp")
     temporary.write_text(
         json.dumps(payload, ensure_ascii=False) + "\n",
@@ -314,6 +405,7 @@ def _complete(
         msg = response.choices[0].message
         stored = assistant_message(msg)
         session.messages.append(stored)
+        _remember_context(session, response, api)
         write_log(
             {"event": "model", "turn": turn, "message": _log_preview(stored)},
             session.workspace,

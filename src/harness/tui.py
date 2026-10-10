@@ -15,6 +15,7 @@ from textual.widgets import Markdown, OptionList, Static, TextArea
 from harness.agent import (
     _visible_answer,
     list_sessions,
+    model_context_limit,
     parse_command,
     session_label,
 )
@@ -66,6 +67,15 @@ def thinking_text(reasoning: str, *, expanded: bool, width: int, hold: bool) -> 
     header = "\n".join(wrap_lines(f"Thinking · {hint}", limit))
     body = "\n".join(thinking_shown(reasoning, expanded=expanded, width=width))
     return f"{header}\n{body}"
+
+
+def context_line(used: int | None, limit: int | None) -> str | None:
+    if used is None and limit is None:
+        return None
+    used_text = f"{used:,}" if used is not None else "—"
+    if limit is None:
+        return f"Context: {used_text}"
+    return f"Context: {used_text} / {limit:,}"
 
 
 def displayed_args(arguments: object) -> object:
@@ -504,12 +514,14 @@ class HarnessApp(App):
         *,
         show_tools: bool = True,
         review: tuple | None = None,
+        context_limit: Callable[[str], int | None] | None = None,
     ) -> None:
         super().__init__()
         self.session = session
         self._run = run
         self.show_tools = show_tools
         self.review = review
+        self._context_limit = context_limit
         self.latest: Thinking | None = None
         self.tools: ToolBox | None = None
 
@@ -522,7 +534,37 @@ class HarnessApp(App):
             )
         lines.append(f"Workspace: {self.session.workspace}")
         lines.append(f"Model: {self.session.model}")
+        context = context_line(
+            getattr(self.session, "context_tokens", None),
+            getattr(self.session, "context_limit", None),
+        )
+        if context is not None:
+            lines.append(context)
         return "\n".join(lines)
+
+    def _refresh_banner(self) -> None:
+        self.query_one("#banner", Static).update(self._banner())
+
+    def _load_context_limit(self) -> None:
+        if self._context_limit is None or self.review is not None:
+            return
+        model = self.session.model
+
+        def fetch() -> None:
+            limit = self._context_limit(model)
+            self.call_from_thread(self._apply_limit, model, limit)
+
+        self.run_worker(fetch, thread=True, group="context-limit", exclusive=True)
+
+    def _apply_limit(self, model: str, limit: int | None) -> None:
+        if (
+            self.session.model != model
+            or isinstance(limit, bool)
+            or not isinstance(limit, int)
+        ):
+            return
+        self.session.context_limit = limit
+        self._refresh_banner()
 
     def compose(self) -> ComposeResult:
         yield Static(self._banner(), id="banner", markup=False)
@@ -531,6 +573,7 @@ class HarnessApp(App):
             yield Composer()
 
     def on_mount(self) -> None:
+        self._load_context_limit()
         if self.review is not None:
             user, tools, reasoning, answer = self.review
             self._append_user(user)
@@ -611,6 +654,7 @@ class HarnessApp(App):
         self.query_one("#banner", Static).update(self._banner())
         await self.query_one("#transcript").remove_children()
         self._render_history()
+        self._load_context_limit()
         composer.disabled = False
         composer.focus()
 
@@ -666,6 +710,7 @@ class HarnessApp(App):
             transcript.mount(self.tools)
         self.tools.add(name, args)
         transcript.scroll_end(animate=False)
+        self._refresh_banner()
 
     def _finish(self, answer: str | None, reasoning: str, refocus: bool = True) -> None:
         transcript = self.query_one("#transcript")
@@ -676,6 +721,7 @@ class HarnessApp(App):
         if answer is not None:
             transcript.mount(AgentAnswer(answer))
         transcript.scroll_end(animate=False)
+        self._refresh_banner()
         if refocus and self.review is None:
             composer = self.query_one(Composer)
             composer.disabled = False
@@ -702,7 +748,12 @@ class ReviewApp(HarnessApp):
 
 
 def run_interactive(session, run: Callable, *, show_tools: bool) -> None:
-    HarnessApp(session, run, show_tools=show_tools).run()
+    HarnessApp(
+        session,
+        run,
+        show_tools=show_tools,
+        context_limit=model_context_limit,
+    ).run()
 
 
 def run_review(
