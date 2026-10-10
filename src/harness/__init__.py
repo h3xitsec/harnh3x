@@ -2,6 +2,7 @@ from harness.agent import (
     Session,
     SessionInfo,
     assistant_message,
+    compact_session,
     list_models,
     list_sessions,
     model_context_limit,
@@ -10,6 +11,7 @@ from harness.agent import (
     session_label,
 )
 from harness.config import (
+    COMPACT_AT,
     FEED_MAX_ITEMS,
     FETCH_MAX_BYTES,
     FETCH_MAX_REDIRECTS,
@@ -43,6 +45,7 @@ from harness.tools import (
 )
 
 __all__ = [
+    "COMPACT_AT",
     "FEED_MAX_ITEMS",
     "FETCH_MAX_BYTES",
     "FETCH_MAX_REDIRECTS",
@@ -67,6 +70,7 @@ __all__ = [
     "SkillRegistry",
     "TOOLS",
     "assistant_message",
+    "compact_session",
     "execute_tool",
     "extract_page",
     "get_json",

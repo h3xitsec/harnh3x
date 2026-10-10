@@ -130,6 +130,9 @@ class SkillRegistry:
             return None
         return tuple(tool["function"]["name"] for tool in skill.tools)
 
+    def loaded_names(self) -> list[str]:
+        return sorted(self._active)
+
     def get_menu(self) -> str:
         lines = [
             "Available skills (use load_skill to activate).",

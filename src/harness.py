@@ -4,6 +4,7 @@ import sys
 
 from harness.agent import (
     Session,
+    compact_session,
     list_models,
     list_sessions,
     parse_command,
@@ -12,6 +13,7 @@ from harness.agent import (
 )
 from harness.config import MODEL
 from harness.tui import (
+    compact_label,
     conversation_turns,
     line_limit,
     pick_model,
@@ -19,6 +21,7 @@ from harness.tui import (
     run_interactive,
     run_review,
     thinking_text,
+    transcript_items,
     wrap_lines,
 )
 
@@ -117,7 +120,11 @@ def _print_tools(tools: list[tuple[str, object]]) -> None:
 
 
 def _print_turns(session, *, answer_only: bool) -> None:
-    for turn in conversation_turns(session.messages):
+    for kind, item in transcript_items(session.messages):
+        if kind == "compact":
+            print(f"\n{compact_label(item)}")
+            continue
+        turn = item
         print(f"\nYou: {turn.user}")
         if not answer_only:
             _print_tools(turn.tools)
@@ -165,6 +172,12 @@ def _handle_command(session, name: str, rest: str, *, answer_only: bool) -> None
         return
     if name == "resume":
         print("Usage: /resume")
+        return
+    if name == "compact" and rest == "":
+        print(compact_session(session))
+        return
+    if name == "compact":
+        print("Usage: /compact")
         return
     shown = f"/{name}" if name else "/"
     print(f"Unknown command: {shown}")
@@ -230,7 +243,7 @@ def main(argv: list[str] | None = None) -> None:
     if not args.answer_only:
         print(
             "🤖 File Agent (Shift+Enter for a new line, /resume to resume a session, "
-            "type 'exit' or press 'ctrl+q' to exit)"
+            "/compact to compact context, type 'exit' or press 'ctrl+q' to exit)"
         )
         print(f"Workspace: {session.workspace}")
         print(f"Model: {session.model}")

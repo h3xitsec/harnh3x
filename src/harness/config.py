@@ -3,6 +3,7 @@ MODEL = "qwen3.5-128k"
 # MODEL = "gpt-oss:20b"
 # MODEL = "gemma4:12b-it-qat"
 MAX_TURNS = 45
+COMPACT_AT = 0.5
 MAX_TOOL_RESULT = 8_000
 FETCH_TIMEOUT = 15
 FETCH_MAX_BYTES = 2_000_000

@@ -19,6 +19,7 @@ import harness.sandbox as sandbox
 import harness.skills as skills
 import harness.tools as tools
 from harness.config import (
+    COMPACT_AT,
     MAX_TOOL_RESULT,
     MODEL,
     PDF_MAX_PAGES,
@@ -35,6 +36,8 @@ from harness.tui import (
     ResumeScreen,
     ReviewApp,
     context_line,
+    conversation_turns,
+    transcript_items,
 )
 
 ARTICLE_HTML = """<!DOCTYPE html>
@@ -827,6 +830,348 @@ def test_run_stores_the_latest_context_tokens(tmp_path):
     assert saved["context_tokens"] == 340
 
 
+def _prior_turn(session) -> None:
+    session.messages.append({"role": "user", "content": "earlier"})
+    session.messages.append({"role": "assistant", "content": "did the earlier work"})
+
+
+def _completion(content, total, tool_calls=None):
+    message = SimpleNamespace(content=content, tool_calls=tool_calls)
+    return SimpleNamespace(
+        choices=[SimpleNamespace(message=message)],
+        usage=SimpleNamespace(total_tokens=total),
+    )
+
+
+def test_run_skips_compaction_below_the_threshold(tmp_path):
+    seen = []
+
+    def create(**kwargs):
+        seen.append(kwargs)
+        return _completion("ok", 12)
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    session = agent.Session(workspace=tmp_path, model="custom-model")
+    _prior_turn(session)
+    session.context_tokens = int(100 * COMPACT_AT) - 1
+    session.context_limit = 100
+
+    assert agent.run("now", session, client=client) == "ok"
+    assert len(seen) == 1
+    assert seen[0]["tools"]
+    assert any(message.get("content") == "earlier" for message in session.messages)
+
+
+def test_run_skips_compaction_without_a_limit_or_prior_turn(tmp_path):
+    seen = []
+
+    def create(**kwargs):
+        seen.append(kwargs)
+        return _completion("ok", 90)
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    no_limit = agent.Session(workspace=tmp_path / "open", model="custom-model")
+    _prior_turn(no_limit)
+    no_limit.context_tokens = 90
+    no_limit.context_limit = None
+    assert agent.run("now", no_limit, client=client) == "ok"
+
+    current_only = agent.Session(workspace=tmp_path / "fresh", model="custom-model")
+    current_only.context_tokens = 90
+    current_only.context_limit = 100
+    assert agent.run("now", current_only, client=client) == "ok"
+
+    assert len(seen) == 2
+    assert all(call["tools"] for call in seen)
+    assert any(message.get("content") == "earlier" for message in no_limit.messages)
+
+
+def test_run_compacts_older_turns_near_the_limit(tmp_path):
+    seen = []
+    chats = {"n": 0}
+
+    def create(**kwargs):
+        seen.append(kwargs)
+        if not kwargs.get("tools"):
+            return _completion("kept the plan", 90)
+        chats["n"] += 1
+        if chats["n"] == 1:
+            return _completion(
+                "",
+                90,
+                tool_calls=[
+                    SimpleNamespace(
+                        id="call_1",
+                        function=SimpleNamespace(
+                            name="read_file", arguments='{"path": "a.txt"}'
+                        ),
+                    )
+                ],
+            )
+        return _completion("ready", 30)
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    session = agent.Session(workspace=tmp_path, model="custom-model")
+    session.skills.load_skill("file_ops")
+    session.messages.append({"role": "user", "content": "OLD" * 200})
+    session.messages.append({"role": "assistant", "content": "NEWEST-MARKER"})
+    session.context_tokens = 90
+    session.context_limit = 100
+
+    assert agent.run("now", session, client=client) == "ready"
+
+    assert [call.get("tools") for call in seen] == [
+        None,
+        seen[1]["tools"],
+        seen[2]["tools"],
+    ]
+    summary_request = seen[0]["messages"][1]["content"]
+    assert "NEWEST-MARKER" in summary_request
+    assert "OLD" * 200 not in summary_request
+    assert "file_ops" in summary_request
+    assert [message["role"] for message in session.messages] == [
+        "system",
+        "user",
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+    ]
+    note = session.messages[1]["content"]
+    assert note.startswith("Context compacted:\nkept the plan")
+    assert "Loaded skills: file_ops." in note
+    assert session.messages[2]["content"] == "now"
+    assert "read_file" in [
+        tool["function"]["name"] for tool in session.skills.schemas()
+    ]
+    assert [turn.user for turn in conversation_turns(session.messages)] == ["now"]
+    events = [
+        json.loads(line) for line in (tmp_path / "session.log").read_text().splitlines()
+    ]
+    compact = next(event for event in events if event["event"] == "compact")
+    assert compact["before"] == 90
+    assert compact["dropped"] == 2
+    saved = json.loads((tmp_path / TRANSCRIPT_FILE).read_text(encoding="utf-8"))
+    assert saved["skills"] == ["file_ops"]
+
+
+def test_run_compacts_tool_rounds_that_fill_the_current_turn(tmp_path):
+    chats = {"n": 0}
+    seen = []
+
+    def create(**kwargs):
+        seen.append(kwargs)
+        if not kwargs.get("tools"):
+            return _completion("folded the tools", 90)
+        chats["n"] += 1
+        if chats["n"] == 1:
+            return _completion(
+                "",
+                90,
+                tool_calls=[
+                    SimpleNamespace(
+                        id="call_1",
+                        function=SimpleNamespace(
+                            name="read_file",
+                            arguments='{"path": "skill-doc-payload.txt"}',
+                        ),
+                    )
+                ],
+            )
+        if chats["n"] == 2:
+            return _completion(
+                "",
+                90,
+                tool_calls=[
+                    SimpleNamespace(
+                        id="call_2",
+                        function=SimpleNamespace(
+                            name="read_file",
+                            arguments='{"path": "notes.txt"}',
+                        ),
+                    )
+                ],
+            )
+        return _completion("the capabilities", 90)
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    session = agent.Session(workspace=tmp_path, model="custom-model")
+    session.skills.load_skill("file_ops")
+    _prior_turn(session)
+    session.context_tokens = 90
+    session.context_limit = 100
+
+    assert agent.run("What tools do you have", session, client=client) == (
+        "the capabilities"
+    )
+
+    stored = json.dumps(session.messages)
+    assert "skill-doc-payload.txt" not in stored
+    final_request = [call for call in seen if call.get("tools")][-1]
+    assert "skill-doc-payload.txt" not in json.dumps(final_request["messages"])
+    assert [message["role"] for message in session.messages] == [
+        "system",
+        "user",
+        "user",
+        "assistant",
+    ]
+    assert session.messages[1]["content"].startswith("Context compacted:")
+    assert session.messages[2]["content"] == "What tools do you have"
+    assert session.messages[3]["content"] == "the capabilities"
+    assert [turn.user for turn in conversation_turns(session.messages)] == [
+        "What tools do you have"
+    ]
+
+
+def test_compact_session_forces_a_summary_under_the_threshold(tmp_path):
+    session = agent.Session(workspace=tmp_path, model="custom-model")
+    _prior_turn(session)
+    session.messages[2]["content"] = "did the earlier work " + ("x" * 800)
+    session.messages.append({"role": "user", "content": "later"})
+    session.messages.append({"role": "assistant", "content": "answered"})
+    session.context_tokens = 10
+    session.context_limit = 100
+    phases = []
+
+    def create(**kwargs):
+        phases.append("create")
+        assert not kwargs.get("tools")
+        return _completion("forced summary", 10)
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    session.on_compact = phases.append
+
+    assert agent.compact_session(session, client=client) == "Context compacted."
+    assert phases == ["start", "create", "done"]
+
+    assert session.messages[1]["content"].startswith(
+        "Context compacted:\nforced summary"
+    )
+    assert session.messages[2]["content"] == "later"
+    assert session.messages[3]["content"] == "answered"
+    assert session.messages[1]["context_before"] == 10
+    assert session.messages[1]["context_after"] < 10
+    saved = json.loads((tmp_path / TRANSCRIPT_FILE).read_text(encoding="utf-8"))
+    assert "forced summary" in saved["messages"][1]["content"]
+
+
+def test_compact_session_reports_when_there_is_nothing_to_compact(tmp_path):
+    def create(**kwargs):
+        raise AssertionError("should not call the model")
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    session = agent.Session(workspace=tmp_path, model="custom-model")
+    session.messages.append({"role": "user", "content": "only"})
+    session.messages.append({"role": "assistant", "content": "done"})
+    session.context_tokens = 10
+    session.context_limit = 100
+
+    assert agent.compact_session(session, client=client) == "Nothing to compact."
+    assert session.messages[1]["content"] == "only"
+
+
+def test_compact_session_keeps_history_when_the_summary_fails(tmp_path):
+    phases = []
+
+    def create(**kwargs):
+        phases.append("create")
+        raise RuntimeError("summary down")
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    session = agent.Session(workspace=tmp_path, model="custom-model")
+    _prior_turn(session)
+    session.messages.append({"role": "user", "content": "later"})
+    session.messages.append({"role": "assistant", "content": "answered"})
+    session.context_tokens = 10
+    session.context_limit = 100
+    session.on_compact = phases.append
+
+    assert agent.compact_session(session, client=client) == (
+        "Could not compact the context."
+    )
+    assert phases == ["start", "create", "done"]
+    assert any(message.get("content") == "earlier" for message in session.messages)
+
+
+def test_run_keeps_history_when_the_summary_fails(tmp_path):
+    def create(**kwargs):
+        if not kwargs.get("tools"):
+            raise RuntimeError("summary down")
+        return _completion("still here", 10)
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    session = agent.Session(workspace=tmp_path / "down", model="custom-model")
+    _prior_turn(session)
+    session.context_tokens = 90
+    session.context_limit = 100
+
+    assert agent.run("now", session, client=client) == "still here"
+    assert any(message.get("content") == "earlier" for message in session.messages)
+
+    def empty(**kwargs):
+        if not kwargs.get("tools"):
+            return _completion("   ", 10)
+        return _completion("still here", 10)
+
+    quiet = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=empty))
+    )
+    blank = agent.Session(workspace=tmp_path / "blank", model="custom-model")
+    _prior_turn(blank)
+    blank.context_tokens = 90
+    blank.context_limit = 100
+
+    assert agent.run("now", blank, client=quiet) == "still here"
+    assert any(message.get("content") == "earlier" for message in blank.messages)
+
+
+def test_resume_restores_skills_without_load_messages(tmp_path):
+    past = tmp_path / "past"
+    past.mkdir()
+    (past / TRANSCRIPT_FILE).write_text(
+        json.dumps(
+            {
+                "model": "saved-model",
+                "skills": ["file_ops"],
+                "messages": [
+                    {"role": "system", "content": "stale"},
+                    {
+                        "role": "user",
+                        "content": "Context compacted:\nnotes were updated",
+                    },
+                    {"role": "user", "content": "continue"},
+                    {"role": "assistant", "content": "ready"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    session = agent.Session(workspace=tmp_path / "current", model="custom-model")
+
+    session.resume(past)
+
+    assert "read_file" in [
+        tool["function"]["name"] for tool in session.skills.schemas()
+    ]
+    assert [turn.user for turn in conversation_turns(session.messages)] == ["continue"]
+
+
 def test_transcript_survives_a_failed_turn(tmp_path):
     def create(**kwargs):
         raise RuntimeError("offline")
@@ -1542,6 +1887,110 @@ def test_context_line_formats_used_and_limit():
     assert context_line(None, 8192) == "Context: — / 8,192"
     assert context_line(50, None) == "Context: 50"
     assert context_line(None, None) is None
+
+
+def test_transcript_items_keep_compaction_notes_in_order():
+    messages = [
+        {"role": "system", "content": "s"},
+        {
+            "role": "user",
+            "content": "Context compacted:\nkept the greeting",
+            "context_before": 1526,
+            "context_after": 412,
+        },
+        {"role": "user", "content": "What tools do you have"},
+        {"role": "assistant", "content": "file tools"},
+    ]
+    items = transcript_items(messages)
+    assert [kind for kind, _item in items] == ["compact", "turn"]
+    assert items[0][1].summary == "kept the greeting"
+    assert items[0][1].before == 1526
+    assert items[0][1].after == 412
+    assert items[1][1].user == "What tools do you have"
+    assert [turn.user for turn in conversation_turns(messages)] == [
+        "What tools do you have"
+    ]
+
+
+def test_compacting_indicator_shows_and_hides():
+    session = SimpleNamespace(
+        workspace="ws",
+        model="m",
+        messages=[],
+        context_tokens=None,
+        context_limit=None,
+    )
+    app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            app._show_compacting()
+            await pilot.pause()
+            assert "Compacting context…" in app.transcript_plain()
+            app._hide_compacting()
+            await pilot.pause()
+            assert "Compacting context…" not in app.transcript_plain()
+
+    asyncio.run(drive())
+
+
+def test_compact_command_shows_the_note(monkeypatch):
+    def fake_compact(session, client=None):
+        session.messages.append(
+            {"role": "user", "content": "Context compacted:\nforced summary"}
+        )
+        return "Context compacted."
+
+    monkeypatch.setattr("harness.tui.compact_session", fake_compact)
+    session = SimpleNamespace(
+        workspace="ws",
+        model="m",
+        messages=[],
+        context_tokens=None,
+        context_limit=None,
+    )
+    app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press(*"/compact", "enter")
+            await _wait_for(pilot, lambda: "forced summary" in app.transcript_plain())
+            plain = app.transcript_plain()
+            assert "Context compacted" in plain
+            assert "You: Context compacted" not in plain
+            await pilot.press(*"/compact extra", "enter")
+            assert "Usage: /compact" in app.transcript_plain()
+
+    asyncio.run(drive())
+
+
+def test_turn_shows_the_compaction_note():
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+
+    def fake_run(message, active, show_tools=True, on_tool=None):
+        active.messages.append(
+            {
+                "role": "user",
+                "content": "Context compacted:\nkept the greeting",
+                "context_before": 1526,
+                "context_after": 412,
+            }
+        )
+        return "done"
+
+    app = HarnessApp(session, fake_run, show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press(*"hi", "enter")
+            await _wait_for(pilot, lambda: "Agent: done" in app.transcript_plain())
+            plain = app.transcript_plain()
+            assert "Context compacted" in plain
+            assert "1,526 → 412" in plain
+            assert "kept the greeting" in plain
+            assert "You: Context compacted" not in plain
+
+    asyncio.run(drive())
 
 
 def test_banner_shows_context_and_updates_after_a_turn():

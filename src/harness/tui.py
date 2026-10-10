@@ -13,7 +13,9 @@ from textual.screen import Screen
 from textual.widgets import Markdown, OptionList, Static, TextArea
 
 from harness.agent import (
+    _is_compact_note,
     _visible_answer,
+    compact_session,
     list_sessions,
     model_context_limit,
     parse_command,
@@ -128,11 +130,76 @@ def _turn_answer(span: list) -> str | None:
     return _visible_answer(last)
 
 
-def conversation_turns(messages: list) -> list[Turn]:
-    turns: list[Turn] = []
+@dataclass(frozen=True)
+class Compaction:
+    summary: str
+    before: int | None = None
+    after: int | None = None
+
+
+def _token_count(value: object) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
+
+
+def compact_summary(message: object) -> str | None:
+    if not _is_compact_note(message):
+        return None
+    content = message.get("content") if isinstance(message, dict) else ""
+    if not isinstance(content, str):
+        return ""
+    rest = content.split("\n", 1)[1] if "\n" in content else ""
+    return rest.strip()
+
+
+def compact_change(before: int | None, after: int | None) -> str | None:
+    if before is None or after is None:
+        return None
+    return f"{before:,} → {after:,}"
+
+
+def _static_text(widget: Static) -> str:
+    body = str(widget.content)
+    title = str(widget.border_title or "").strip()
+    subtitle = str(widget.border_subtitle or "").strip()
+    if not title:
+        return body
+    header = f"{title}  {subtitle}" if subtitle else title
+    if body:
+        return f"{header}\n{body}"
+    return header
+
+
+def compact_label(compaction: Compaction) -> str:
+    header = "Context compacted"
+    change = compact_change(compaction.before, compaction.after)
+    if change is not None:
+        header = f"{header}  {change}"
+    if compaction.summary:
+        return f"{header}\n{compaction.summary}"
+    return header
+
+
+def transcript_items(messages: list) -> list[tuple]:
+    items: list[tuple] = []
     index = 0
     while index < len(messages):
         message = messages[index]
+        summary = compact_summary(message)
+        if summary is not None and isinstance(message, dict):
+            items.append(
+                (
+                    "compact",
+                    Compaction(
+                        summary,
+                        _token_count(message.get("context_before")),
+                        _token_count(message.get("context_after")),
+                    ),
+                )
+            )
+            index += 1
+            continue
         if not isinstance(message, dict) or message.get("role") != "user":
             index += 1
             continue
@@ -152,8 +219,17 @@ def conversation_turns(messages: list) -> list[Turn]:
             0,
             answer if answer is not None else "",
         )
-        turns.append(Turn(user, _turn_tools(span), reasoning, answer))
-    return turns
+        items.append(
+            (
+                "turn",
+                Turn(user, _turn_tools(span), reasoning, answer),
+            )
+        )
+    return items
+
+
+def conversation_turns(messages: list) -> list[Turn]:
+    return [item for kind, item in transcript_items(messages) if kind == "turn"]
 
 
 def reply_reasoning(session, start: int, answer: str) -> str:
@@ -523,6 +599,9 @@ class HarnessApp(App):
         self.review = review
         self._context_limit = context_limit
         self.latest: Thinking | None = None
+        self._shown_compactions: list[Compaction] = []
+        self._compacting: Static | None = None
+        self._rendering = False
         self.tools: ToolBox | None = None
 
     def _banner(self) -> str:
@@ -530,7 +609,8 @@ class HarnessApp(App):
         if self.review is None:
             lines.append(
                 "🤖 File Agent (Shift+Enter for a new line, ctrl+n for a new session, "
-                "/resume to resume a session, type 'exit' or press 'ctrl+q' to exit)"
+                "/resume to resume a session, /compact to compact context, "
+                "type 'exit' or press 'ctrl+q' to exit)"
             )
         lines.append(f"Workspace: {self.session.workspace}")
         lines.append(f"Model: {self.session.model}")
@@ -581,6 +661,7 @@ class HarnessApp(App):
                 self._append_tool(name, args)
             self._finish(answer, reasoning, refocus=False)
             return
+        self.session.on_compact = self._on_compact
         self.query_one(Composer).focus()
 
     def action_toggle_thinking(self) -> None:
@@ -597,6 +678,8 @@ class HarnessApp(App):
         self.query_one("#banner", Static).update(self._banner())
         self.latest = None
         self.tools = None
+        self._shown_compactions = []
+        self._compacting = None
         await self.query_one("#transcript").remove_children()
         composer.load_text("")
         composer.focus()
@@ -630,8 +713,51 @@ class HarnessApp(App):
         if name == "resume":
             self._note("Usage: /resume")
             return
+        if name == "compact" and rest == "":
+            composer = self.query_one(Composer)
+            composer.disabled = True
+            self.run_worker(self._compact_now, thread=True, exclusive=True)
+            return
+        if name == "compact":
+            self._note("Usage: /compact")
+            return
         shown = f"/{name}" if name else "/"
         self._note(f"Unknown command: {shown}")
+
+    def _on_compact(self, phase: str) -> None:
+        if phase == "start":
+            self.call_from_thread(self._show_compacting)
+        else:
+            self.call_from_thread(self._hide_compacting)
+
+    def _show_compacting(self) -> None:
+        if self._compacting is not None:
+            return
+        block = Static("Compacting context…", markup=False, classes="panel")
+        block.border_title = "Context"
+        self._compacting = block
+        transcript = self.query_one("#transcript")
+        transcript.mount(block)
+        transcript.scroll_end(animate=False)
+
+    def _hide_compacting(self) -> None:
+        block = self._compacting
+        self._compacting = None
+        if block is not None and block.parent is not None:
+            block.remove()
+
+    def _compact_now(self) -> None:
+        status = compact_session(self.session)
+        self.call_from_thread(self._after_compact, status)
+
+    def _after_compact(self, status: str) -> None:
+        self._mount_new_compactions()
+        self._refresh_banner()
+        if status != "Context compacted.":
+            self._note(status)
+        composer = self.query_one(Composer)
+        composer.disabled = False
+        composer.focus()
 
     def _note(self, text: str) -> None:
         transcript = self.query_one("#transcript")
@@ -660,11 +786,43 @@ class HarnessApp(App):
 
     def _render_history(self) -> None:
         messages = getattr(self.session, "messages", None) or []
-        for turn in conversation_turns(messages):
-            self._append_user(turn.user)
-            for name, args in turn.tools:
-                self._append_tool(name, args)
-            self._finish(turn.answer, turn.reasoning, refocus=False)
+        self._rendering = True
+        notes: list[Compaction] = []
+        try:
+            for kind, item in transcript_items(messages):
+                if kind == "compact":
+                    notes.append(item)
+                    self._mount_compact(item)
+                    continue
+                self._append_user(item.user)
+                for name, args in item.tools:
+                    self._append_tool(name, args)
+                self._finish(item.answer, item.reasoning, refocus=False)
+        finally:
+            self._shown_compactions = notes
+            self._rendering = False
+
+    def _mount_compact(self, compaction: Compaction) -> None:
+        block = Static(compaction.summary, markup=False, classes="panel")
+        block.border_title = "Context compacted"
+        change = compact_change(compaction.before, compaction.after)
+        if change is not None:
+            block.border_subtitle = change
+        transcript = self.query_one("#transcript")
+        transcript.mount(block)
+        transcript.scroll_end(animate=False)
+
+    def _mount_new_compactions(self) -> None:
+        if self._rendering:
+            return
+        messages = getattr(self.session, "messages", None) or []
+        notes = [item for kind, item in transcript_items(messages) if kind == "compact"]
+        if notes == self._shown_compactions:
+            return
+        for compaction in notes:
+            if compaction not in self._shown_compactions:
+                self._mount_compact(compaction)
+        self._shown_compactions = notes
 
     def action_close(self) -> None:
         if self.review is not None:
@@ -678,7 +836,7 @@ class HarnessApp(App):
             elif isinstance(child, Thinking):
                 parts.append(child.plain)
             elif isinstance(child, Static):
-                parts.append(str(child.content))
+                parts.append(_static_text(child))
         return "\n".join(parts)
 
     def _turn(self, text: str) -> None:
@@ -704,6 +862,7 @@ class HarnessApp(App):
         self.query_one("#transcript").mount(Static(f"You: {text}", markup=False))
 
     def _append_tool(self, name: str, args: object) -> None:
+        self._mount_new_compactions()
         transcript = self.query_one("#transcript")
         if self.tools is None:
             self.tools = ToolBox()
@@ -713,6 +872,7 @@ class HarnessApp(App):
         self._refresh_banner()
 
     def _finish(self, answer: str | None, reasoning: str, refocus: bool = True) -> None:
+        self._mount_new_compactions()
         transcript = self.query_one("#transcript")
         if reasoning:
             block = Thinking(reasoning, hold=self.review is not None)
