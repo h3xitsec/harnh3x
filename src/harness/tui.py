@@ -29,7 +29,7 @@ Commands
   /help     show commands and hotkeys
   /resume   resume a past session
   /compact  compact context
-  exit      quit
+  /exit     quit
 
 Hotkeys
   Shift+Enter  new line
@@ -729,9 +729,6 @@ class HarnessApp(App):
         text = composer.text.strip()
         if not text:
             return
-        if text.lower() == "exit":
-            self.exit()
-            return
         command = parse_command(text)
         if command is not None:
             composer.load_text("")
@@ -762,6 +759,12 @@ class HarnessApp(App):
             return
         if name == "compact":
             self._note("Usage: /compact")
+            return
+        if name == "exit" and rest == "":
+            self.exit()
+            return
+        if name == "exit":
+            self._note("Usage: /exit")
             return
         shown = f"/{name}" if name else "/"
         self._note(f"Unknown command: {shown}")

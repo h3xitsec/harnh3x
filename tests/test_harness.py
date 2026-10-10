@@ -1630,7 +1630,7 @@ def test_plain_resume_reprints_the_session(monkeypatch, capsys, tmp_path):
     cli = _load_cli()
     monkeypatch.setattr(cli, "_tty", lambda: False)
     past = _past_workspace(tmp_path)
-    answers = iter(["/nope", "/resume", "1", "exit"])
+    answers = iter(["/nope", "/resume", "1", "/exit"])
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
 
     cli.main([])
@@ -1654,7 +1654,7 @@ def test_plain_help_lists_commands(monkeypatch, capsys, tmp_path):
         "Session",
         lambda **kwargs: SimpleNamespace(workspace=tmp_path, model="m", messages=[]),
     )
-    answers = iter(["/help", "/help extra", "exit"])
+    answers = iter(["/help", "/help extra", "/exit extra", "/exit"])
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
 
     cli.main([])
@@ -1665,7 +1665,9 @@ def test_plain_help_lists_commands(monkeypatch, capsys, tmp_path):
     assert "Ctrl+Q" not in output
     assert "/resume" in output
     assert "/compact" in output
+    assert "/exit" in output
     assert "Usage: /help" in output
+    assert "Usage: /exit" in output
 
 
 def test_thinking_panel_keeps_the_tail_until_expanded():
@@ -2059,6 +2061,7 @@ def test_help_command_lists_commands_and_hotkeys():
             shown = str(app.screen.query_one("#help-box").content)
             assert "/resume" in shown
             assert "/compact" in shown
+            assert "/exit" in shown
             assert "Shift+Enter" in shown
             assert "Ctrl+N" in shown
             assert "Ctrl+T" in shown
@@ -2101,6 +2104,33 @@ def test_submit_shows_the_request_and_the_answer():
     assert seen == ["a\nb"]
     assert "You: a\nb" in captured["plain"]
     assert "Agent: final answer" in captured["plain"]
+
+
+def test_exit_command_quits_the_app():
+    seen = []
+
+    def fake_run(message, active, show_tools=True, on_tool=None):
+        seen.append(message)
+        return "still here"
+
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+    app = HarnessApp(session, fake_run, show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press(*"exit", "enter")
+            await _wait_for(
+                pilot, lambda: "Agent: still here" in app.transcript_plain()
+            )
+            assert not app._exit
+            await pilot.press(*"/exit extra", "enter")
+            assert "Usage: /exit" in app.transcript_plain()
+            assert not app._exit
+            await pilot.press(*"/exit", "enter")
+            assert app._exit
+
+    asyncio.run(drive())
+    assert seen == ["exit"]
 
 
 def test_ctrl_q_quits_the_app():

@@ -30,7 +30,7 @@ Commands
   /help     show commands
   /resume   resume a past session
   /compact  compact context
-  exit      quit"""
+  /exit     quit"""
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -173,27 +173,33 @@ def _resume_session(session, *, answer_only: bool) -> None:
     _print_turns(session, answer_only=answer_only)
 
 
-def _handle_command(session, name: str, rest: str, *, answer_only: bool) -> None:
+def _handle_command(session, name: str, rest: str, *, answer_only: bool) -> bool:
     if name == "help" and rest == "":
         print(_PLAIN_HELP)
-        return
+        return False
     if name == "help":
         print("Usage: /help")
-        return
+        return False
     if name == "resume" and rest == "":
         _resume_session(session, answer_only=answer_only)
-        return
+        return False
     if name == "resume":
         print("Usage: /resume")
-        return
+        return False
     if name == "compact" and rest == "":
         print(compact_session(session))
-        return
+        return False
     if name == "compact":
         print("Usage: /compact")
-        return
+        return False
+    if name == "exit" and rest == "":
+        return True
+    if name == "exit":
+        print("Usage: /exit")
+        return False
     shown = f"/{name}" if name else "/"
     print(f"Unknown command: {shown}")
+    return False
 
 
 def _present(answer: str, reasoning: str, *, answer_only: bool) -> None:
@@ -263,11 +269,10 @@ def main(argv: list[str] | None = None) -> None:
             user_input = input("\nYou: ").strip()
         except EOFError:
             break
-        if user_input.lower() == "exit":
-            break
         command = parse_command(user_input)
         if command is not None:
-            _handle_command(session, *command, answer_only=args.answer_only)
+            if _handle_command(session, *command, answer_only=args.answer_only):
+                break
             continue
         start = len(session.messages)
         response = run(user_input, session, show_tools=show_tools)
