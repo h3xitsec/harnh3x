@@ -1,6 +1,6 @@
 ---
 description: Chat loop, message shape, JSONL log, and prompt contract
-globs: src/harness/agent.py,src/harness/prompt.py,src/harness/config.py,src/harness.py
+globs: src/harnh3x/agent.py,src/harnh3x/prompt.py,src/harnh3x/config.py,src/harnh3x.py
 alwaysApply: false
 ---
 

@@ -12,16 +12,16 @@ from pathlib import Path
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from harness.config import (
+from harnh3x.config import (
     COMPACT_AT,
     MAX_TURNS,
     MODEL,
     TRANSCRIPT_FILE,
     WORKSPACES_DIR,
 )
-from harness.prompt import system_prompt
-from harness.skills import SkillRegistry
-from harness.tools import _tool_result
+from harnh3x.prompt import system_prompt
+from harnh3x.skills import SkillRegistry
+from harnh3x.tools import _tool_result
 
 load_dotenv()
 

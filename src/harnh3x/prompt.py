@@ -2,7 +2,7 @@ import platform
 from datetime import datetime
 from pathlib import Path
 
-from harness.tools import memory_keys, workspace_listing
+from harnh3x.tools import memory_keys, workspace_listing
 
 
 def _memory_line(keys: list[str]) -> str:

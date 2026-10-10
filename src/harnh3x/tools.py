@@ -22,7 +22,7 @@ from pathlib import Path
 import pypdf
 import trafilatura
 
-from harness.config import (
+from harnh3x.config import (
     FEED_MAX_ITEMS,
     FETCH_MAX_BYTES,
     FETCH_MAX_REDIRECTS,
@@ -40,7 +40,7 @@ from harness.config import (
     TRANSCRIPT_FILE,
     WIKIPEDIA_LANG,
 )
-from harness.sandbox import sandboxed_argv
+from harnh3x.sandbox import sandboxed_argv
 
 DENIED_COMMANDS = {"rm", "mv", "chmod", "sudo"}
 # shell=False does not interpret these; refuse them so a model cannot smuggle a chain or redirect.

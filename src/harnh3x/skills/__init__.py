@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from harness.tools import TOOLS, execute_tool
+from harnh3x.tools import TOOLS, execute_tool
 
 SKILLS_DIR = Path(__file__).resolve().parent
 

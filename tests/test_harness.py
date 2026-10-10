@@ -18,7 +18,7 @@ import harness.agent as agent
 import harness.sandbox as sandbox
 import harness.skills as skills
 import harness.tools as tools
-from harness.config import (
+from harnh3x.config import (
     COMPACT_AT,
     MAX_TOOL_RESULT,
     MODEL,
@@ -26,10 +26,10 @@ from harness.config import (
     SEARCH_FILES_MAX,
     TRANSCRIPT_FILE,
 )
-from harness.prompt import system_prompt
-from harness.skills import SkillRegistry
-from harness.tools import _tool_result, execute_tool
-from harness.tui import (
+from harnh3x.prompt import system_prompt
+from harnh3x.skills import SkillRegistry
+from harnh3x.tools import _tool_result, execute_tool
+from harnh3x.tui import (
     HarnessApp,
     HelpScreen,
     ModelApp,
@@ -1660,7 +1660,7 @@ def test_plain_help_lists_commands(monkeypatch, capsys, tmp_path):
     cli.main([])
 
     output = capsys.readouterr().out
-    assert "🤖 File Agent\n" in output
+    assert "🤖 Harnh3x\n" in output
     assert "Shift+Enter" not in output
     assert "Ctrl+Q" not in output
     assert "/resume" in output

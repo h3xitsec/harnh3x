@@ -1,4 +1,4 @@
-# Harness
+# Harnh3x
 
 A file agent: an OpenAI-compatible chat loop with tools confined to one workspace. Each session gets its own directory under `workspaces/`, a `transcript.json` you can resume, and a JSONL `session.log`.
 
@@ -24,23 +24,23 @@ OPENAI_API_KEY=...
 OPENAI_BASE_URL=http://127.0.0.1:11434/v1   # optional; omit for api.openai.com
 ```
 
-The default model is `qwen3.5-128k` in `src/harness/config.py`. Point `OPENAI_BASE_URL` at whatever server hosts it, or pass `--model`.
+The default model is `qwen3.5-128k` in `src/harnh3x/config.py`. Point `OPENAI_BASE_URL` at whatever server hosts it, or pass `--model`.
 
 ## Usage
 
 From the repo root:
 
 ```bash
-poetry run python src/harness.py
+poetry run python src/harnh3x.py
 ```
 
 That starts an interactive session. Omit a query to keep talking; pass one to run a single turn and exit.
 
 ```bash
-poetry run python src/harness.py "Summarize the CSV in this workspace"
-poetry run python src/harness.py --answer-only "What is 17 * 43?"
-poetry run python src/harness.py --model gpt-4.1 "List the files here"
-poetry run python src/harness.py --model
+poetry run python src/harnh3x.py "Summarize the CSV in this workspace"
+poetry run python src/harnh3x.py --answer-only "What is 17 * 43?"
+poetry run python src/harnh3x.py --model gpt-4.1 "List the files here"
+poetry run python src/harnh3x.py --model
 ```
 
 `--model` with a name selects that model. `--model` alone lists models from the API: a Textual picker on a tty, a numbered prompt otherwise.
@@ -107,7 +107,7 @@ Each session directory holds:
 | `memory` | Remember and recall facts in `memory.md` |
 | `tasks` | Write, update, and show a plan in `plan.md` |
 
-Per-skill conventions live in `src/harness/skills/<name>/SKILL.md` and are returned when that skill is loaded.
+Per-skill conventions live in `src/harnh3x/skills/<name>/SKILL.md` and are returned when that skill is loaded.
 
 ## Development
 
@@ -116,4 +116,4 @@ poetry run pytest
 poetry run black src tests
 ```
 
-Limits (turns, compaction threshold, fetch and shell caps, the default model) live in `src/harness/config.py`. A new tool, or a looser path or shell check, needs a matching test in `tests/test_harness.py`.
+Limits (turns, compaction threshold, fetch and shell caps, the default model) live in `src/harnh3x/config.py`. A new tool, or a looser path or shell check, needs a matching test in `tests/test_harness.py`.

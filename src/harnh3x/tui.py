@@ -12,7 +12,7 @@ from textual.events import Key
 from textual.screen import ModalScreen, Screen
 from textual.widgets import Markdown, OptionList, Static, TextArea
 
-from harness.agent import (
+from harnh3x.agent import (
     _is_compact_note,
     _visible_answer,
     compact_session,
@@ -647,7 +647,7 @@ class HarnessApp(App):
     def _banner(self) -> str:
         lines = []
         if self.review is None:
-            lines.append("🤖 File Agent")
+            lines.append("🤖 Harnh3x")
         lines.append(f"Workspace: {self.session.workspace}")
         lines.append(f"Model: {self.session.model}")
         context = context_line(

@@ -1,4 +1,4 @@
-from harness.agent import (
+from harnh3x.agent import (
     Session,
     SessionInfo,
     assistant_message,
@@ -10,7 +10,7 @@ from harness.agent import (
     run,
     session_label,
 )
-from harness.config import (
+from harnh3x.config import (
     COMPACT_AT,
     FEED_MAX_ITEMS,
     FETCH_MAX_BYTES,
@@ -32,9 +32,9 @@ from harness.config import (
     WIKIPEDIA_LANG,
     WORKSPACES_DIR,
 )
-from harness.prompt import system_prompt
-from harness.skills import SkillRegistry
-from harness.tools import (
+from harnh3x.prompt import system_prompt
+from harnh3x.skills import SkillRegistry
+from harnh3x.tools import (
     TOOLS,
     execute_tool,
     extract_page,

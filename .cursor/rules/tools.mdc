@@ -1,12 +1,12 @@
 ---
 description: Workspace jail, shell deny list, and tool error strings
-globs: src/harness/tools.py,src/harness/sandbox.py,src/harness/skills/**
+globs: src/harnh3x/tools.py,src/harnh3x/sandbox.py,src/harnh3x/skills/**
 alwaysApply: false
 ---
 
 # Tool sandbox
 
-Register every domain tool in both `TOOLS` and `TOOL_FNS`. `SkillRegistry` slices those schemas by the manifest in `src/harness/skills/`. A manifest name missing from `TOOLS` fails at import. The loop sends `schemas()` for the loaded skills plus `load_skill` and `unload_skill`, not the full `TOOLS` list. `execute_tool` stays the raw sandbox; `SkillRegistry.execute` rejects a domain tool whose skill is not loaded.
+Register every domain tool in both `TOOLS` and `TOOL_FNS`. `SkillRegistry` slices those schemas by the manifest in `src/harnh3x/skills/`. A manifest name missing from `TOOLS` fails at import. The loop sends `schemas()` for the loaded skills plus `load_skill` and `unload_skill`, not the full `TOOLS` list. `execute_tool` stays the raw sandbox; `SkillRegistry.execute` rejects a domain tool whose skill is not loaded.
 
 Resolve every file path with `resolve_in_workspace` (`Path.resolve` plus `is_relative_to`). Reject empty paths and anything outside the workspace.
 

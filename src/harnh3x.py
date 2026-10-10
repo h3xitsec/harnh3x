@@ -2,7 +2,7 @@ import argparse
 import shutil
 import sys
 
-from harness.agent import (
+from harnh3x.agent import (
     Session,
     compact_session,
     list_models,
@@ -11,8 +11,8 @@ from harness.agent import (
     run,
     session_label,
 )
-from harness.config import MODEL
-from harness.tui import (
+from harnh3x.config import MODEL
+from harnh3x.tui import (
     compact_label,
     conversation_turns,
     line_limit,
@@ -260,7 +260,7 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if not args.answer_only:
-        print("🤖 File Agent")
+        print("🤖 Harnh3x")
         print(f"Workspace: {session.workspace}")
         print(f"Model: {session.model}")
 
