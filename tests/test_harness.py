@@ -1416,6 +1416,7 @@ def test_skill_menu_starts_unloaded():
         "file_ops",
         "shell",
         "python",
+        "coding",
         "research",
         "reference",
         "api",
@@ -2597,6 +2598,112 @@ def test_run_python_executes_code_in_the_workspace(tmp_path):
     )
 
 
+def test_write_source_checks_python_syntax(tmp_path):
+    written = execute_tool(
+        "write_source",
+        {"path": "dice.py", "content": "print(1 + 1)\n"},
+        tmp_path,
+    )
+    assert written.startswith("Wrote ")
+    assert "Syntax error" not in written
+    assert (tmp_path / "dice.py").read_text() == "print(1 + 1)\n"
+
+    note = execute_tool(
+        "write_source",
+        {"path": "src/broken.py", "content": "def (\n"},
+        tmp_path,
+    )
+    assert note.startswith("Wrote ")
+    assert "Syntax error: line 1:" in note
+    assert (tmp_path / "src" / "broken.py").read_text() == "def (\n"
+
+    text = execute_tool(
+        "write_source", {"path": "notes.md", "content": "def (\n"}, tmp_path
+    )
+    assert "Syntax error" not in text
+    assert (tmp_path / "notes.md").read_text() == "def (\n"
+
+    assert execute_tool("write_source", {"path": "a.py"}, tmp_path) == (
+        "Error: content is required"
+    )
+    assert "outside workspace" in execute_tool(
+        "write_source", {"path": "../escaped.py", "content": "print(1)\n"}, tmp_path
+    )
+    assert not (tmp_path.parent / "escaped.py").exists()
+
+
+def test_edit_source_replaces_and_reports_syntax(tmp_path):
+    (tmp_path / "dice.py").write_text("print(1)\n")
+
+    edited = execute_tool(
+        "edit_source",
+        {"path": "dice.py", "old_text": "print(1)", "new_text": "print(2)"},
+        tmp_path,
+    )
+    assert edited == "Replaced 1 occurrence(s) in dice.py"
+    assert (tmp_path / "dice.py").read_text() == "print(2)\n"
+
+    broken = execute_tool(
+        "edit_source",
+        {"path": "dice.py", "old_text": "print(2)", "new_text": "def ("},
+        tmp_path,
+    )
+    assert broken.startswith(
+        "Replaced 1 occurrence(s) in dice.py\nSyntax error: line 1:"
+    )
+    assert (tmp_path / "dice.py").read_text() == "def (\n"
+
+    assert "outside workspace" in execute_tool(
+        "edit_source",
+        {"path": "../dice.py", "old_text": "a", "new_text": "b"},
+        tmp_path,
+    )
+
+
+def test_read_source_pages_like_read_file(tmp_path):
+    (tmp_path / "dice.py").write_text("one\ntwo\nthree\n")
+
+    page = execute_tool(
+        "read_source", {"path": "dice.py", "offset": 2, "limit": 1}, tmp_path
+    )
+    assert page.startswith("two\n")
+    assert "call read_source with offset=3" in page
+
+
+def test_run_script_executes_a_workspace_file(tmp_path):
+    (tmp_path / "dice.py").write_text(
+        "import sys\nprint(sum(int(x) for x in sys.argv[1:]))\n"
+        "print(sys.stdin.read(), end='')\n"
+    )
+
+    result = execute_tool(
+        "run_script",
+        {"path": "dice.py", "args": ["3", "4"], "stdin": "ok"},
+        tmp_path,
+    )
+    assert "status: success" in result
+    assert "stdout:\n7\nok" in result
+
+    assert execute_tool("run_script", {"path": "missing.py"}, tmp_path) == (
+        "Error: not found"
+    )
+    (tmp_path / "pkg").mkdir()
+    assert execute_tool("run_script", {"path": "pkg"}, tmp_path) == (
+        "Error: is a directory"
+    )
+    (tmp_path / "notes.md").write_text("hi\n")
+    assert execute_tool("run_script", {"path": "notes.md"}, tmp_path) == (
+        "Error: path must be a .py file"
+    )
+    assert (
+        execute_tool("run_script", {"path": "dice.py", "args": [1]}, tmp_path)
+        == "Error: args must be a list of strings"
+    )
+    assert "outside workspace" in execute_tool(
+        "run_script", {"path": "../dice.py"}, tmp_path
+    )
+
+
 def test_run_python_times_out(tmp_path):
     result = execute_tool(
         "run_python",
@@ -3243,6 +3350,8 @@ def test_system_prompt_includes_date_listing_and_memory_index(tmp_path):
     assert "No saved memories yet." in empty
     assert "Several skills can stay loaded at once" in empty
     assert "search snippets are not answers" in empty
+    assert "load the coding skill and write it to a file" in empty
+    assert "Use the python skill only to compute an answer." in empty
     assert empty.endswith("MENU")
 
     (tmp_path / "notes.md").write_text("n")

@@ -27,6 +27,7 @@ Use the tool interface. Do not write a tool call as JSON in your reply.
 If a tool returns an error, tell the user the error. Do not guess.
 Answer from sources you have read: search snippets are not answers, so read the pages that matter before answering, and cite them.
 When a job takes several steps, load the tasks skill, write a plan, and work through it.
+When the user asks for a program, script, or code change, load the coding skill and write it to a file in the workspace. Use the python skill only to compute an answer.
 Always confirm what you did after completing a task.
 
 {menu}"""

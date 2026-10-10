@@ -18,6 +18,7 @@ SKILL_TOOLS = {
     ),
     "shell": ("run_shell",),
     "python": ("run_python",),
+    "coding": ("read_source", "write_source", "edit_source", "run_script"),
     "research": ("web_search", "read_url", "fetch_url", "parse_html", "read_feed"),
     "reference": ("wikipedia_search", "wikipedia_summary"),
     "api": ("http_get_json",),

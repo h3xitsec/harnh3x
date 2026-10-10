@@ -241,8 +241,10 @@ TOOLS = [
         "function": {
             "name": "run_python",
             "description": (
-                "Run a Python script in the workspace with the standard library and "
-                "return its exit code, stdout, and stderr. Use print() to show results."
+                "Run a short Python snippet in the workspace with the standard library "
+                "and return its exit code, stdout, and stderr. Use it to compute a "
+                "number, date, or transformation. It does not save a file; to deliver "
+                "a program, use the coding skill."
             ),
             "parameters": {
                 "type": "object",
@@ -258,6 +260,111 @@ TOOLS = [
                     },
                 },
                 "required": ["code"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_source",
+            "description": (
+                "Read a source file inside the workspace. Long files are paged: the "
+                "result ends with the next offset to pass to continue reading."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": _path_param("Path to the source file"),
+                    "offset": {
+                        "type": "integer",
+                        "description": "First line to return, 1-based (default 1)",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of lines to return",
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_source",
+            "description": (
+                "Write a source file inside the workspace (creates or overwrites). "
+                "A .py file is checked for syntax; a syntax error is reported and "
+                "the file is still written."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": _path_param("Path to the source file"),
+                    "content": {"type": "string", "description": "Source to write"},
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "edit_source",
+            "description": (
+                "Replace an exact text fragment in a workspace source file. old_text "
+                "must match exactly once unless replace_all is true. A .py file is "
+                "checked for syntax after the edit."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": _path_param("Path to the source file"),
+                    "old_text": {
+                        "type": "string",
+                        "description": "Exact text to find",
+                    },
+                    "new_text": {
+                        "type": "string",
+                        "description": "Replacement text",
+                    },
+                    "replace_all": {
+                        "type": "boolean",
+                        "description": "Replace every match (default false)",
+                    },
+                },
+                "required": ["path", "old_text", "new_text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_script",
+            "description": (
+                "Run a .py file in the workspace with the standard library and return "
+                "its exit code, stdout, and stderr. Optional args are command-line "
+                "arguments, not a shell command."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": _path_param("Path to the .py file"),
+                    "args": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Command-line arguments passed to the script",
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": f"Seconds before the script is killed (default {SHELL_TIMEOUT}, max {SHELL_MAX_TIMEOUT})",
+                    },
+                    "stdin": {
+                        "type": "string",
+                        "description": "Text to feed to the script's standard input",
+                    },
+                },
+                "required": ["path"],
             },
         },
     },
@@ -646,7 +753,7 @@ def _existing_file(workspace: Path, raw) -> Path:
 # --- file tools -----------------------------------------------------------
 
 
-def read_file(workspace: Path, args: dict) -> str:
+def read_file(workspace: Path, args: dict, *, tool_name: str = "read_file") -> str:
     path = resolve_in_workspace(workspace, args.get("path", ""))
     if not path.exists():
         return "Error: not found"
@@ -667,7 +774,7 @@ def read_file(workspace: Path, args: dict) -> str:
     def marker(last: int) -> str:
         return (
             f"\n...[showing lines {offset}-{last} of {total}; "
-            f"call read_file with offset={last + 1} to continue]"
+            f"call {tool_name} with offset={last + 1} to continue]"
         )
 
     if len(body) <= MAX_TOOL_RESULT:
@@ -725,6 +832,39 @@ def edit_file(workspace: Path, args: dict) -> str:
     path.write_text(updated, encoding="utf-8")
     replaced = count if replace_all else 1
     return f"Replaced {replaced} occurrence(s) in {shown}"
+
+
+def _python_syntax_note(path: Path) -> str:
+    if path.suffix != ".py":
+        return ""
+    try:
+        compile(path.read_text(encoding="utf-8"), path.name, "exec")
+    except SyntaxError as exc:
+        detail = exc.msg or "invalid syntax"
+        if exc.lineno:
+            detail = f"line {exc.lineno}: {detail}"
+        return f"\nSyntax error: {detail}"
+    return ""
+
+
+def read_source(workspace: Path, args: dict) -> str:
+    return read_file(workspace, args, tool_name="read_source")
+
+
+def write_source(workspace: Path, args: dict) -> str:
+    result = write_file(workspace, args)
+    if result.startswith("Error:"):
+        return result
+    path = resolve_in_workspace(workspace, args.get("path", ""))
+    return result + _python_syntax_note(path)
+
+
+def edit_source(workspace: Path, args: dict) -> str:
+    result = edit_file(workspace, args)
+    if result.startswith("Error:"):
+        return result
+    path = resolve_in_workspace(workspace, args.get("path", ""))
+    return result + _python_syntax_note(path)
 
 
 def append_file(workspace: Path, args: dict) -> str:
@@ -954,6 +1094,28 @@ def run_python(workspace: Path, args: dict) -> str:
     timeout = _timeout_arg(args.get("timeout"))
     stdin = _stdin_arg(args.get("stdin"))
     argv = [sys.executable, "-I", "-c", code]
+    return _run_process(argv, workspace, timeout, stdin)
+
+
+def run_script(workspace: Path, args: dict) -> str:
+    raw = args.get("path", "")
+    path = resolve_in_workspace(workspace, raw if isinstance(raw, str) else "")
+    if not path.exists():
+        return "Error: not found"
+    if path.is_dir():
+        return "Error: is a directory"
+    if path.suffix != ".py":
+        return "Error: path must be a .py file"
+    script_args = args.get("args")
+    if script_args is None:
+        script_args = []
+    if not isinstance(script_args, list) or any(
+        not isinstance(item, str) for item in script_args
+    ):
+        return "Error: args must be a list of strings"
+    timeout = _timeout_arg(args.get("timeout"))
+    stdin = _stdin_arg(args.get("stdin"))
+    argv = [sys.executable, "-I", str(path), *script_args]
     return _run_process(argv, workspace, timeout, stdin)
 
 
@@ -2106,6 +2268,10 @@ TOOL_FNS = {
     "search_files": search_files,
     "run_shell": run_shell,
     "run_python": run_python,
+    "read_source": read_source,
+    "write_source": write_source,
+    "edit_source": edit_source,
+    "run_script": run_script,
     "web_search": web_search,
     "read_url": read_url,
     "fetch_url": fetch_url,
