@@ -1,6 +1,6 @@
 ---
 description: Workspace jail, shell deny list, and tool error strings
-globs: src/harness/tools.py,src/harness/skills/**
+globs: src/harness/tools.py,src/harness/sandbox.py,src/harness/skills/**
 alwaysApply: false
 ---
 
@@ -17,6 +17,8 @@ Cap model-facing text with `cap_result` (`MAX_TOOL_RESULT`). Every truncation ma
 File tools: `read_file` pages with 1-based `offset` and `limit`, cuts a long result on a line boundary, and ends with the next `offset`. `read_file`, `delete_file`, `edit_file`, and `move_file` refuse directories. `write_file` and `append_file` create parents and report the byte count. `edit_file` requires `old_text` to match exactly once unless `replace_all`. `move_file` never overwrites. `list_files` and `search_files` skip `SKIP_DIRS`, cap output at `LIST_FILES_MAX` / `SEARCH_FILES_MAX`, and skip files that are not UTF-8 text.
 
 `run_shell` stays `shell=False`, allowlisted env, `timeout` default `SHELL_TIMEOUT` capped at `SHELL_MAX_TIMEOUT`, optional `stdin`. Block `SHELL_META` and `DENIED_COMMANDS` (`rm`, `mv`, `chmod`, `sudo`). Reject `..` in argv parts. Check absolute args with `resolve_in_workspace`. `run_python` runs `sys.executable -I -c code` through the same `_run_process` with the same limits; it has the same trust level as `run_shell`.
+
+Both commands go through `sandboxed_argv` in `sandbox.py`. On macOS the child calls `sandbox_init` before exec. The Seatbelt profile allows read and write only in the workspace, read and execute of the OS and Python runtime roots, and nothing else. `HOME` and `TMPDIR` (`workspace/.tmp`, skipped by `SKIP_DIRS`) point at the workspace. Network is denied. If the sandbox cannot be applied, including on any OS other than macOS, the command is not run.
 
 HTTP: `validate_url` allows only `http` and `https`, with no userinfo. Resolve the host and reject any address that is not global, and do the same on every redirect. Disable proxies. All requests go through `_open_request` with a browser-like user agent; bodies are capped at `FETCH_MAX_BYTES`, requests at `FETCH_TIMEOUT`, and media types must be in `FETCH_TYPES` (HTML, plain text, Markdown, CSV, JSON, XML and feeds, PDF). `fetch_url` saves the body in the workspace (default `downloads/<host>-<hash><ext>`, extension from the media type) and returns status, content type, byte count, and path.
 

@@ -14,7 +14,7 @@ Run a short Python script for calculations, dates, and data wrangling.
 
 ## Conventions
 
-- The script runs in the workspace, so relative paths point at workspace files.
+- The script runs in the workspace, so relative paths point at workspace files. The kernel confines the process to that directory: it cannot read or write other paths, and it cannot open network connections.
 - Only the standard library is available. Do not import third-party packages.
 - Print the result. Nothing is returned unless the script prints it.
 - Compute instead of estimating: when a number matters, run the code and report the printed value.

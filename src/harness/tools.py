@@ -40,12 +40,13 @@ from harness.config import (
     TRANSCRIPT_FILE,
     WIKIPEDIA_LANG,
 )
+from harness.sandbox import sandboxed_argv
 
 DENIED_COMMANDS = {"rm", "mv", "chmod", "sudo"}
 # shell=False does not interpret these; refuse them so a model cannot smuggle a chain or redirect.
 SHELL_META = set("><|&;`$")
 # Directories that list_files and search_files never descend into.
-SKIP_DIRS = {".git", "__pycache__", ".venv", "node_modules"}
+SKIP_DIRS = {".git", "__pycache__", ".venv", "node_modules", ".tmp"}
 
 
 def _path_param(description: str) -> dict:
@@ -869,11 +870,6 @@ def search_files(workspace: Path, args: dict) -> str:
 # --- shell and python -----------------------------------------------------
 
 
-def _shell_env() -> dict:
-    keep = ("PATH", "HOME", "USER", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "LOGNAME")
-    return {key: os.environ[key] for key in keep if key in os.environ}
-
-
 def prepare_shell(command: str, workspace: Path) -> list[str]:
     if not isinstance(command, str) or not command.strip():
         raise ValueError("command is required")
@@ -919,11 +915,15 @@ def _run_process(
     argv: list[str], workspace: Path, timeout: int, stdin: str | None
 ) -> str:
     try:
+        wrapped, env = sandboxed_argv(argv, workspace)
+    except ValueError as exc:
+        return f"Error: {exc}"
+    try:
         completed = subprocess.run(
-            argv,
+            wrapped,
             shell=False,
             cwd=workspace,
-            env=_shell_env(),
+            env=env,
             capture_output=True,
             text=True,
             timeout=timeout,

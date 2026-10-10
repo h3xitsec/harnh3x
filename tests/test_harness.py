@@ -15,6 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 import harness.agent as agent
+import harness.sandbox as sandbox
 import harness.skills as skills
 import harness.tools as tools
 from harness.config import (
@@ -65,6 +66,19 @@ def test_path_escape_is_rejected(tmp_path):
 
     assert outside.read_text() == "secret"
     assert not (tmp_path / "pwned.txt").exists()
+
+
+def test_read_file_rejects_symlink_escape(tmp_path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    outside = tmp_path / "secret.txt"
+    outside.write_text("secret")
+    (workspace / "escape.txt").symlink_to(outside)
+
+    result = execute_tool("read_file", {"path": "escape.txt"}, workspace)
+
+    assert "outside workspace" in result
+    assert "secret" not in result
 
 
 def test_denied_shell_command_is_not_executed(tmp_path):
@@ -1970,6 +1984,75 @@ def test_run_python_times_out(tmp_path):
     )
     assert "exit_code: 124" in result
     assert "timed out after 1s" in result
+
+
+def test_sandbox_blocks_reads_writes_symlinks_and_network(tmp_path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    outside = tmp_path / "secret.txt"
+    outside.write_text("secret-outside")
+    (workspace / "inside.txt").write_text("inside-ok\n")
+    (workspace / "escape.txt").symlink_to(outside)
+
+    inside = execute_tool(
+        "run_python",
+        {"code": "print(open('inside.txt').read(), end='')"},
+        workspace,
+    )
+    assert "status: success" in inside
+    assert "stdout:\ninside-ok\n" in inside
+
+    denied_sibling = execute_tool(
+        "run_python",
+        {"code": f"print(open({str(outside)!r}).read())"},
+        workspace,
+    )
+    assert "secret-outside" not in denied_sibling
+    assert "Operation not permitted" in denied_sibling
+
+    denied_passwd = execute_tool(
+        "run_python",
+        {"code": "print(open('/etc/passwd').read())"},
+        workspace,
+    )
+    assert "root:" not in denied_passwd
+    assert "Operation not permitted" in denied_passwd
+
+    sibling_out = tmp_path / "pwned.txt"
+    write_out = execute_tool(
+        "run_python",
+        {"code": f"open({str(sibling_out)!r}, 'w').write('pwned')"},
+        workspace,
+    )
+    assert "Operation not permitted" in write_out
+    assert not sibling_out.exists()
+
+    linked = execute_tool("run_shell", {"command": "cat escape.txt"}, workspace)
+    assert "secret-outside" not in linked
+    assert "Operation not permitted" in linked
+
+    networked = execute_tool(
+        "run_python",
+        {
+            "code": "import socket; socket.create_connection(('1.1.1.1', 443), timeout=3)",
+            "timeout": 5,
+        },
+        workspace,
+    )
+    assert "Operation not permitted" in networked
+
+
+def test_sandbox_refuses_to_run_off_macos(tmp_path, monkeypatch):
+    monkeypatch.setattr(sandbox.sys, "platform", "linux")
+
+    def fail_run(*args, **kwargs):
+        raise AssertionError("command ran without a sandbox")
+
+    monkeypatch.setattr(tools.subprocess, "run", fail_run)
+
+    result = execute_tool("run_shell", {"command": "true"}, tmp_path)
+
+    assert result == "Error: sandbox is unavailable"
 
 
 # --- research additions ---------------------------------------------------
