@@ -17,5 +17,6 @@ PDF_MAX_PAGES = 20
 PREVIEW_ROWS = 10
 MEMORY_FILE = "memory.md"
 PLAN_FILE = "plan.md"
+TRANSCRIPT_FILE = "transcript.json"
 WIKIPEDIA_LANG = "en"
 WORKSPACES_DIR = "workspaces"

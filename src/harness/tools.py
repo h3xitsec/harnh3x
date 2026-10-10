@@ -37,6 +37,7 @@ from harness.config import (
     SEARCH_MAX_RESULTS,
     SHELL_MAX_TIMEOUT,
     SHELL_TIMEOUT,
+    TRANSCRIPT_FILE,
     WIKIPEDIA_LANG,
 )
 
@@ -2079,7 +2080,7 @@ def workspace_listing(workspace: Path, limit: int = 20) -> str:
         return "The workspace could not be listed."
     names = []
     for entry in entries:
-        if entry.name.startswith(".") or entry.name == "session.log":
+        if entry.name.startswith(".") or entry.name in {"session.log", TRANSCRIPT_FILE}:
             continue
         names.append(f"{entry.name}/" if entry.is_dir() else entry.name)
     if not names:

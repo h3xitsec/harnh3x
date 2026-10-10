@@ -2,9 +2,17 @@ import argparse
 import shutil
 import sys
 
-from harness.agent import Session, list_models, run
+from harness.agent import (
+    Session,
+    list_models,
+    list_sessions,
+    parse_command,
+    run,
+    session_label,
+)
 from harness.config import MODEL
 from harness.tui import (
+    conversation_turns,
     line_limit,
     pick_model,
     reply_reasoning,
@@ -108,6 +116,60 @@ def _print_tools(tools: list[tuple[str, object]]) -> None:
         print(f"  🔧 {name}({args})")
 
 
+def _print_turns(session, *, answer_only: bool) -> None:
+    for turn in conversation_turns(session.messages):
+        print(f"\nYou: {turn.user}")
+        if not answer_only:
+            _print_tools(turn.tools)
+        if turn.answer is None:
+            continue
+        reasoning = "" if answer_only else turn.reasoning
+        _present(turn.answer, reasoning, answer_only=answer_only)
+
+
+def _choose_session(sessions: list):
+    print("Past sessions:")
+    for index, info in enumerate(sessions):
+        print(f"  {session_label(info, index)}")
+    while True:
+        choice = input("Select a session (Enter cancels): ").strip()
+        if choice == "":
+            return None
+        if choice.isdigit() and 1 <= int(choice) <= len(sessions):
+            return sessions[int(choice) - 1]
+        print(f"Enter a number from 1 to {len(sessions)}.")
+
+
+def _resume_session(session, *, answer_only: bool) -> None:
+    sessions = list_sessions()
+    if not sessions:
+        print("No past sessions.")
+        return
+    chosen = _choose_session(sessions)
+    if chosen is None:
+        return
+    try:
+        session.resume(chosen.workspace)
+    except ValueError as exc:
+        print(exc)
+        return
+    if not answer_only:
+        print(f"Workspace: {session.workspace}")
+        print(f"Model: {session.model}")
+    _print_turns(session, answer_only=answer_only)
+
+
+def _handle_command(session, name: str, rest: str, *, answer_only: bool) -> None:
+    if name == "resume" and rest == "":
+        _resume_session(session, answer_only=answer_only)
+        return
+    if name == "resume":
+        print("Usage: /resume")
+        return
+    shown = f"/{name}" if name else "/"
+    print(f"Unknown command: {shown}")
+
+
 def _present(answer: str, reasoning: str, *, answer_only: bool) -> None:
     sys.stdout.write(
         format_reply(
@@ -167,7 +229,8 @@ def main(argv: list[str] | None = None) -> None:
 
     if not args.answer_only:
         print(
-            "🤖 File Agent (Shift+Enter for a new line, type 'exit' or press 'ctrl+q' to exit)"
+            "🤖 File Agent (Shift+Enter for a new line, /resume to resume a session, "
+            "type 'exit' or press 'ctrl+q' to exit)"
         )
         print(f"Workspace: {session.workspace}")
         print(f"Model: {session.model}")
@@ -179,6 +242,10 @@ def main(argv: list[str] | None = None) -> None:
             break
         if user_input.lower() == "exit":
             break
+        command = parse_command(user_input)
+        if command is not None:
+            _handle_command(session, *command, answer_only=args.answer_only)
+            continue
         start = len(session.messages)
         response = run(user_input, session, show_tools=show_tools)
         reasoning = (

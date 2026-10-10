@@ -2,6 +2,7 @@ import asyncio
 import importlib.util
 import io
 import json
+import os
 import re
 import sys
 import urllib.parse
@@ -16,11 +17,17 @@ import pytest
 import harness.agent as agent
 import harness.skills as skills
 import harness.tools as tools
-from harness.config import MAX_TOOL_RESULT, MODEL, PDF_MAX_PAGES, SEARCH_FILES_MAX
+from harness.config import (
+    MAX_TOOL_RESULT,
+    MODEL,
+    PDF_MAX_PAGES,
+    SEARCH_FILES_MAX,
+    TRANSCRIPT_FILE,
+)
 from harness.prompt import system_prompt
 from harness.skills import SkillRegistry
 from harness.tools import _tool_result, execute_tool
-from harness.tui import HarnessApp, ModelApp, ReviewApp
+from harness.tui import HarnessApp, ModelApp, ResumeOptions, ResumeScreen, ReviewApp
 
 ARTICLE_HTML = """<!DOCTYPE html>
 <html lang="en">
@@ -610,6 +617,276 @@ def test_session_defaults_to_a_unique_workspace(tmp_path, monkeypatch):
     uuid.UUID(second.workspace.name)
 
 
+def test_session_reset_starts_a_new_conversation(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("WORKSPACE", str(tmp_path / "pinned"))
+    session = agent.Session(workspace=tmp_path / "first", model="custom-model")
+    previous = session.workspace
+    session.messages.append({"role": "user", "content": "remember this"})
+    session.skills.load_skill("file_ops")
+
+    session.reset()
+
+    assert session.workspace != previous
+    assert session.workspace.parent == (tmp_path / "workspaces").resolve()
+    assert session.workspace.is_dir()
+    assert previous.is_dir()
+    assert str(session.workspace) in session.messages[0]["content"]
+    assert session.model == "custom-model"
+    assert [message["role"] for message in session.messages] == ["system"]
+    assert "[loaded:" not in session.messages[0]["content"]
+    assert [tool["function"]["name"] for tool in session.skills.schemas()] == [
+        "load_skill",
+        "unload_skill",
+    ]
+
+
+def _write_transcript(workspace: Path, model: str, messages: list) -> None:
+    workspace.mkdir(parents=True, exist_ok=True)
+    payload = {"model": model, "messages": messages}
+    (workspace / TRANSCRIPT_FILE).write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _past_workspace(root: Path) -> Path:
+    workspace = root / "workspaces" / "abcdef01-0000-0000-0000-000000000001"
+    _write_transcript(
+        workspace,
+        "saved-model",
+        [
+            {"role": "system", "content": "stale"},
+            {"role": "user", "content": "fix the notes"},
+            {
+                "role": "assistant",
+                "content": "",
+                "reasoning": "alpha\nbeta\ngamma\ndelta",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "load_skill",
+                            "arguments": '{"name": "file_ops"}',
+                        },
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "loaded"},
+            {"role": "assistant", "content": "### **Done**\n- notes updated"},
+        ],
+    )
+    return workspace
+
+
+def test_run_saves_the_full_transcript(tmp_path):
+    thinking = "r" * 600
+
+    def create(**kwargs):
+        message = SimpleNamespace(content="ok", reasoning=thinking, tool_calls=None)
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    session = agent.Session(workspace=tmp_path, model="custom-model")
+
+    assert agent.run("think", session, client=client) == "ok"
+
+    saved = json.loads((tmp_path / TRANSCRIPT_FILE).read_text(encoding="utf-8"))
+    assert saved["model"] == "custom-model"
+    assert saved["messages"][-1]["reasoning"] == thinking
+    assert not (tmp_path / f".{TRANSCRIPT_FILE}.tmp").exists()
+    events = [
+        json.loads(line) for line in (tmp_path / "session.log").read_text().splitlines()
+    ]
+    logged = next(
+        event["message"]["reasoning"] for event in events if event["event"] == "model"
+    )
+    assert logged == "r" * 500 + "...[truncated]"
+
+
+def test_transcript_survives_a_failed_turn(tmp_path):
+    def create(**kwargs):
+        raise RuntimeError("offline")
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    session = agent.Session(workspace=tmp_path, model="custom-model")
+
+    with pytest.raises(RuntimeError, match="offline"):
+        agent.run("hello", session, client=client)
+
+    saved = json.loads((tmp_path / TRANSCRIPT_FILE).read_text(encoding="utf-8"))
+    assert saved["messages"][-1] == {"role": "user", "content": "hello"}
+    assert not (tmp_path / f".{TRANSCRIPT_FILE}.tmp").exists()
+
+
+def test_parse_command_reads_a_slash_name():
+    assert agent.parse_command("hello") is None
+    assert agent.parse_command("  /resume  ") == ("resume", "")
+    assert agent.parse_command("/resume extra") == ("resume", "extra")
+    assert agent.parse_command("/") == ("", "")
+
+
+def test_list_sessions_is_newest_first_and_skips_incomplete(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    root = tmp_path / "workspaces"
+    older = root / "11111111-1111-1111-1111-111111111111"
+    newer = root / "22222222-2222-2222-2222-222222222222"
+    system_only = root / "33333333-3333-3333-3333-333333333333"
+    empty = root / "empty"
+    log_only = root / "44444444-4444-4444-4444-444444444444"
+    broken = root / "55555555-5555-5555-5555-555555555555"
+    empty.mkdir(parents=True)
+    log_only.mkdir()
+    (log_only / "session.log").write_text("{}\n", encoding="utf-8")
+    broken.mkdir()
+    (broken / TRANSCRIPT_FILE).write_text("{", encoding="utf-8")
+    _write_transcript(system_only, "m", [{"role": "system", "content": "hi"}])
+    _write_transcript(
+        older,
+        "old-model",
+        [
+            {"role": "system", "content": "s"},
+            {"role": "user", "content": "first\nquestion"},
+        ],
+    )
+    _write_transcript(
+        newer,
+        "new-model",
+        [
+            {"role": "system", "content": "s"},
+            {"role": "user", "content": "later question " + ("x" * 80)},
+        ],
+    )
+    os.utime(older / TRANSCRIPT_FILE, (1000, 1000))
+    os.utime(newer / TRANSCRIPT_FILE, (2000, 2000))
+
+    found = agent.list_sessions()
+
+    assert [item.workspace for item in found] == [newer.resolve(), older.resolve()]
+    assert found[0].model == "new-model"
+    assert found[0].preview.startswith("later question")
+    assert found[0].preview.endswith("...")
+    assert len(found[0].preview) == 60
+    assert found[1].preview == "first question"
+    assert "old-model" in agent.session_label(found[1], 1)
+    assert found[1].workspace.name[:8] in agent.session_label(found[1], 1)
+
+
+def test_resume_restores_messages_model_and_skills(tmp_path, monkeypatch):
+    def fail_execute(self, name, args, workspace):
+        raise AssertionError(name)
+
+    monkeypatch.setattr(SkillRegistry, "execute", fail_execute)
+    past = tmp_path / "past"
+    messages = [
+        {"role": "system", "content": "stale"},
+        {"role": "user", "content": "remember this"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {
+                        "name": "load_skill",
+                        "arguments": '{"name": "file_ops"}',
+                    },
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "loaded file_ops"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "c2",
+                    "type": "function",
+                    "function": {
+                        "name": "load_skill",
+                        "arguments": '{"name": "shell"}',
+                    },
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c2", "content": "loaded shell"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "c3",
+                    "type": "function",
+                    "function": {
+                        "name": "unload_skill",
+                        "arguments": '{"name": "shell"}',
+                    },
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c3", "content": "unloaded shell"},
+        {
+            "role": "assistant",
+            "content": "",
+            "reasoning": "look at the notes",
+            "tool_calls": [
+                {
+                    "id": "c4",
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": '{"path": "notes.md"}',
+                    },
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c4", "content": "notes"},
+        {"role": "assistant", "content": "ready"},
+    ]
+    _write_transcript(past, "saved-model", messages)
+    current = tmp_path / "current"
+    session = agent.Session(workspace=current, model="custom-model")
+
+    session.resume(past)
+
+    assert session.model == "saved-model"
+    assert session.workspace == past.resolve()
+    assert session.messages[1]["content"] == "remember this"
+    assert session.messages[-1]["content"] == "ready"
+    assert "stale" not in session.messages[0]["content"]
+    assert str(session.workspace) in session.messages[0]["content"]
+    assert FILE_OPS_LOADED in session.messages[0]["content"]
+    assert "[loaded: run_shell]" not in session.messages[0]["content"]
+    names = [tool["function"]["name"] for tool in session.skills.schemas()]
+    assert "read_file" in names
+    assert "run_shell" not in names
+    assert [item["content"] for item in session.messages if item["role"] == "tool"] == [
+        "loaded file_ops",
+        "loaded shell",
+        "unloaded shell",
+        "notes",
+    ]
+    assert session.messages[-3]["reasoning"] == "look at the notes"
+
+
+def test_resume_rejects_a_broken_transcript(tmp_path):
+    current = tmp_path / "current"
+    session = agent.Session(workspace=current, model="keep")
+    broken = tmp_path / "broken"
+    broken.mkdir()
+    (broken / TRANSCRIPT_FILE).write_text("{", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Cannot read"):
+        session.resume(broken)
+
+    assert session.model == "keep"
+    assert session.workspace == current.resolve()
+    assert [message["role"] for message in session.messages] == ["system"]
+
+
 def test_session_workspace_argument_and_env_override_the_default(tmp_path, monkeypatch):
     explicit = tmp_path / "explicit"
     monkeypatch.setenv("WORKSPACE", str(tmp_path / "from-env"))
@@ -847,6 +1124,28 @@ def test_answer_only_prints_the_final_answer(monkeypatch, capsys, tmp_path):
 
     assert calls == [("fix the notes", False)]
     assert capsys.readouterr().out == "final answer\n"
+
+
+def test_plain_resume_reprints_the_session(monkeypatch, capsys, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("WORKSPACE", raising=False)
+    cli = _load_cli()
+    monkeypatch.setattr(cli, "_tty", lambda: False)
+    past = _past_workspace(tmp_path)
+    answers = iter(["/nope", "/resume", "1", "exit"])
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
+
+    cli.main([])
+
+    output = capsys.readouterr().out
+    assert "Unknown command: /nope" in output
+    assert "You: fix the notes" in output
+    assert "🔧 load_skill({'name': 'file_ops'})" in output
+    assert "### **Done**" in output
+    assert "alpha" not in output
+    assert "delta" in output
+    assert f"Workspace: {past.resolve()}" in output
+    assert "saved-model" in output
 
 
 def test_thinking_panel_keeps_the_tail_until_expanded():
@@ -1115,6 +1414,207 @@ def test_submit_shows_the_request_and_the_answer():
     assert seen == ["a\nb"]
     assert "You: a\nb" in captured["plain"]
     assert "Agent: final answer" in captured["plain"]
+
+
+def test_ctrl_q_quits_the_app():
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+    app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            assert not app._exit
+            await pilot.press("ctrl+q")
+            assert app._exit
+
+    asyncio.run(drive())
+
+
+def test_ctrl_n_starts_a_new_session(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("WORKSPACE", raising=False)
+    session = agent.Session(workspace=tmp_path / "first", model="custom-model")
+    previous = session.workspace
+    seen = []
+
+    def fake_run(message, active, show_tools=True, on_tool=None):
+        seen.append((message, [item["role"] for item in active.messages]))
+        active.messages.append({"role": "user", "content": message})
+        return "done"
+
+    app = HarnessApp(session, fake_run, show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press(*"hello", "enter")
+            for _ in range(40):
+                if "Agent: done" in app.transcript_plain():
+                    break
+                await pilot.pause(0.05)
+            else:
+                raise AssertionError(app.transcript_plain())
+            app.query_one("#composer").disabled = True
+            await pilot.press("ctrl+n")
+            assert "You: hello" in app.transcript_plain()
+            assert session.messages[-1]["content"] == "hello"
+            assert session.workspace == previous
+            assert f"Workspace: {previous}" in str(app.query_one("#banner").content)
+            app.query_one("#composer").disabled = False
+            app.query_one("#composer").load_text("draft")
+            await pilot.press("ctrl+n")
+            assert app.transcript_plain() == ""
+            assert app.query_one("#composer").text == ""
+            assert session.workspace != previous
+            assert [message["role"] for message in session.messages] == ["system"]
+            banner = str(app.query_one("#banner").content)
+            assert f"Workspace: {session.workspace}" in banner
+            assert f"Workspace: {previous}" not in banner
+            await pilot.press(*"next", "enter")
+            for _ in range(40):
+                if any(message == "next" for message, _roles in seen):
+                    break
+                await pilot.pause(0.05)
+            else:
+                raise AssertionError(seen)
+
+    asyncio.run(drive())
+    assert session.workspace.parent == (tmp_path / "workspaces").resolve()
+    assert session.model == "custom-model"
+    assert seen[0] == ("hello", ["system"])
+    assert seen[-1] == ("next", ["system"])
+    assert [message["role"] for message in session.messages] == ["system", "user"]
+    assert session.messages[-1]["content"] == "next"
+
+
+def _wait_for(pilot, predicate):
+    async def wait():
+        for _ in range(40):
+            if predicate():
+                return
+            await pilot.pause(0.05)
+        raise AssertionError("timed out")
+
+    return wait()
+
+
+def test_resume_restores_the_transcript(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("WORKSPACE", raising=False)
+    past = _past_workspace(tmp_path)
+    session = agent.Session(workspace=tmp_path / "current", model="custom-model")
+    seen = []
+
+    def fake_run(message, active, show_tools=True, on_tool=None):
+        seen.append(
+            (
+                message,
+                [
+                    item["content"]
+                    for item in active.messages
+                    if item.get("role") == "user"
+                ],
+            )
+        )
+        return "continued"
+
+    app = HarnessApp(session, fake_run, show_tools=True)
+    captured = {}
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press(*"/resume", "enter")
+            assert isinstance(app.screen, ResumeScreen)
+            prompt = str(
+                app.screen.query_one(ResumeOptions).get_option_at_index(0).prompt
+            )
+            assert "fix the notes" in prompt
+            assert "saved-model" in prompt
+            await pilot.press("enter")
+            await _wait_for(
+                pilot,
+                lambda: "### **Done**" in app.transcript_plain()
+                and "fix the notes" in app.transcript_plain(),
+            )
+            thinking = app.query_one("Thinking")
+            assert "alpha" not in thinking.plain
+            assert "delta" in thinking.plain
+            assert app.query_one("MarkdownH3")
+            banner = str(app.query_one("#banner").content)
+            assert f"Workspace: {past.resolve()}" in banner
+            assert "Model: saved-model" in banner
+            captured["plain"] = app.transcript_plain()
+            await pilot.press(*"next", "enter")
+            await _wait_for(pilot, lambda: bool(seen))
+
+    asyncio.run(drive())
+    assert "🔧 load_skill({'name': 'file_ops'})" in captured["plain"]
+    assert seen == [("next", ["fix the notes"])]
+
+
+def test_escape_leaves_the_current_transcript(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("WORKSPACE", raising=False)
+    _past_workspace(tmp_path)
+    current = tmp_path / "current"
+    session = agent.Session(workspace=current, model="custom-model")
+    app = HarnessApp(session, lambda *args, **kwargs: "done", show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press(*"hello", "enter")
+            await _wait_for(pilot, lambda: "Agent: done" in app.transcript_plain())
+            await pilot.press(*"/resume", "enter")
+            assert isinstance(app.screen, ResumeScreen)
+            await pilot.press("escape")
+            await pilot.pause()
+            assert not isinstance(app.screen, ResumeScreen)
+            assert "You: hello" in app.transcript_plain()
+            assert "fix the notes" not in app.transcript_plain()
+
+    asyncio.run(drive())
+    assert session.workspace == current.resolve()
+
+
+def test_unknown_slash_command_is_not_sent():
+    seen = []
+
+    def fake_run(message, active, show_tools=True, on_tool=None):
+        seen.append(message)
+        return "nope"
+
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+    app = HarnessApp(session, fake_run, show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press(*"/nope", "enter")
+            await pilot.pause()
+            assert "Unknown command: /nope" in app.transcript_plain()
+            await pilot.press(*"/resume extra", "enter")
+            await pilot.pause()
+            assert "Usage: /resume" in app.transcript_plain()
+            assert not isinstance(app.screen, ResumeScreen)
+
+    asyncio.run(drive())
+    assert seen == []
+
+
+def test_resume_says_when_there_are_no_sessions(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("WORKSPACE", raising=False)
+    session = agent.Session(workspace=tmp_path / "current")
+    app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press(*"/resume", "enter")
+            assert isinstance(app.screen, ResumeScreen)
+            texts = [str(widget.content) for widget in app.screen.query("Static")]
+            assert "No past sessions." in texts
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app.transcript_plain() == ""
+
+    asyncio.run(drive())
 
 
 def test_ctrl_t_reveals_the_head_of_the_thinking_text():
@@ -2044,12 +2544,15 @@ def test_system_prompt_includes_date_listing_and_memory_index(tmp_path):
     (tmp_path / "notes.md").write_text("n")
     (tmp_path / "downloads").mkdir()
     (tmp_path / "session.log").write_text("{}")
+    (tmp_path / TRANSCRIPT_FILE).write_text("{}")
     (tmp_path / ".hidden").write_text("h")
     execute_tool("remember", {"key": "user name", "text": "Alex"}, tmp_path)
 
     filled = system_prompt(tmp_path, "MENU", now=now)
     assert "Workspace files: downloads/, memory.md, notes.md" in filled
-    assert "session.log" not in filled.split("Workspace files:")[1].split("\n")[0]
+    listing = filled.split("Workspace files:")[1].split("\n")[0]
+    assert "session.log" not in listing
+    assert "transcript.json" not in listing
     assert ".hidden" not in filled
     assert "Saved memories: user name." in filled
 

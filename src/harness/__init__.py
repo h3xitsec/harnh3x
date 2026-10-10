@@ -1,4 +1,13 @@
-from harness.agent import Session, assistant_message, list_models, run
+from harness.agent import (
+    Session,
+    SessionInfo,
+    assistant_message,
+    list_models,
+    list_sessions,
+    parse_command,
+    run,
+    session_label,
+)
 from harness.config import (
     FEED_MAX_ITEMS,
     FETCH_MAX_BYTES,
@@ -16,6 +25,7 @@ from harness.config import (
     SEARCH_MAX_RESULTS,
     SHELL_MAX_TIMEOUT,
     SHELL_TIMEOUT,
+    TRANSCRIPT_FILE,
     WIKIPEDIA_LANG,
     WORKSPACES_DIR,
 )
@@ -48,9 +58,11 @@ __all__ = [
     "SEARCH_MAX_RESULTS",
     "SHELL_MAX_TIMEOUT",
     "SHELL_TIMEOUT",
+    "TRANSCRIPT_FILE",
     "WIKIPEDIA_LANG",
     "WORKSPACES_DIR",
     "Session",
+    "SessionInfo",
     "SkillRegistry",
     "TOOLS",
     "assistant_message",
@@ -58,8 +70,11 @@ __all__ = [
     "extract_page",
     "get_json",
     "list_models",
+    "list_sessions",
     "memory_keys",
+    "parse_command",
     "run",
+    "session_label",
     "strip_html",
     "system_prompt",
     "workspace_listing",

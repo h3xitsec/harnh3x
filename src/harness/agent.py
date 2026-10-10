@@ -2,12 +2,14 @@ import json
 import os
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from harness.config import MAX_TURNS, MODEL, WORKSPACES_DIR
+from harness.config import MAX_TURNS, MODEL, TRANSCRIPT_FILE, WORKSPACES_DIR
 from harness.prompt import system_prompt
 from harness.skills import SkillRegistry
 from harness.tools import _tool_result
@@ -53,10 +55,179 @@ class Session:
             }
         ]
 
+    def reset(self) -> None:
+        self.workspace = _session_workspace(Path(WORKSPACES_DIR) / str(uuid.uuid4()))
+        self.skills = SkillRegistry()
+        self.messages = [
+            {
+                "role": "system",
+                "content": system_prompt(self.workspace, self.skills.get_menu()),
+            }
+        ]
+
     def sync_prompt(self) -> None:
         self.messages[0]["content"] = system_prompt(
             self.workspace, self.skills.get_menu()
         )
+
+    def resume(self, workspace: Path) -> None:
+        path = Path(workspace).resolve()
+        data = _read_transcript(path / TRANSCRIPT_FILE)
+        self.workspace = path
+        self.model = data["model"]
+        self.messages = data["messages"]
+        self.skills = SkillRegistry()
+        _replay_skills(self)
+        self.sync_prompt()
+
+
+_PREVIEW_LIMIT = 60
+
+
+@dataclass(frozen=True)
+class SessionInfo:
+    workspace: Path
+    model: str
+    updated: float
+    preview: str
+
+
+def parse_command(text: str) -> tuple[str, str] | None:
+    stripped = text.strip()
+    if not stripped.startswith("/"):
+        return None
+    body = stripped[1:].strip()
+    if not body:
+        return ("", "")
+    name, _, rest = body.partition(" ")
+    return name.lower(), rest.strip()
+
+
+def session_label(info: SessionInfo, index: int) -> str:
+    moment = datetime.fromtimestamp(info.updated)
+    when = moment.strftime("%b %d %H:%M")
+    short = info.workspace.name[:8]
+    preview = info.preview if info.preview else "(empty)"
+    return f"{index + 1}. {short}  {when}  {info.model}  {preview}"
+
+
+def list_sessions(root: Path | None = None) -> list[SessionInfo]:
+    base = Path(root) if root is not None else Path(WORKSPACES_DIR)
+    if not base.is_dir():
+        return []
+    found: list[SessionInfo] = []
+    for child in base.iterdir():
+        if not child.is_dir():
+            continue
+        info = _session_info(child)
+        if info is not None:
+            found.append(info)
+    found.sort(key=lambda item: item.updated, reverse=True)
+    return found
+
+
+def _preview(text: str) -> str:
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= _PREVIEW_LIMIT:
+        return collapsed
+    return collapsed[: _PREVIEW_LIMIT - 3] + "..."
+
+
+def _first_preview(messages: list) -> str | None:
+    for message in messages:
+        if isinstance(message, dict) and message.get("role") == "user":
+            content = message.get("content")
+            text = content if isinstance(content, str) else ""
+            return _preview(text)
+    return None
+
+
+def _read_transcript(path: Path) -> dict:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError(f"Cannot read {path}: {exc}") from exc
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Cannot read {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"Cannot read {path}: expected an object")
+    model = data.get("model")
+    messages = data.get("messages")
+    if not isinstance(model, str) or not model:
+        raise ValueError(f"Cannot read {path}: missing model")
+    if not isinstance(messages, list) or not messages:
+        raise ValueError(f"Cannot read {path}: missing messages")
+    first = messages[0]
+    if not isinstance(first, dict) or first.get("role") != "system":
+        raise ValueError(f"Cannot read {path}: missing system message")
+    for message in messages:
+        if not isinstance(message, dict) or "role" not in message:
+            raise ValueError(f"Cannot read {path}: invalid message")
+    return data
+
+
+def _session_info(workspace: Path) -> SessionInfo | None:
+    path = workspace / TRANSCRIPT_FILE
+    if not path.is_file():
+        return None
+    try:
+        data = _read_transcript(path)
+    except ValueError:
+        return None
+    preview = _first_preview(data["messages"])
+    if preview is None:
+        return None
+    return SessionInfo(
+        workspace=workspace.resolve(),
+        model=data["model"],
+        updated=path.stat().st_mtime,
+        preview=preview,
+    )
+
+
+def _skill_name(arguments: object) -> str | None:
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(arguments, dict):
+        return None
+    name = arguments.get("name", "")
+    return name if isinstance(name, str) else None
+
+
+def _replay_skills(session: Session) -> None:
+    for message in session.messages:
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        for call in message.get("tool_calls") or []:
+            if not isinstance(call, dict):
+                continue
+            function = call.get("function")
+            if not isinstance(function, dict):
+                continue
+            name = function.get("name")
+            skill = _skill_name(function.get("arguments"))
+            if skill is None:
+                continue
+            if name == "load_skill":
+                session.skills.load_skill(skill)
+            elif name == "unload_skill":
+                session.skills.unload_skill(skill)
+
+
+def _save_transcript(session: Session) -> None:
+    path = session.workspace / TRANSCRIPT_FILE
+    payload = {"model": session.model, "messages": session.messages}
+    temporary = path.with_name(f".{TRANSCRIPT_FILE}.tmp")
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
 
 
 def write_log(event: dict, workspace: Path) -> None:
@@ -119,6 +290,18 @@ def run(
     on_tool: Callable[[str, object], None] | None = None,
 ) -> str:
     session.messages.append({"role": "user", "content": user_message})
+    try:
+        return _complete(session, client, show_tools, on_tool)
+    finally:
+        _save_transcript(session)
+
+
+def _complete(
+    session: Session,
+    client: OpenAI | None,
+    show_tools: bool,
+    on_tool: Callable[[str, object], None] | None,
+) -> str:
     api = client or get_client()
 
     for turn in range(MAX_TURNS):
