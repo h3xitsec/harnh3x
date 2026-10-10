@@ -14,10 +14,10 @@ from types import SimpleNamespace
 
 import pytest
 
-import harness.agent as agent
-import harness.sandbox as sandbox
-import harness.skills as skills
-import harness.tools as tools
+import harnh3x.agent as agent
+import harnh3x.sandbox as sandbox
+import harnh3x.skills as skills
+import harnh3x.tools as tools
 from harnh3x.config import (
     COMPACT_AT,
     MAX_TOOL_RESULT,
@@ -1576,8 +1576,8 @@ def test_on_tool_receives_the_call_instead_of_printing(tmp_path, capsys):
 
 
 def _load_cli():
-    path = Path(__file__).resolve().parents[1] / "src" / "harness.py"
-    spec = importlib.util.spec_from_file_location("harness_cli", path)
+    path = Path(__file__).resolve().parents[1] / "src" / "harnh3x.py"
+    spec = importlib.util.spec_from_file_location("harnh3x_cli", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -1967,7 +1967,7 @@ def test_compact_command_shows_the_note(monkeypatch):
         )
         return "Context compacted."
 
-    monkeypatch.setattr("harness.tui.compact_session", fake_compact)
+    monkeypatch.setattr("harnh3x.tui.compact_session", fake_compact)
     session = SimpleNamespace(
         workspace="ws",
         model="m",
@@ -3341,7 +3341,7 @@ def test_remember_and_recall_round_trip_through_memory_md(tmp_path):
     )
     assert first == "Remembered 'user timezone'. 1 memories stored in memory.md."
     execute_tool(
-        "remember", {"key": "project", "text": "# harness\nagent loop"}, tmp_path
+        "remember", {"key": "project", "text": "# harnh3x\nagent loop"}, tmp_path
     )
     updated = execute_tool(
         "remember", {"key": "user timezone", "text": "America/Toronto"}, tmp_path
@@ -3350,7 +3350,7 @@ def test_remember_and_recall_round_trip_through_memory_md(tmp_path):
 
     stored = (tmp_path / "memory.md").read_text()
     assert stored.startswith(
-        "# Memory\n\n## user timezone\nAmerica/Toronto\n\n## project\nharness\nagent loop\n"
+        "# Memory\n\n## user timezone\nAmerica/Toronto\n\n## project\nharnh3x\nagent loop\n"
     )
     assert tools.memory_keys(tmp_path) == ["user timezone", "project"]
 

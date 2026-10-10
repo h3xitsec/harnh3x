@@ -6,7 +6,7 @@ alwaysApply: false
 
 # Harness tests
 
-Use pytest. Workspaces are `tmp_path`. Patch limits with `monkeypatch` on `harness.agent`.
+Use pytest. Workspaces are `tmp_path`. Patch limits with `monkeypatch` on `harnh3x.agent`.
 
 Do not call the real API. Pass a `SimpleNamespace` client into `run`.
 

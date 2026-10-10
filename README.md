@@ -1,6 +1,6 @@
 # Harnh3x
 
-A file agent: an OpenAI-compatible chat loop with tools confined to one workspace. Each session gets its own directory under `workspaces/`, a `transcript.json` you can resume, and a JSONL `session.log`.
+A AI harness: an OpenAI-compatible chat loop with tools confined to one workspace. Each session gets its own directory under `workspaces/`, a `transcript.json` you can resume, and a JSONL `session.log`.
 
 On a terminal it runs a Textual interface. Piped input and `--answer-only` stay plain stdout.
 
@@ -116,4 +116,4 @@ poetry run pytest
 poetry run black src tests
 ```
 
-Limits (turns, compaction threshold, fetch and shell caps, the default model) live in `src/harnh3x/config.py`. A new tool, or a looser path or shell check, needs a matching test in `tests/test_harness.py`.
+Limits (turns, compaction threshold, fetch and shell caps, the default model) live in `src/harnh3x/config.py`. A new tool, or a looser path or shell check, needs a matching test in `tests/test_harnh3x.py`.

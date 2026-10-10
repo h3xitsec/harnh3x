@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "h3x-harness"
+name = "harnh3x"
 version = "0.1.0"
 description = "Experimentation on building a custom AI harness"
 authors = ["h3xit <connect@h3x.it>"]
