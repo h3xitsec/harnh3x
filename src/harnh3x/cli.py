@@ -11,7 +11,7 @@ from harnh3x.agent import (
     run,
     session_label,
 )
-from harnh3x.config import MODEL
+from harnh3x.config import MODEL, require_api_settings
 from harnh3x.tui import (
     YOLO_PLAIN,
     compact_label,
@@ -233,6 +233,7 @@ def _present(answer: str, reasoning: str, *, answer_only: bool) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
+    require_api_settings()
     session = Session(model=resolve_model(args.model), yolo=args.yolo)
     show_tools = not args.answer_only
     use_tui = _tty() and not args.answer_only

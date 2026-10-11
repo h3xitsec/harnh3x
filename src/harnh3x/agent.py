@@ -9,9 +9,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from dotenv import load_dotenv
 from openai import OpenAI
 
+import harnh3x.config as config
 from harnh3x.config import (
     COMPACT_AT,
     MAX_TURNS,
@@ -23,15 +23,18 @@ from harnh3x.prompt import system_prompt
 from harnh3x.skills import SkillRegistry
 from harnh3x.tools import _tool_result
 
-load_dotenv()
-
 _client = None
 
 
 def get_client() -> OpenAI:
     global _client
     if _client is None:
-        _client = OpenAI()
+        kwargs = {}
+        if config.API_KEY:
+            kwargs["api_key"] = config.API_KEY
+        if config.API_URL:
+            kwargs["base_url"] = config.API_URL
+        _client = OpenAI(**kwargs)
     return _client
 
 
@@ -122,13 +125,21 @@ def _remember_context(session, response, client) -> None:
             session.context_limit = limit
 
 
-def _session_workspace(workspace: Path | None) -> Path:
+def _expand(value: str | Path) -> Path:
+    return Path(value).expanduser()
+
+
+def _workspaces_dir() -> Path:
+    return _expand(WORKSPACES_DIR).resolve()
+
+
+def _session_workspace(workspace: Path | str | None) -> Path:
     if workspace is not None:
-        raw = workspace
+        raw = _expand(workspace)
     else:
         env = os.environ.get("WORKSPACE")
-        raw = env if env else Path(WORKSPACES_DIR) / str(uuid.uuid4())
-    path = Path(raw).resolve()
+        raw = _expand(env) if env else _workspaces_dir() / str(uuid.uuid4())
+    path = raw.resolve()
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -158,7 +169,7 @@ class Session:
         ]
 
     def reset(self) -> None:
-        self.workspace = _session_workspace(Path(WORKSPACES_DIR) / str(uuid.uuid4()))
+        self.workspace = _session_workspace(_workspaces_dir() / str(uuid.uuid4()))
         self.skills = SkillRegistry(yolo=self.yolo)
         self.context_tokens = None
         self.messages = [
@@ -176,7 +187,7 @@ class Session:
         )
 
     def resume(self, workspace: Path) -> None:
-        path = Path(workspace).resolve()
+        path = _expand(workspace).resolve()
         data = _read_transcript(path / TRANSCRIPT_FILE)
         self.workspace = path
         self.model = data["model"]
@@ -219,8 +230,8 @@ def session_label(info: SessionInfo, index: int) -> str:
     return f"{index + 1}. {short}  {when}  {info.model}  {preview}"
 
 
-def list_sessions(root: Path | None = None) -> list[SessionInfo]:
-    base = Path(root) if root is not None else Path(WORKSPACES_DIR)
+def list_sessions(root: Path | str | None = None) -> list[SessionInfo]:
+    base = _expand(root).resolve() if root is not None else _workspaces_dir()
     if not base.is_dir():
         return []
     found: list[SessionInfo] = []

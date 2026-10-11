@@ -1,0 +1,24 @@
+# Copy to ~/.config/harnh3x/harnh3x.conf
+# A non-empty environment variable overrides the matching line.
+# Blank lines and full-line # comments are ignored. Values may be quoted.
+
+api_key = sk-...
+api_url = http://127.0.0.1:11434/v1
+model = qwen3.5-128k
+
+# max_turns = 45
+# compact_at = 0.5
+# max_tool_result = 8000
+# fetch_timeout = 15
+# fetch_max_bytes = 2000000
+# fetch_max_redirects = 5
+# search_max_results = 8
+# feed_max_items = 20
+# shell_timeout = 30
+# shell_max_timeout = 120
+# list_files_max = 200
+# search_files_max = 100
+# pdf_max_pages = 20
+# preview_rows = 10
+# wikipedia_lang = en
+# workspaces_dir = ~/.local/harnh3x/workspaces

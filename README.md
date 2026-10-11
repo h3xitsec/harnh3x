@@ -1,6 +1,6 @@
 # Harnh3x
 
-A AI harness: an OpenAI-compatible chat loop with tools confined to one workspace. Each session gets its own directory under `workspaces/`, a `transcript.json` you can resume, and a JSONL `session.log`.
+A AI harness: an OpenAI-compatible chat loop with tools confined to one workspace. Each session gets its own directory under `~/.local/harnh3x/workspaces/`, a `transcript.json` you can resume, and a JSONL `session.log`.
 
 On a terminal it runs a Textual interface. Piped input and `--answer-only` stay plain stdout.
 
@@ -17,14 +17,29 @@ On a terminal it runs a Textual interface. Piped input and `--answer-only` stay 
 poetry install
 ```
 
-The client reads the usual OpenAI environment variables. `python-dotenv` loads a `.env` from the working directory when the process starts. Do not commit that file.
+The client reads `~/.config/harnh3x/harnh3x.conf`, or `$XDG_CONFIG_HOME/harnh3x/harnh3x.conf` when that variable is set. A missing file changes nothing, and the process does not create it. [`harnh3x.conf.example`](harnh3x.conf.example) lists every setting.
+
+```
+api_key = sk-...
+api_url = http://127.0.0.1:11434/v1
+model = qwen3.5-128k
+```
+
+Blank lines and `#` comments are ignored. The same values can be set with environment variables, which override the file when they are non-empty:
 
 ```bash
 OPENAI_API_KEY=...
-OPENAI_BASE_URL=http://127.0.0.1:11434/v1   # optional; omit for api.openai.com
+OPENAI_BASE_URL=http://127.0.0.1:11434/v1
+HARNH3X_MODEL=qwen3.5-128k
 ```
 
-The default model is `qwen3.5-128k` in `src/harnh3x/config.py`. Point `OPENAI_BASE_URL` at whatever server hosts it, or pass `--model`.
+`python-dotenv` loads a `.env` from the working directory when the process starts, without overriding variables that are already set. Do not commit that file. `--model` overrides the model.
+
+Startup exits with a short error when `api_key` or `api_url` is missing from both the config file and the environment.
+
+Other tunables use the same file: `max_turns`, `compact_at`, `max_tool_result`, `fetch_timeout`, `fetch_max_bytes`, `fetch_max_redirects`, `search_max_results`, `feed_max_items`, `shell_timeout`, `shell_max_timeout`, `list_files_max`, `search_files_max`, `pdf_max_pages`, `preview_rows`, `wikipedia_lang`, and `workspaces_dir`. Each one also accepts `HARNH3X_` plus that name in uppercase, such as `HARNH3X_MAX_TURNS`. `HARNH3X_CONFIG` points at a different file; an empty value skips the file.
+
+The built-in model is `qwen3.5-128k` when nothing else sets it. Point `api_url` or `OPENAI_BASE_URL` at whatever server hosts it.
 
 ## Usage
 

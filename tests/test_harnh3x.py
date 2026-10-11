@@ -4,6 +4,7 @@ import io
 import json
 import os
 import re
+import subprocess
 import sys
 import urllib.parse
 import uuid
@@ -15,6 +16,7 @@ from types import SimpleNamespace
 import pytest
 
 import harnh3x.agent as agent
+import harnh3x.config as config
 import harnh3x.sandbox as sandbox
 import harnh3x.skills as skills
 import harnh3x.tools as tools
@@ -1399,6 +1401,53 @@ def test_session_workspace_argument_and_env_override_the_default(tmp_path, monke
     assert session.workspace == from_env.resolve()
     assert from_env.is_dir()
     assert not (tmp_path / "workspaces").exists()
+
+
+def test_workspaces_dir_accepts_an_absolute_path(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("WORKSPACE", raising=False)
+    root = tmp_path / "elsewhere" / "workspaces"
+    monkeypatch.setattr(agent, "WORKSPACES_DIR", str(root))
+
+    session = agent.Session()
+
+    assert session.workspace.parent == root.resolve()
+    assert session.workspace.is_absolute()
+    assert agent.list_sessions() == []
+
+
+def test_workspace_accepts_a_home_path(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("WORKSPACE", raising=False)
+    monkeypatch.setattr(agent, "WORKSPACES_DIR", "~/.local/harnh3x/workspaces")
+
+    session = agent.Session()
+    chosen = agent.Session(workspace=Path("~/jobs/two"))
+    monkeypatch.setenv("WORKSPACE", "~/jobs/one")
+    from_env = agent.Session()
+    past = home / ".local" / "harnh3x" / "workspaces" / session.workspace.name
+    _write_transcript(
+        past,
+        "saved-model",
+        [
+            {"role": "system", "content": "s"},
+            {"role": "user", "content": "hi"},
+        ],
+    )
+
+    assert session.workspace == past.resolve()
+    assert chosen.workspace == (home / "jobs" / "two").resolve()
+    assert from_env.workspace == (home / "jobs" / "one").resolve()
+    assert [
+        item.workspace
+        for item in agent.list_sessions(Path("~/.local/harnh3x/workspaces"))
+    ] == [past.resolve()]
+
+
+def test_default_workspaces_dir_is_under_the_home_local_directory():
+    assert config._SETTINGS["workspaces_dir"].default == "~/.local/harnh3x/workspaces"
 
 
 FILE_OPS_LOADED = (
@@ -3615,6 +3664,181 @@ def test_session_prompt_refreshes_after_skill_load(tmp_path):
     assert (
         "[loaded: write_plan, update_plan, show_plan]" in session.messages[0]["content"]
     )
+
+
+def test_config_file_skips_comments_and_reads_quotes():
+    text = """
+# comment
+
+api_key = "sk-quoted"
+api_url = 'http://127.0.0.1:11434/v1'
+model = from-file
+max_turns = 12
+"""
+    path = Path("harnh3x.conf")
+    values = config.parse_config(text, path)
+    resolved = config.resolve_settings(values, {}, path)
+
+    assert values["api_key"] == ("sk-quoted", 4)
+    assert resolved["API_KEY"] == "sk-quoted"
+    assert resolved["API_URL"] == "http://127.0.0.1:11434/v1"
+    assert resolved["MODEL"] == "from-file"
+    assert resolved["MAX_TURNS"] == 12
+    assert resolved["COMPACT_AT"] == 0.5
+
+
+def test_config_file_rejects_unknown_keys_and_bad_numbers():
+    path = Path("demo.conf")
+    with pytest.raises(SystemExit, match=r"demo.conf:2: unknown setting nope"):
+        config.parse_config("#\nnope = 1\n", path)
+    with pytest.raises(SystemExit, match=r"demo.conf:1: must be an integer"):
+        config.resolve_settings(
+            config.parse_config("max_turns = lots\n", path), {}, path
+        )
+    with pytest.raises(SystemExit, match=r"demo.conf:1: must be a number"):
+        config.resolve_settings(
+            config.parse_config("compact_at = no\n", path), {}, path
+        )
+
+
+def test_environment_overrides_the_config_file():
+    path = Path("harnh3x.conf")
+    values = config.parse_config(
+        "api_key = file-key\nmodel = file-model\napi_url = http://file/v1\nmax_turns = 3\n",
+        path,
+    )
+    resolved = config.resolve_settings(
+        values,
+        {"OPENAI_API_KEY": "env-key", "HARNH3X_MODEL": "env-model"},
+        path,
+    )
+
+    assert resolved["API_KEY"] == "env-key"
+    assert resolved["MODEL"] == "env-model"
+    assert resolved["API_URL"] == "http://file/v1"
+    assert resolved["MAX_TURNS"] == 3
+
+
+def test_config_file_fills_settings_the_environment_omits(tmp_path):
+    conf = tmp_path / "harnh3x.conf"
+    conf.write_text("api_url = http://file/v1\nmax_turns = 9\n")
+    resolved = config.load_settings(
+        {"HARNH3X_CONFIG": str(conf), "OPENAI_API_KEY": "   "}
+    )
+
+    assert resolved["API_URL"] == "http://file/v1"
+    assert resolved["MAX_TURNS"] == 9
+    assert resolved["API_KEY"] is None
+    assert resolved["MODEL"] == "qwen3.5-128k"
+
+
+def test_missing_default_config_keeps_defaults(tmp_path):
+    resolved = config.load_settings({"XDG_CONFIG_HOME": str(tmp_path)})
+
+    assert resolved["MODEL"] == "qwen3.5-128k"
+    assert resolved["API_KEY"] is None
+    assert resolved["MAX_TURNS"] == 45
+
+
+def test_startup_requires_api_key_and_url(monkeypatch):
+    cli = _load_cli()
+    monkeypatch.setattr(config, "API_KEY", None)
+    monkeypatch.setattr(config, "API_URL", None)
+
+    def refuse_session(**kwargs):
+        raise AssertionError("session started")
+
+    monkeypatch.setattr(cli, "Session", refuse_session)
+
+    with pytest.raises(SystemExit, match="Missing api_key") as missing:
+        cli.main(["--yolo"])
+
+    message = str(missing.value)
+    assert "api_url (OPENAI_BASE_URL)" in message
+    assert "the environment" in message
+
+
+def test_startup_names_only_the_missing_setting(monkeypatch, tmp_path):
+    conf = tmp_path / "harnh3x.conf"
+    monkeypatch.setenv("HARNH3X_CONFIG", str(conf))
+    monkeypatch.setattr(config, "API_KEY", None)
+    monkeypatch.setattr(config, "API_URL", "http://127.0.0.1:11434/v1")
+
+    with pytest.raises(SystemExit, match="Missing api_key") as missing:
+        config.require_api_settings()
+
+    message = str(missing.value)
+    assert "OPENAI_API_KEY" in message
+    assert str(conf) in message
+    assert "api_url" not in message
+
+
+def test_explicit_config_path_must_exist(tmp_path):
+    missing = tmp_path / "missing.conf"
+    with pytest.raises(SystemExit, match="config file not found"):
+        config.load_settings({"HARNH3X_CONFIG": str(missing)})
+
+
+def test_import_applies_the_config_file(tmp_path):
+    conf = tmp_path / "harnh3x.conf"
+    conf.write_text("model = from-file\napi_key = file-key\n")
+    env = os.environ.copy()
+    env["HARNH3X_CONFIG"] = str(conf)
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+    env.pop("HARNH3X_MODEL", None)
+    env.pop("OPENAI_API_KEY", None)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import harnh3x.config as c; print(c.MODEL); print(c.API_KEY)",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["from-file", "file-key"]
+
+
+def test_get_client_passes_resolved_credentials(monkeypatch):
+    monkeypatch.setattr(config, "API_KEY", "file-key")
+    monkeypatch.setattr(config, "API_URL", "http://127.0.0.1:11434/v1")
+    monkeypatch.setattr(agent, "_client", None)
+    seen = {}
+
+    def fake_openai(**kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(agent, "OpenAI", fake_openai)
+
+    client = agent.get_client()
+
+    assert seen == {
+        "api_key": "file-key",
+        "base_url": "http://127.0.0.1:11434/v1",
+    }
+    assert agent.get_client() is client
+
+
+def test_get_client_omits_unset_credentials(monkeypatch):
+    monkeypatch.setattr(config, "API_KEY", None)
+    monkeypatch.setattr(config, "API_URL", None)
+    monkeypatch.setattr(agent, "_client", None)
+    seen = {}
+
+    def fake_openai(**kwargs):
+        seen["kwargs"] = kwargs
+        return SimpleNamespace()
+
+    monkeypatch.setattr(agent, "OpenAI", fake_openai)
+
+    agent.get_client()
+
+    assert seen["kwargs"] == {}
 
 
 def test_every_tool_belongs_to_exactly_one_skill():

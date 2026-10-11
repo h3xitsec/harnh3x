@@ -11,6 +11,8 @@ from harnh3x.agent import (
     session_label,
 )
 from harnh3x.config import (
+    API_KEY,
+    API_URL,
     COMPACT_AT,
     FEED_MAX_ITEMS,
     FETCH_MAX_BYTES,
@@ -45,6 +47,8 @@ from harnh3x.tools import (
 )
 
 __all__ = [
+    "API_KEY",
+    "API_URL",
     "COMPACT_AT",
     "FEED_MAX_ITEMS",
     "FETCH_MAX_BYTES",
