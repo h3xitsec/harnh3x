@@ -4,6 +4,13 @@ from pathlib import Path
 
 from harnh3x.tools import memory_keys, workspace_listing
 
+YOLO_NOTE = (
+    "Yolo mode is on. The seatbelt sandbox is off. "
+    "read_file and the other read tools may use any filesystem path. "
+    "run_shell and run_python may run any program, including sudo, and may read or write any path. "
+    "write_file, edit_file, append_file, delete_file, move_file, and run_script stay inside the workspace."
+)
+
 
 def _memory_line(keys: list[str]) -> str:
     if not keys:
@@ -14,9 +21,12 @@ def _memory_line(keys: list[str]) -> str:
     )
 
 
-def system_prompt(workspace: Path, menu: str, now: datetime | None = None) -> str:
+def system_prompt(
+    workspace: Path, menu: str, now: datetime | None = None, *, yolo: bool = False
+) -> str:
     moment = now or datetime.now().astimezone()
     today = moment.strftime("%A, %B %d, %Y, %H:%M %Z").rstrip()
+    note = f"\n{YOLO_NOTE}\n" if yolo else ""
     return f"""You are a helpful personal assistant.
 Today is {today}. The host runs {platform.system()}. Your workspace is {workspace}.
 {workspace_listing(workspace)}
@@ -29,5 +39,5 @@ Answer from sources you have read: search snippets are not answers, so read the 
 When a job takes several steps, load the tasks skill, write a plan, and work through it.
 When the user asks for a program, script, or code change, load the coding skill and write it to a file in the workspace. Use the python skill only to compute an answer.
 Always confirm what you did after completing a task.
-
+{note}
 {menu}"""

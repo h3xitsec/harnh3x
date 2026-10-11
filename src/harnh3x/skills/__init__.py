@@ -1,7 +1,10 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+from harnh3x.prompt import YOLO_NOTE
 from harnh3x.tools import TOOLS, execute_tool
+
+_YOLO_SKILLS = {"file_ops", "shell", "python"}
 
 SKILLS_DIR = Path(__file__).resolve().parent
 
@@ -121,9 +124,10 @@ _META_TOOLS = (
 
 
 class SkillRegistry:
-    def __init__(self):
+    def __init__(self, *, yolo: bool = False):
         self._catalog = _CATALOG
         self._active: dict[str, Skill] = {}
+        self._yolo = yolo
 
     def skill_tools(self, name: str) -> tuple[str, ...] | None:
         skill = self._catalog.get(name)
@@ -156,11 +160,14 @@ class SkillRegistry:
         skill = self._catalog[name]
         self._active[name] = skill
         tool_names = [tool["function"]["name"] for tool in skill.tools]
-        return (
+        text = (
             f"Loaded skill '{name}' with {len(skill.tools)} tools: "
             f"{', '.join(tool_names)}\n\n"
             f"Documentation:\n{skill.doc}"
         )
+        if self._yolo and name in _YOLO_SKILLS:
+            text += f"\n\n{YOLO_NOTE}"
+        return text
 
     def unload_skill(self, name: str) -> str:
         if name not in self._active:
@@ -178,7 +185,9 @@ class SkillRegistry:
         name = args.get("name", "")
         return name if isinstance(name, str) else ""
 
-    def execute(self, name: str, args: dict, workspace: Path) -> str:
+    def execute(
+        self, name: str, args: dict, workspace: Path, *, yolo: bool = False
+    ) -> str:
         if name == "load_skill":
             return self.load_skill(self._skill_name(args))
         if name == "unload_skill":
@@ -190,4 +199,4 @@ class SkillRegistry:
         }
         if name not in loaded:
             return f"Error: Tool '{name}' not found. Is the skill loaded?"
-        return execute_tool(name, args, workspace)
+        return execute_tool(name, args, workspace, yolo=yolo)

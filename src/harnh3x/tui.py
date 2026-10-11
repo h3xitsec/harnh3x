@@ -10,6 +10,7 @@ from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.events import Key
 from textual.screen import ModalScreen, Screen
+from textual.content import Content
 from textual.widgets import Markdown, OptionList, Static, TextArea
 
 from harnh3x.agent import (
@@ -23,6 +24,9 @@ from harnh3x.agent import (
 )
 
 THINKING_ROWS = 3
+
+YOLO_TITLE = "YOLO — sandbox off"
+YOLO_PLAIN = "YOLO — sandbox off. This session can read any file and run any command, including sudo."
 
 _TUI_HELP = """\
 Commands
@@ -644,7 +648,10 @@ class HarnessApp(App):
         self._rendering = False
         self.tools: ToolBox | None = None
 
-    def _banner(self) -> str:
+    def _yolo(self) -> bool:
+        return bool(getattr(self.session, "yolo", False))
+
+    def _banner(self) -> Content:
         lines = []
         if self.review is None:
             lines.append("🤖 Harnh3x")
@@ -656,7 +663,11 @@ class HarnessApp(App):
         )
         if context is not None:
             lines.append(context)
-        return "\n".join(lines)
+        body = Content("\n".join(lines))
+        if not self._yolo():
+            return body
+        title = Content.styled(YOLO_TITLE, "bold ansi_bright_yellow")
+        return title + "\n" + body
 
     def _refresh_banner(self) -> None:
         self.query_one("#banner", Static).update(self._banner())

@@ -134,34 +134,45 @@ def _session_workspace(workspace: Path | None) -> Path:
 
 
 class Session:
-    def __init__(self, workspace: Path | None = None, model: str | None = None):
+    def __init__(
+        self,
+        workspace: Path | None = None,
+        model: str | None = None,
+        *,
+        yolo: bool = False,
+    ):
         self.workspace = _session_workspace(workspace)
         self.model = model or MODEL
-        self.skills = SkillRegistry()
+        self.yolo = yolo
+        self.skills = SkillRegistry(yolo=yolo)
         self.context_tokens: int | None = None
         self.context_limit: int | None = None
         self.on_compact: Callable[[str], None] | None = None
         self.messages: list[dict] = [
             {
                 "role": "system",
-                "content": system_prompt(self.workspace, self.skills.get_menu()),
+                "content": system_prompt(
+                    self.workspace, self.skills.get_menu(), yolo=self.yolo
+                ),
             }
         ]
 
     def reset(self) -> None:
         self.workspace = _session_workspace(Path(WORKSPACES_DIR) / str(uuid.uuid4()))
-        self.skills = SkillRegistry()
+        self.skills = SkillRegistry(yolo=self.yolo)
         self.context_tokens = None
         self.messages = [
             {
                 "role": "system",
-                "content": system_prompt(self.workspace, self.skills.get_menu()),
+                "content": system_prompt(
+                    self.workspace, self.skills.get_menu(), yolo=self.yolo
+                ),
             }
         ]
 
     def sync_prompt(self) -> None:
         self.messages[0]["content"] = system_prompt(
-            self.workspace, self.skills.get_menu()
+            self.workspace, self.skills.get_menu(), yolo=self.yolo
         )
 
     def resume(self, workspace: Path) -> None:
@@ -172,7 +183,7 @@ class Session:
         self.messages = data["messages"]
         self.context_tokens = _stored_context_tokens(data)
         self.context_limit = None
-        self.skills = SkillRegistry()
+        self.skills = SkillRegistry(yolo=self.yolo)
         _replay_skills(self)
         _load_saved_skills(self, data)
         self.sync_prompt()
@@ -664,6 +675,7 @@ def _complete(
                 tc.function.arguments,
                 session.workspace,
                 session.skills,
+                yolo=session.yolo,
             )
             if tc.function.name in {"load_skill", "unload_skill"} and args is not None:
                 session.sync_prompt()

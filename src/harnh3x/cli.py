@@ -13,6 +13,7 @@ from harnh3x.agent import (
 )
 from harnh3x.config import MODEL
 from harnh3x.tui import (
+    YOLO_PLAIN,
     compact_label,
     conversation_turns,
     line_limit,
@@ -44,6 +45,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--answer-only",
         action="store_true",
         help="Print only the final answer, without tool call output",
+    )
+    parser.add_argument(
+        "--yolo",
+        action="store_true",
+        help=(
+            "Disable the seatbelt sandbox. The agent can read any file "
+            "and run any command, including sudo."
+        ),
     )
     parser.add_argument(
         "--model",
@@ -121,6 +130,15 @@ def _tty() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
+def _print_session(session, *, answer_only: bool) -> None:
+    if answer_only:
+        return
+    if getattr(session, "yolo", False):
+        print(YOLO_PLAIN)
+    print(f"Workspace: {session.workspace}")
+    print(f"Model: {session.model}")
+
+
 def _print_tools(tools: list[tuple[str, object]]) -> None:
     for name, args in tools:
         print(f"  🔧 {name}({args})")
@@ -167,9 +185,7 @@ def _resume_session(session, *, answer_only: bool) -> None:
     except ValueError as exc:
         print(exc)
         return
-    if not answer_only:
-        print(f"Workspace: {session.workspace}")
-        print(f"Model: {session.model}")
+    _print_session(session, answer_only=answer_only)
     _print_turns(session, answer_only=answer_only)
 
 
@@ -217,7 +233,7 @@ def _present(answer: str, reasoning: str, *, answer_only: bool) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
-    session = Session(model=resolve_model(args.model))
+    session = Session(model=resolve_model(args.model), yolo=args.yolo)
     show_tools = not args.answer_only
     use_tui = _tty() and not args.answer_only
     if args.query is not None:
@@ -238,15 +254,12 @@ def main(argv: list[str] | None = None) -> None:
             if reasoning:
                 run_review(session, args.query, tools, reasoning, response)
                 return
-            print(f"Workspace: {session.workspace}")
-            print(f"Model: {session.model}")
+            _print_session(session, answer_only=False)
             _print_tools(tools)
             _present(response, "", answer_only=False)
             return
 
-        if not args.answer_only:
-            print(f"Workspace: {session.workspace}")
-            print(f"Model: {session.model}")
+        _print_session(session, answer_only=args.answer_only)
         start = len(getattr(session, "messages", []) or [])
         response = run(args.query, session, show_tools=show_tools)
         reasoning = (
@@ -261,8 +274,7 @@ def main(argv: list[str] | None = None) -> None:
 
     if not args.answer_only:
         print("🤖 Harnh3x")
-        print(f"Workspace: {session.workspace}")
-        print(f"Model: {session.model}")
+        _print_session(session, answer_only=False)
 
     while True:
         try:

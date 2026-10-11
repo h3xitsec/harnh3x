@@ -1,3 +1,4 @@
+import contextvars
 import csv
 import fnmatch
 import hashlib
@@ -43,6 +44,9 @@ from harnh3x.config import (
 from harnh3x.sandbox import sandboxed_argv
 
 DENIED_COMMANDS = {"rm", "mv", "chmod", "sudo"}
+_yolo: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "harnh3x_yolo", default=False
+)
 # shell=False does not interpret these; refuse them so a model cannot smuggle a chain or redirect.
 SHELL_META = set("><|&;`$")
 # Directories that list_files and search_files never descend into.
@@ -703,6 +707,14 @@ def cap_result(text: str, limit: int = MAX_TOOL_RESULT, hint: str = "") -> str:
 
 
 def resolve_in_workspace(workspace: Path, raw: str) -> Path:
+    return _resolve_path(workspace, raw, allow_outside=False)
+
+
+def resolve_readable(workspace: Path, raw: str) -> Path:
+    return _resolve_path(workspace, raw, allow_outside=_yolo.get())
+
+
+def _resolve_path(workspace: Path, raw: str, *, allow_outside: bool) -> Path:
     if not isinstance(raw, str) or not raw.strip():
         raise ValueError("path is required")
     root = workspace.resolve()
@@ -710,7 +722,7 @@ def resolve_in_workspace(workspace: Path, raw: str) -> Path:
     if not path.is_absolute():
         path = root / path
     resolved = path.resolve()
-    if not resolved.is_relative_to(root):
+    if not allow_outside and not resolved.is_relative_to(root):
         raise ValueError("outside workspace")
     return resolved
 
@@ -742,7 +754,18 @@ def _text_arg(args: dict, name: str) -> str:
 
 
 def _existing_file(workspace: Path, raw) -> Path:
-    path = resolve_in_workspace(workspace, raw if isinstance(raw, str) else "")
+    return _require_file(
+        resolve_in_workspace(workspace, raw if isinstance(raw, str) else "")
+    )
+
+
+def _readable_file(workspace: Path, raw) -> Path:
+    return _require_file(
+        resolve_readable(workspace, raw if isinstance(raw, str) else "")
+    )
+
+
+def _require_file(path: Path) -> Path:
     if not path.exists():
         raise ValueError("not found")
     if path.is_dir():
@@ -754,7 +777,7 @@ def _existing_file(workspace: Path, raw) -> Path:
 
 
 def read_file(workspace: Path, args: dict, *, tool_name: str = "read_file") -> str:
-    path = resolve_in_workspace(workspace, args.get("path", ""))
+    path = resolve_readable(workspace, args.get("path", ""))
     if not path.exists():
         return "Error: not found"
     if path.is_dir():
@@ -920,7 +943,7 @@ def _walk(root: Path, max_depth: int):
 
 
 def _directory_arg(workspace: Path, raw) -> Path:
-    path = resolve_in_workspace(workspace, raw if isinstance(raw, str) and raw else ".")
+    path = resolve_readable(workspace, raw if isinstance(raw, str) and raw else ".")
     if not path.exists():
         raise ValueError("not found")
     if not path.is_dir():
@@ -1022,13 +1045,14 @@ def prepare_shell(command: str, workspace: Path) -> list[str]:
     if not argv:
         raise ValueError("command is required")
     program = Path(argv[0]).name
-    if program in DENIED_COMMANDS:
-        raise ValueError(f"blocked command '{program}'")
-    for arg in argv:
-        if ".." in Path(arg).parts:
-            raise ValueError("blocked path '..'")
-        if Path(arg).is_absolute():
-            resolve_in_workspace(workspace, arg)
+    if not _yolo.get():
+        if program in DENIED_COMMANDS:
+            raise ValueError(f"blocked command '{program}'")
+        for arg in argv:
+            if ".." in Path(arg).parts:
+                raise ValueError("blocked path '..'")
+            if Path(arg).is_absolute():
+                resolve_in_workspace(workspace, arg)
     return argv
 
 
@@ -1054,13 +1078,17 @@ def _stdin_arg(raw) -> str | None:
 def _run_process(
     argv: list[str], workspace: Path, timeout: int, stdin: str | None
 ) -> str:
-    try:
-        wrapped, env = sandboxed_argv(argv, workspace)
-    except ValueError as exc:
-        return f"Error: {exc}"
+    if _yolo.get():
+        command = argv
+        env = os.environ.copy()
+    else:
+        try:
+            command, env = sandboxed_argv(argv, workspace)
+        except ValueError as exc:
+            return f"Error: {exc}"
     try:
         completed = subprocess.run(
-            wrapped,
+            command,
             shell=False,
             cwd=workspace,
             env=env,
@@ -1404,9 +1432,7 @@ def _format_article(data: dict) -> str:
 def parse_html(workspace: Path, args: dict) -> str:
     workspace = workspace.resolve()
     path_arg = args.get("path")
-    path = resolve_in_workspace(
-        workspace, path_arg if isinstance(path_arg, str) else ""
-    )
+    path = resolve_readable(workspace, path_arg if isinstance(path_arg, str) else "")
     if not path.exists():
         return "Error: not found"
     if path.is_dir():
@@ -1888,7 +1914,7 @@ def wikipedia_summary(workspace: Path, args: dict) -> str:
 
 
 def read_pdf(workspace: Path, args: dict) -> str:
-    path = _existing_file(workspace, args.get("path", ""))
+    path = _readable_file(workspace, args.get("path", ""))
     reader = _pdf_reader(path.read_bytes())
     total = len(reader.pages)
     if total == 0:
@@ -1944,7 +1970,7 @@ def _docx_paragraphs(path: Path) -> list[str]:
 
 
 def read_docx(workspace: Path, args: dict) -> str:
-    path = _existing_file(workspace, args.get("path", ""))
+    path = _readable_file(workspace, args.get("path", ""))
     paragraphs = _docx_paragraphs(path)
     text = "\n".join(paragraphs).strip()
     if not text:
@@ -1980,7 +2006,7 @@ def _csv_dialect(sample: str, delimiter):
 
 
 def inspect_csv(workspace: Path, args: dict) -> str:
-    path = _existing_file(workspace, args.get("path", ""))
+    path = _readable_file(workspace, args.get("path", ""))
     preview = _count_arg(args.get("rows"), "rows", PREVIEW_ROWS, 50)
     with path.open(newline="", encoding="utf-8") as handle:
         dialect = _csv_dialect(handle.read(8192), args.get("delimiter"))
@@ -2044,7 +2070,7 @@ def _describe_json(value, depth: int, max_depth: int, indent: str) -> list[str]:
 
 
 def inspect_json(workspace: Path, args: dict) -> str:
-    path = _existing_file(workspace, args.get("path", ""))
+    path = _readable_file(workspace, args.get("path", ""))
     max_depth = _count_arg(args.get("max_depth"), "max_depth", 3, 10)
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -2292,20 +2318,24 @@ TOOL_FNS = {
 }
 
 
-def execute_tool(name: str, args: dict, workspace: Path) -> str:
-    fn = TOOL_FNS.get(name)
-    if fn is None:
-        return f"Error: Unknown tool '{name}'"
+def execute_tool(name: str, args: dict, workspace: Path, *, yolo: bool = False) -> str:
+    token = _yolo.set(yolo)
     try:
-        return fn(workspace, args)
-    except ValueError as exc:
-        return f"Error: {exc}"
-    except OSError as exc:
-        return f"Error: {exc}"
+        fn = TOOL_FNS.get(name)
+        if fn is None:
+            return f"Error: Unknown tool '{name}'"
+        try:
+            return fn(workspace, args)
+        except ValueError as exc:
+            return f"Error: {exc}"
+        except OSError as exc:
+            return f"Error: {exc}"
+    finally:
+        _yolo.reset(token)
 
 
 def _tool_result(
-    name: str, arguments: str, workspace: Path, registry=None
+    name: str, arguments: str, workspace: Path, registry=None, *, yolo: bool = False
 ) -> tuple[dict | None, str]:
     try:
         args = json.loads(arguments)
@@ -2314,5 +2344,5 @@ def _tool_result(
     if not isinstance(args, dict):
         return None, "Error: tool arguments must be an object"
     if registry is None:
-        return args, execute_tool(name, args, workspace)
-    return args, registry.execute(name, args, workspace)
+        return args, execute_tool(name, args, workspace, yolo=yolo)
+    return args, registry.execute(name, args, workspace, yolo=yolo)

@@ -41,9 +41,12 @@ poetry run harnh3x "Summarize the CSV in this workspace"
 poetry run harnh3x --answer-only "What is 17 * 43?"
 poetry run harnh3x --model gpt-4.1 "List the files here"
 poetry run harnh3x --model
+poetry run harnh3x --yolo
 ```
 
 `--model` with a name selects that model. `--model` alone lists models from the API: a Textual picker on a tty, a numbered prompt otherwise.
+
+`--yolo` turns off the macOS Seatbelt sandbox for that process. The header’s first line is `YOLO — sandbox off` in bright yellow, and plain output prints the same warning before the workspace. The agent can read any file and run any command, including `sudo`. Writes, edits, deletes, and moves through the file tools still stay in the workspace. `--answer-only` does not print the warning.
 
 A new session prints its workspace path. Files the agent writes, downloads, and notes all stay in that directory.
 
@@ -64,7 +67,7 @@ Enter submits. Shift+Enter inserts a newline.
 | `/compact` | Summarize older turns now |
 | `/exit` | Quit |
 
-The header shows the workspace, the model, and how much of the context window the last completion used. Tool calls for a turn share one box. The thinking box keeps the last three lines until you expand it. When the history is compacted, the transcript shows a compaction note and then the answer as Markdown.
+The header shows the workspace, the model, and how much of the context window the last completion used. With `--yolo` the header’s first line is `YOLO — sandbox off` in bright yellow, and that mark stays for a new session or a resumed transcript. Tool calls for a turn share one box. The thinking box keeps the last three lines until you expand it. When the history is compacted, the transcript shows a compaction note and then the answer as Markdown.
 
 One-shot on a tty, when the model returned reasoning, waits for Enter before the process exits.
 
@@ -74,7 +77,7 @@ Without a tty (piped input, or `--answer-only`), the same commands work as plain
 
 Nothing is loaded at the start. The system prompt names the date, the OS, a one-line listing of the workspace, and any saved memory keys, then a menu of skills. The model calls `load_skill` before it can use that skill's tools, and can keep several skills loaded. `unload_skill` drops one. Only the loaded tools, plus those two, are sent on the next completion.
 
-Tool paths stay inside the session workspace. Shell and Python run with `shell=False`, a short allowlist of environment variables, and a macOS Seatbelt profile that can read and write only that workspace (plus the OS and Python runtime). Network is denied for those processes. `rm`, `mv`, `chmod`, and `sudo` are rejected before the process starts.
+Tool paths stay inside the session workspace. Shell and Python run with `shell=False`, a short allowlist of environment variables, and a macOS Seatbelt profile that can read and write only that workspace (plus the OS and Python runtime). Network is denied for those processes. `rm`, `mv`, `chmod`, and `sudo` are rejected before the process starts. `--yolo` skips that sandbox and those command checks, and lets read tools open any path. Pipes and redirects stay blocked. File mutation tools stay in the workspace.
 
 Web and API tools run in the parent process. They accept only public `http` and `https` URLs, follow redirects with the same check, and cap body size and time.
 

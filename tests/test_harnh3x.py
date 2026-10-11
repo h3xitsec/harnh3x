@@ -26,10 +26,12 @@ from harnh3x.config import (
     SEARCH_FILES_MAX,
     TRANSCRIPT_FILE,
 )
-from harnh3x.prompt import system_prompt
+from harnh3x.prompt import YOLO_NOTE, system_prompt
 from harnh3x.skills import SkillRegistry
 from harnh3x.tools import _tool_result, execute_tool
 from harnh3x.tui import (
+    YOLO_PLAIN,
+    YOLO_TITLE,
     HarnessApp,
     HelpScreen,
     ModelApp,
@@ -1605,6 +1607,45 @@ def test_query_argument_runs_once(monkeypatch, capsys, tmp_path):
     assert "Agent: final answer" in output
 
 
+def test_yolo_option_prints_the_warning_and_selects_the_session(
+    monkeypatch, capsys, tmp_path
+):
+    cli = _load_cli()
+    seen = {}
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
+    monkeypatch.setattr(
+        cli,
+        "Session",
+        lambda **kwargs: seen.update(kwargs)
+        or SimpleNamespace(workspace=tmp_path, **kwargs),
+    )
+    monkeypatch.setattr(cli, "run", lambda *args, **kwargs: "final answer")
+
+    cli.main(["--yolo", "fix the notes"])
+
+    assert seen["yolo"] is True
+    output = capsys.readouterr().out
+    assert output.index(YOLO_PLAIN) < output.index(f"Workspace: {tmp_path}")
+    assert "Agent: final answer" in output
+
+
+def test_answer_only_hides_the_yolo_warning(monkeypatch, capsys, tmp_path):
+    cli = _load_cli()
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
+    monkeypatch.setattr(
+        cli,
+        "Session",
+        lambda **kwargs: SimpleNamespace(workspace=tmp_path, **kwargs),
+    )
+    monkeypatch.setattr(cli, "run", lambda *args, **kwargs: "final answer")
+
+    cli.main(["--yolo", "--answer-only", "fix the notes"])
+
+    assert capsys.readouterr().out == "final answer\n"
+
+
 def test_answer_only_prints_the_final_answer(monkeypatch, capsys, tmp_path):
     cli = _load_cli()
     calls = []
@@ -2142,6 +2183,32 @@ def test_ctrl_q_quits_the_app():
             assert not app._exit
             await pilot.press("ctrl+q")
             assert app._exit
+
+    asyncio.run(drive())
+
+
+def test_yolo_banner_stays_after_a_new_session(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("WORKSPACE", raising=False)
+    session = agent.Session(
+        workspace=tmp_path / "first", model="custom-model", yolo=True
+    )
+    app = HarnessApp(session, lambda *args, **kwargs: "done", show_tools=True)
+    plain = agent.Session(workspace=tmp_path / "plain", model="custom-model")
+    plain_app = HarnessApp(plain, lambda *args, **kwargs: "done", show_tools=True)
+
+    async def drive():
+        async with plain_app.run_test(size=(80, 24)) as pilot:
+            assert YOLO_TITLE not in str(plain_app.query_one("#banner").content)
+        async with app.run_test(size=(80, 24)) as pilot:
+            content = app.query_one("#banner").content
+            assert str(content).startswith(YOLO_TITLE)
+            assert content.spans[0].style == "bold ansi_bright_yellow"
+            await pilot.press("ctrl+n")
+            content = app.query_one("#banner").content
+            assert str(content).startswith(YOLO_TITLE)
+            assert content.spans[0].style == "bold ansi_bright_yellow"
+            assert session.yolo is True
 
     asyncio.run(drive())
 
@@ -2851,6 +2918,66 @@ def test_sandbox_blocks_reads_writes_symlinks_and_network(tmp_path):
     assert "Operation not permitted" in networked
 
 
+def test_yolo_reads_outside_the_workspace_and_keeps_writes_inside(tmp_path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    outside = tmp_path / "secret.txt"
+    outside.write_text("secret-outside")
+    (workspace / "escape.txt").symlink_to(outside)
+
+    direct = execute_tool("read_file", {"path": str(outside)}, workspace, yolo=True)
+    linked = execute_tool("read_file", {"path": "escape.txt"}, workspace, yolo=True)
+    blocked = execute_tool(
+        "write_file",
+        {"path": str(tmp_path / "pwned.txt"), "content": "nope"},
+        workspace,
+        yolo=True,
+    )
+
+    assert direct == "secret-outside"
+    assert linked == "secret-outside"
+    assert "outside workspace" in blocked
+    assert not (tmp_path / "pwned.txt").exists()
+
+
+def test_yolo_runs_sudo_without_the_seatbelt(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_run(argv, **kwargs):
+        seen["argv"] = argv
+        seen["env"] = kwargs["env"]
+        seen["shell"] = kwargs["shell"]
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(tools.subprocess, "run", fake_run)
+
+    result = execute_tool("run_shell", {"command": "sudo true"}, tmp_path, yolo=True)
+
+    assert "blocked" not in result
+    assert "status: success" in result
+    assert seen["argv"] == ["sudo", "true"]
+    assert seen["shell"] is False
+    assert seen["env"] == dict(os.environ)
+    assert "HARNESS_SANDBOX_PROFILE" not in seen["env"]
+
+
+def test_yolo_python_reads_outside_the_workspace(tmp_path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    outside = tmp_path / "secret.txt"
+    outside.write_text("secret-outside")
+
+    result = execute_tool(
+        "run_python",
+        {"code": f"print(open({str(outside)!r}).read(), end='')"},
+        workspace,
+        yolo=True,
+    )
+
+    assert "status: success" in result
+    assert "stdout:\nsecret-outside\n" in result
+
+
 def test_sandbox_refuses_to_run_off_macos(tmp_path, monkeypatch):
     monkeypatch.setattr(sandbox.sys, "platform", "linux")
 
@@ -3419,6 +3546,21 @@ def test_plan_tools_write_update_and_show(tmp_path):
 
 
 # --- prompt ---------------------------------------------------------------
+
+
+def test_system_prompt_mentions_yolo_only_when_enabled(tmp_path):
+    now = datetime(2026, 10, 6, 16, 30, tzinfo=timezone.utc)
+
+    plain = system_prompt(tmp_path, "MENU", now=now)
+    yolo = system_prompt(tmp_path, "MENU", now=now, yolo=True)
+
+    assert "Yolo mode" not in plain
+    assert YOLO_NOTE in yolo
+    assert yolo.endswith("MENU")
+    loaded = SkillRegistry(yolo=True).load_skill("shell")
+    assert loaded.endswith(YOLO_NOTE)
+    assert YOLO_NOTE not in SkillRegistry(yolo=True).load_skill("memory")
+    assert YOLO_NOTE not in SkillRegistry().load_skill("shell")
 
 
 def test_system_prompt_includes_date_listing_and_memory_index(tmp_path):
