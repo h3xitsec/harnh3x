@@ -1576,7 +1576,7 @@ def test_on_tool_receives_the_call_instead_of_printing(tmp_path, capsys):
 
 
 def _load_cli():
-    path = Path(__file__).resolve().parents[1] / "src" / "harnh3x.py"
+    path = Path(__file__).resolve().parents[1] / "src" / "harnh3x" / "cli.py"
     spec = importlib.util.spec_from_file_location("harnh3x_cli", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

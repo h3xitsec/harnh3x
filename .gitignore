@@ -3,3 +3,4 @@ workspaces/
 .env
 .poetry-cache/
 .vendor/
+*.egg-info/

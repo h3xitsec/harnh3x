@@ -31,16 +31,16 @@ The default model is `qwen3.5-128k` in `src/harnh3x/config.py`. Point `OPENAI_BA
 From the repo root:
 
 ```bash
-poetry run python src/harnh3x.py
+poetry run harnh3x
 ```
 
 That starts an interactive session. Omit a query to keep talking; pass one to run a single turn and exit.
 
 ```bash
-poetry run python src/harnh3x.py "Summarize the CSV in this workspace"
-poetry run python src/harnh3x.py --answer-only "What is 17 * 43?"
-poetry run python src/harnh3x.py --model gpt-4.1 "List the files here"
-poetry run python src/harnh3x.py --model
+poetry run harnh3x "Summarize the CSV in this workspace"
+poetry run harnh3x --answer-only "What is 17 * 43?"
+poetry run harnh3x --model gpt-4.1 "List the files here"
+poetry run harnh3x --model
 ```
 
 `--model` with a name selects that model. `--model` alone lists models from the API: a Textual picker on a tty, a numbered prompt otherwise.
