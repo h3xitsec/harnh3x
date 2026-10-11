@@ -57,10 +57,10 @@ _SETTINGS = {
     "pdf_max_pages": _Setting("PDF_MAX_PAGES", "HARNH3X_PDF_MAX_PAGES", 20, int),
     "preview_rows": _Setting("PREVIEW_ROWS", "HARNH3X_PREVIEW_ROWS", 10, int),
     "wikipedia_lang": _Setting("WIKIPEDIA_LANG", "HARNH3X_WIKIPEDIA_LANG", "en", str),
-    "workspaces_dir": _Setting(
-        "WORKSPACES_DIR",
-        "HARNH3X_WORKSPACES_DIR",
-        "~/.local/harnh3x/workspaces",
+    "base_dir": _Setting(
+        "BASE_DIR",
+        "HARNH3X_BASE_DIR",
+        "~/.harnh3x",
         str,
     ),
 }
@@ -201,4 +201,4 @@ SEARCH_FILES_MAX = _loaded["SEARCH_FILES_MAX"]
 PDF_MAX_PAGES = _loaded["PDF_MAX_PAGES"]
 PREVIEW_ROWS = _loaded["PREVIEW_ROWS"]
 WIKIPEDIA_LANG = _loaded["WIKIPEDIA_LANG"]
-WORKSPACES_DIR = _loaded["WORKSPACES_DIR"]
+BASE_DIR = _loaded["BASE_DIR"]

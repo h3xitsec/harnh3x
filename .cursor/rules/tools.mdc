@@ -30,7 +30,7 @@ HTTP: `validate_url` allows only `http` and `https`, with no userinfo. Resolve t
 
 `read_feed`, `read_docx`, and any other XML go through `_parse_xml`, which refuses `DOCTYPE` and `ENTITY` declarations before calling ElementTree. `get_json` accepts only `JSON_TYPES`; `http_get_json`, `wikipedia_search`, and `wikipedia_summary` build on it.
 
-`remember` / `recall` keep `## key` sections in `MEMORY_FILE`; `memory_keys` feeds the system prompt. `write_plan` / `update_plan` / `show_plan` keep `N. [ ]` lines in `PLAN_FILE`.
+`remember` / `recall` keep `## key` sections in `BASE_DIR/MEMORY_FILE` (`~/.harnh3x/memory.md` by default), shared across sessions and outside the workspace. `memory_keys` reads that file for the system prompt. `write_plan` / `update_plan` / `show_plan` keep `N. [ ]` lines in `PLAN_FILE` inside the workspace.
 
 ```python
 # BAD: shell=True, or raising into the loop

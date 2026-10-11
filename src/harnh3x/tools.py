@@ -23,6 +23,7 @@ from pathlib import Path
 import pypdf
 import trafilatura
 
+import harnh3x.config as config
 from harnh3x.config import (
     FEED_MAX_ITEMS,
     FETCH_MAX_BYTES,
@@ -2086,8 +2087,8 @@ def inspect_json(workspace: Path, args: dict) -> str:
 # --- memory ---------------------------------------------------------------
 
 
-def _memory_path(workspace: Path) -> Path:
-    return workspace.resolve() / MEMORY_FILE
+def _memory_path() -> Path:
+    return Path(config.BASE_DIR).expanduser().resolve() / MEMORY_FILE
 
 
 def _read_memory(path: Path) -> dict[str, str]:
@@ -2114,6 +2115,7 @@ def _read_memory(path: Path) -> dict[str, str]:
 
 
 def _write_memory(path: Path, entries: dict[str, str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     blocks = ["# Memory", ""]
     for key, text in entries.items():
         blocks.append(f"## {key}")
@@ -2122,8 +2124,8 @@ def _write_memory(path: Path, entries: dict[str, str]) -> None:
     path.write_text("\n".join(blocks), encoding="utf-8")
 
 
-def memory_keys(workspace: Path) -> list[str]:
-    return list(_read_memory(_memory_path(workspace)))
+def memory_keys() -> list[str]:
+    return list(_read_memory(_memory_path()))
 
 
 def _format_memories(entries: dict[str, str]) -> str:
@@ -2143,7 +2145,7 @@ def remember(workspace: Path, args: dict) -> str:
         line.lstrip("#").strip() if line.startswith("#") else line
         for line in text.strip().splitlines()
     ).strip()
-    path = _memory_path(workspace)
+    path = _memory_path()
     entries = _read_memory(path)
     verb = "Updated" if key in entries else "Remembered"
     entries[key] = text
@@ -2152,7 +2154,7 @@ def remember(workspace: Path, args: dict) -> str:
 
 
 def recall(workspace: Path, args: dict) -> str:
-    entries = _read_memory(_memory_path(workspace))
+    entries = _read_memory(_memory_path())
     if not entries:
         return "Memory is empty."
     query = args.get("query")

@@ -21,4 +21,4 @@ model = qwen3.5-128k
 # pdf_max_pages = 20
 # preview_rows = 10
 # wikipedia_lang = en
-# workspaces_dir = ~/.local/harnh3x/workspaces
+# base_dir = ~/.harnh3x

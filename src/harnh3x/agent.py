@@ -17,7 +17,6 @@ from harnh3x.config import (
     MAX_TURNS,
     MODEL,
     TRANSCRIPT_FILE,
-    WORKSPACES_DIR,
 )
 from harnh3x.prompt import system_prompt
 from harnh3x.skills import SkillRegistry
@@ -130,7 +129,7 @@ def _expand(value: str | Path) -> Path:
 
 
 def _workspaces_dir() -> Path:
-    return _expand(WORKSPACES_DIR).resolve()
+    return _expand(config.BASE_DIR).resolve() / "workspaces"
 
 
 def _session_workspace(workspace: Path | str | None) -> Path:

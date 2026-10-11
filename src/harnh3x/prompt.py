@@ -30,7 +30,7 @@ def system_prompt(
     return f"""You are a helpful personal assistant.
 Today is {today}. The host runs {platform.system()}. Your workspace is {workspace}.
 {workspace_listing(workspace)}
-{_memory_line(memory_keys(workspace))}
+{_memory_line(memory_keys())}
 Call load_skill before using a capability. Several skills can stay loaded at once; unload a skill only when you are sure you will not need it again.
 A skill name is not a tool. After loading a skill, call one of the tools listed for it.
 Use the tool interface. Do not write a tool call as JSON in your reply.

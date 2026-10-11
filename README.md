@@ -1,6 +1,6 @@
 # Harnh3x
 
-A AI harness: an OpenAI-compatible chat loop with tools confined to one workspace. Each session gets its own directory under `~/.local/harnh3x/workspaces/`, a `transcript.json` you can resume, and a JSONL `session.log`.
+A AI harness: an OpenAI-compatible chat loop with tools confined to one workspace. Each session gets its own directory under `~/.harnh3x/workspaces/`, a `transcript.json` you can resume, and a JSONL `session.log`. Facts saved with the memory skill live in `~/.harnh3x/memory.md`, shared by every session.
 
 On a terminal it runs a Textual interface. Piped input and `--answer-only` stay plain stdout.
 
@@ -17,7 +17,7 @@ On a terminal it runs a Textual interface. Piped input and `--answer-only` stay 
 poetry install
 ```
 
-The client reads `~/.config/harnh3x/harnh3x.conf`, or `$XDG_CONFIG_HOME/harnh3x/harnh3x.conf` when that variable is set. A missing file changes nothing, and the process does not create it. [`harnh3x.conf.example`](harnh3x.conf.example) lists every setting.
+The client reads `~/.config/harnh3x/harnh3x.conf`, or `$XDG_CONFIG_HOME/harnh3x/harnh3x.conf` when that variable is set. A missing file changes nothing, and the process does not create it. [`harnh3x.conf.example`](harnh3x.conf.example) lists every settings.
 
 ```
 api_key = sk-...
@@ -37,7 +37,7 @@ HARNH3X_MODEL=qwen3.5-128k
 
 Startup exits with a short error when `api_key` or `api_url` is missing from both the config file and the environment.
 
-Other tunables use the same file: `max_turns`, `compact_at`, `max_tool_result`, `fetch_timeout`, `fetch_max_bytes`, `fetch_max_redirects`, `search_max_results`, `feed_max_items`, `shell_timeout`, `shell_max_timeout`, `list_files_max`, `search_files_max`, `pdf_max_pages`, `preview_rows`, `wikipedia_lang`, and `workspaces_dir`. Each one also accepts `HARNH3X_` plus that name in uppercase, such as `HARNH3X_MAX_TURNS`. `HARNH3X_CONFIG` points at a different file; an empty value skips the file.
+Other tunables use the same file: `max_turns`, `compact_at`, `max_tool_result`, `fetch_timeout`, `fetch_max_bytes`, `fetch_max_redirects`, `search_max_results`, `feed_max_items`, `shell_timeout`, `shell_max_timeout`, `list_files_max`, `search_files_max`, `pdf_max_pages`, `preview_rows`, `wikipedia_lang`, and `base_dir`. Each one also accepts `HARNH3X_` plus that name in uppercase, such as `HARNH3X_MAX_TURNS`. `base_dir` defaults to `~/.harnh3x`: sessions are created under `workspaces/` inside it, and `memory.md` sits next to that directory. `HARNH3X_CONFIG` points at a different file; an empty value skips the file.
 
 The built-in model is `qwen3.5-128k` when nothing else sets it. Point `api_url` or `OPENAI_BASE_URL` at whatever server hosts it.
 
@@ -98,13 +98,19 @@ Web and API tools run in the parent process. They accept only public `http` and 
 
 When context use reaches half the model's limit, older turns are summarized into one note. The system prompt, the current user message, and the latest unanswered tool result or finished answer stay put. `/compact` forces that summary.
 
+`~/.harnh3x/` (or `base_dir`) holds:
+
+| Path | Role |
+| --- | --- |
+| `memory.md` | Facts saved with the memory skill, shared across sessions. Keys are listed in the system prompt. |
+| `workspaces/<id>/` | One directory per session. |
+
 Each session directory holds:
 
 | File | Role |
 | --- | --- |
 | `transcript.json` | Model, messages, loaded skills, and the last token count. Replaced atomically. |
 | `session.log` | One JSON object per line: model turns, tool calls, tool results, and compactions. |
-| `memory.md` | Facts saved with the memory skill. Keys are listed in the system prompt. |
 | `plan.md` | Checklist for multi-step work. |
 
 `/resume` lists workspaces that have a user message in the transcript, newest first.
@@ -122,7 +128,7 @@ Each session directory holds:
 | `api` | GET a public JSON API |
 | `documents` | PDF and Word files in the workspace |
 | `data` | CSV and JSON shape, columns, and a short preview |
-| `memory` | Remember and recall facts in `memory.md` |
+| `memory` | Remember and recall facts in the shared `memory.md` |
 | `tasks` | Write, update, and show a plan in `plan.md` |
 
 Per-skill conventions live in `src/harnh3x/skills/<name>/SKILL.md` and are returned when that skill is loaded.

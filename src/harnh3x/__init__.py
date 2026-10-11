@@ -13,6 +13,7 @@ from harnh3x.agent import (
 from harnh3x.config import (
     API_KEY,
     API_URL,
+    BASE_DIR,
     COMPACT_AT,
     FEED_MAX_ITEMS,
     FETCH_MAX_BYTES,
@@ -32,7 +33,6 @@ from harnh3x.config import (
     SHELL_TIMEOUT,
     TRANSCRIPT_FILE,
     WIKIPEDIA_LANG,
-    WORKSPACES_DIR,
 )
 from harnh3x.prompt import system_prompt
 from harnh3x.skills import SkillRegistry
@@ -49,6 +49,7 @@ from harnh3x.tools import (
 __all__ = [
     "API_KEY",
     "API_URL",
+    "BASE_DIR",
     "COMPACT_AT",
     "FEED_MAX_ITEMS",
     "FETCH_MAX_BYTES",
@@ -68,7 +69,6 @@ __all__ = [
     "SHELL_TIMEOUT",
     "TRANSCRIPT_FILE",
     "WIKIPEDIA_LANG",
-    "WORKSPACES_DIR",
     "Session",
     "SessionInfo",
     "SkillRegistry",

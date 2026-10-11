@@ -1403,15 +1403,15 @@ def test_session_workspace_argument_and_env_override_the_default(tmp_path, monke
     assert not (tmp_path / "workspaces").exists()
 
 
-def test_workspaces_dir_accepts_an_absolute_path(tmp_path, monkeypatch):
+def test_base_dir_accepts_an_absolute_path(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("WORKSPACE", raising=False)
-    root = tmp_path / "elsewhere" / "workspaces"
-    monkeypatch.setattr(agent, "WORKSPACES_DIR", str(root))
+    root = tmp_path / "elsewhere"
+    monkeypatch.setattr(config, "BASE_DIR", str(root))
 
     session = agent.Session()
 
-    assert session.workspace.parent == root.resolve()
+    assert session.workspace.parent == (root / "workspaces").resolve()
     assert session.workspace.is_absolute()
     assert agent.list_sessions() == []
 
@@ -1421,13 +1421,13 @@ def test_workspace_accepts_a_home_path(tmp_path, monkeypatch):
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.delenv("WORKSPACE", raising=False)
-    monkeypatch.setattr(agent, "WORKSPACES_DIR", "~/.local/harnh3x/workspaces")
+    monkeypatch.setattr(config, "BASE_DIR", "~/.harnh3x")
 
     session = agent.Session()
     chosen = agent.Session(workspace=Path("~/jobs/two"))
     monkeypatch.setenv("WORKSPACE", "~/jobs/one")
     from_env = agent.Session()
-    past = home / ".local" / "harnh3x" / "workspaces" / session.workspace.name
+    past = home / ".harnh3x" / "workspaces" / session.workspace.name
     _write_transcript(
         past,
         "saved-model",
@@ -1441,13 +1441,12 @@ def test_workspace_accepts_a_home_path(tmp_path, monkeypatch):
     assert chosen.workspace == (home / "jobs" / "two").resolve()
     assert from_env.workspace == (home / "jobs" / "one").resolve()
     assert [
-        item.workspace
-        for item in agent.list_sessions(Path("~/.local/harnh3x/workspaces"))
+        item.workspace for item in agent.list_sessions(Path("~/.harnh3x/workspaces"))
     ] == [past.resolve()]
 
 
-def test_default_workspaces_dir_is_under_the_home_local_directory():
-    assert config._SETTINGS["workspaces_dir"].default == "~/.local/harnh3x/workspaces"
+def test_default_base_dir_is_the_harnh3x_home_directory():
+    assert config._SETTINGS["base_dir"].default == "~/.harnh3x"
 
 
 FILE_OPS_LOADED = (
@@ -3528,7 +3527,7 @@ def test_remember_and_recall_round_trip_through_memory_md(tmp_path):
     assert stored.startswith(
         "# Memory\n\n## user timezone\nAmerica/Toronto\n\n## project\nharnh3x\nagent loop\n"
     )
-    assert tools.memory_keys(tmp_path) == ["user timezone", "project"]
+    assert tools.memory_keys() == ["user timezone", "project"]
 
     everything = execute_tool("recall", {}, tmp_path)
     assert "## user timezone\nAmerica/Toronto" in everything
@@ -3542,6 +3541,22 @@ def test_remember_and_recall_round_trip_through_memory_md(tmp_path):
     )
     assert execute_tool("remember", {"key": "x"}, tmp_path) == "Error: text is required"
     assert execute_tool("remember", {"text": "x"}, tmp_path) == "Error: key is required"
+
+
+def test_memory_is_shared_across_workspaces(tmp_path):
+    first = tmp_path / "workspaces" / "one"
+    second = tmp_path / "workspaces" / "two"
+    first.mkdir(parents=True)
+    second.mkdir()
+
+    execute_tool("remember", {"key": "user timezone", "text": "America/Toronto"}, first)
+
+    recalled = execute_tool("recall", {}, second)
+
+    assert recalled == "## user timezone\nAmerica/Toronto"
+    assert (tmp_path / "memory.md").is_file()
+    assert not (first / "memory.md").exists()
+    assert not (second / "memory.md").exists()
 
 
 def test_plan_tools_write_update_and_show(tmp_path):
@@ -3626,15 +3641,18 @@ def test_system_prompt_includes_date_listing_and_memory_index(tmp_path):
     assert "Use the python skill only to compute an answer." in empty
     assert empty.endswith("MENU")
 
-    (tmp_path / "notes.md").write_text("n")
-    (tmp_path / "downloads").mkdir()
-    (tmp_path / "session.log").write_text("{}")
-    (tmp_path / TRANSCRIPT_FILE).write_text("{}")
-    (tmp_path / ".hidden").write_text("h")
-    execute_tool("remember", {"key": "user name", "text": "Alex"}, tmp_path)
+    session = tmp_path / "workspaces" / "session"
+    session.mkdir(parents=True)
+    (session / "notes.md").write_text("n")
+    (session / "downloads").mkdir()
+    (session / "session.log").write_text("{}")
+    (session / TRANSCRIPT_FILE).write_text("{}")
+    (session / ".hidden").write_text("h")
+    execute_tool("remember", {"key": "user name", "text": "Alex"}, session)
 
-    filled = system_prompt(tmp_path, "MENU", now=now)
-    assert "Workspace files: downloads/, memory.md, notes.md" in filled
+    filled = system_prompt(session, "MENU", now=now)
+    assert "Workspace files: downloads/, notes.md" in filled
+    assert "memory.md" not in filled.split("Saved memories:")[0]
     listing = filled.split("Workspace files:")[1].split("\n")[0]
     assert "session.log" not in listing
     assert "transcript.json" not in listing
