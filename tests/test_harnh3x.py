@@ -3282,6 +3282,35 @@ def test_deltas_show_before_the_turn_returns():
     asyncio.run(drive())
     assert errors == [None]
 
+
+def test_scrolled_up_transcript_stays_put_while_output_grows():
+    from textual.widgets import Static
+
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+    app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            transcript = app.query_one("#transcript")
+            for n in range(40):
+                transcript.mount(Static(f"line {n}", markup=False))
+            await pilot.pause()
+            assert transcript.is_vertical_scroll_end
+            transcript.scroll_to(y=0, animate=False)
+            await pilot.pause()
+            assert transcript.scroll_y == 0
+            app._apply_delta("content", "more\n" * 10)
+            await pilot.pause()
+            assert transcript.scroll_y == 0
+            transcript.scroll_to(y=transcript.max_scroll_y, animate=False)
+            await pilot.pause()
+            app._apply_delta("content", "tail\n" * 10)
+            await pilot.pause()
+            assert transcript.is_vertical_scroll_end
+
+    asyncio.run(drive())
+
+
 def test_agent_answer_renders_markdown():
     answer = "\n".join(
         [

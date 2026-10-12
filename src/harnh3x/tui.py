@@ -903,8 +903,12 @@ class HarnessApp(App):
         if self.review is None and self.initial is None:
             yield Composer()
 
+    def _anchor_transcript(self) -> None:
+        self.query_one("#transcript").anchor()
+
     def on_mount(self) -> None:
         self._load_context_limit()
+        self._anchor_transcript()
         if self.review is not None:
             user, tools, reasoning, answer = self.review
             self._append_user(user)
@@ -946,6 +950,7 @@ class HarnessApp(App):
         self._shown_compactions = []
         self._compacting = None
         await self.query_one("#transcript").remove_children()
+        self._anchor_transcript()
         composer.load_text("")
         composer.focus()
 
@@ -1010,9 +1015,7 @@ class HarnessApp(App):
         block = Static("Compacting context…", markup=False, classes="panel trace")
         block.border_title = "Context"
         self._compacting = block
-        transcript = self.query_one("#transcript")
-        transcript.mount(block)
-        transcript.scroll_end(animate=False)
+        self.query_one("#transcript").mount(block)
 
     def _hide_compacting(self) -> None:
         block = self._compacting
@@ -1036,7 +1039,7 @@ class HarnessApp(App):
     def _note(self, text: str) -> None:
         transcript = self.query_one("#transcript")
         transcript.mount(Static(text, markup=False))
-        transcript.scroll_end(animate=False)
+        transcript.anchor()
 
     async def _on_resume(self, chosen) -> None:
         composer = self.query_one(Composer)
@@ -1052,6 +1055,7 @@ class HarnessApp(App):
         self.tools = None
         self.query_one("#banner", Static).update(self._banner())
         await self.query_one("#transcript").remove_children()
+        self._anchor_transcript()
         self._render_history()
         self._load_context_limit()
         composer.disabled = False
@@ -1079,9 +1083,7 @@ class HarnessApp(App):
         change = compact_change(compaction.before, compaction.after)
         if change is not None:
             block.border_subtitle = change
-        transcript = self.query_one("#transcript")
-        transcript.mount(block)
-        transcript.scroll_end(animate=False)
+        self.query_one("#transcript").mount(block)
 
     def _mount_new_compactions(self) -> None:
         if self._rendering:
@@ -1160,7 +1162,6 @@ class HarnessApp(App):
             assert self._live_answer is not None
             self._msg_content += text
             self._live_answer.append(text)
-        transcript.scroll_end(animate=False)
 
     def _render_steps(self, steps: tuple) -> None:
         transcript = self.query_one("#transcript")
@@ -1173,7 +1174,6 @@ class HarnessApp(App):
                 self.tools = None
                 for name, args in payload:
                     self._append_tool(name, args)
-        transcript.scroll_end(animate=False)
 
     def _turn(self, text: str) -> None:
         start = len(getattr(self.session, "messages", []) or [])
@@ -1211,7 +1211,6 @@ class HarnessApp(App):
             self.tools = ToolBox()
             transcript.mount(self.tools)
         self.tools.add(name, args)
-        transcript.scroll_end(animate=False)
         self._refresh_banner()
 
     def _finish(self, answer: str | None, reasoning: str, refocus: bool = True) -> None:
@@ -1221,7 +1220,6 @@ class HarnessApp(App):
             transcript.mount(Thinking(reasoning, hold=self.review is not None))
         if answer is not None:
             transcript.mount(AgentAnswer(answer))
-        transcript.scroll_end(animate=False)
         self._refresh_banner()
         if refocus and self.review is None and self.initial is None:
             composer = self.query_one(Composer)
@@ -1251,7 +1249,6 @@ class HarnessApp(App):
             transcript.mount(AgentAnswer(answer))
         elif answer and answer != self._msg_content:
             transcript.mount(AgentAnswer(answer))
-        transcript.scroll_end(animate=False)
         self._refresh_banner()
         if self.initial is None and self.review is None:
             composer = self.query_one(Composer)
