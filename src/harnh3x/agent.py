@@ -12,7 +12,9 @@ from types import SimpleNamespace
 
 from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI
 
+import harnh3x.anthropic_api as anthropic_api
 import harnh3x.config as config
+from harnh3x.anthropic_api import AnthropicClient, CompletionError, status_message
 from harnh3x.config import (
     COMPACT_AT,
     MAX_TURNS,
@@ -26,7 +28,7 @@ from harnh3x.tools import _tool_result
 _client = None
 
 
-def get_client() -> OpenAI:
+def get_client() -> OpenAI | AnthropicClient:
     global _client
     if _client is None:
         kwargs = {}
@@ -34,7 +36,10 @@ def get_client() -> OpenAI:
             kwargs["api_key"] = config.API_KEY
         if config.API_URL:
             kwargs["base_url"] = config.API_URL
-        _client = OpenAI(**kwargs)
+        if config.PROVIDER == "anthropic":
+            _client = AnthropicClient(anthropic_api.Anthropic(**kwargs))
+        else:
+            _client = OpenAI(**kwargs)
     return _client
 
 
@@ -44,12 +49,16 @@ def _api_failure(exc: APIConnectionError) -> str:
     return "Could not reach the API."
 
 
-def list_models(client: OpenAI | None = None) -> list[str]:
+def list_models(client: OpenAI | AnthropicClient | None = None) -> list[str]:
     api = client or get_client()
+    if isinstance(api, AnthropicClient):
+        return api.list_model_ids()
     try:
         names = {model.id for model in api.models.list() if getattr(model, "id", None)}
     except APIConnectionError as exc:
         raise SystemExit(_api_failure(exc)) from None
+    except APIStatusError as exc:
+        raise SystemExit(status_message(exc)) from None
     return sorted(names)
 
 
@@ -93,8 +102,15 @@ def _context_limit_from_show(payload: object) -> int | None:
     return max(lengths)
 
 
-def model_context_limit(model: str, client: OpenAI | None = None) -> int | None:
+def model_context_limit(
+    model: str, client: OpenAI | AnthropicClient | None = None
+) -> int | None:
     api = client or get_client()
+    if isinstance(api, AnthropicClient):
+        configured = _count(config.CONTEXT_LIMIT)
+        if configured is not None:
+            return configured
+        return config.ANTHROPIC_CONTEXT_LIMIT
     url = _show_url(api)
     if url is None:
         return None
@@ -405,6 +421,15 @@ def assistant_message(msg) -> dict:
             }
             for tc in msg.tool_calls
         ]
+    blocks = getattr(msg, "thinking_blocks", None)
+    if isinstance(blocks, list):
+        copied = [
+            dict(block)
+            for block in blocks
+            if isinstance(block, dict) and block.get("type")
+        ]
+        if copied:
+            stored["thinking_blocks"] = copied
     return stored
 
 
@@ -423,6 +448,8 @@ def _log_preview(value):
         return value[:500] + "...[truncated]"
     if isinstance(value, dict):
         return {key: _log_preview(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_log_preview(item) for item in value]
     return value
 
 
@@ -597,7 +624,31 @@ def _rejects_stream_options(exc: APIStatusError) -> bool:
     return "stream_options" in text or "include_usage" in text
 
 
+def _without_thinking_blocks(messages: list) -> list:
+    if not any(
+        isinstance(message, dict) and "thinking_blocks" in message
+        for message in messages
+    ):
+        return messages
+    cleaned = []
+    for message in messages:
+        if isinstance(message, dict) and "thinking_blocks" in message:
+            cleaned.append(
+                {
+                    key: value
+                    for key, value in message.items()
+                    if key != "thinking_blocks"
+                }
+            )
+        else:
+            cleaned.append(message)
+    return cleaned
+
+
 def _request_completion(api, **kwargs):
+    messages = kwargs.get("messages")
+    if isinstance(messages, list):
+        kwargs["messages"] = _without_thinking_blocks(messages)
     try:
         return api.chat.completions.create(
             stream=True,
@@ -610,6 +661,23 @@ def _request_completion(api, **kwargs):
         if not _rejects_stream_options(exc):
             raise
         return api.chat.completions.create(stream=True, **kwargs)
+
+
+def _completion(session: Session, api):
+    if isinstance(api, AnthropicClient):
+        return api.stream_turn(
+            session,
+            model=session.model,
+            messages=session.messages,
+            tools=session.skills.schemas(),
+        )
+    response = _request_completion(
+        api,
+        model=session.model,
+        messages=session.messages,
+        tools=session.skills.schemas(),
+    )
+    return _consume_stream(session, response)
 
 
 def _complete_message(response):
@@ -742,13 +810,7 @@ def _compact(session: Session, api, *, force: bool = False) -> bool:
     _notify_compact(session, "start")
     try:
         try:
-            response = api.chat.completions.create(
-                model=session.model,
-                messages=[
-                    {"role": "system", "content": _COMPACT_INSTRUCTION},
-                    {"role": "user", "content": body},
-                ],
-            )
+            response = _summary_response(session, api, body)
         except Exception:
             return False
         summary = _summary_text(response)
@@ -778,7 +840,21 @@ def _compact(session: Session, api, *, force: bool = False) -> bool:
         _notify_compact(session, "done")
 
 
-def compact_session(session: Session, client: OpenAI | None = None) -> str:
+def _summary_response(session: Session, api, body: str):
+    messages = [
+        {"role": "system", "content": _COMPACT_INSTRUCTION},
+        {"role": "user", "content": body},
+    ]
+    if isinstance(api, AnthropicClient):
+        summary, response = api.complete_text(model=session.model, messages=messages)
+        response.choices = [SimpleNamespace(message=SimpleNamespace(content=summary))]
+        return response
+    return api.chat.completions.create(model=session.model, messages=messages)
+
+
+def compact_session(
+    session: Session, client: OpenAI | AnthropicClient | None = None
+) -> str:
     api = client or get_client()
     if _compact(session, api, force=True):
         _save_transcript(session)
@@ -791,7 +867,7 @@ def compact_session(session: Session, client: OpenAI | None = None) -> str:
 def run(
     user_message: str,
     session: Session,
-    client: OpenAI | None = None,
+    client: OpenAI | AnthropicClient | None = None,
     show_tools: bool = True,
     on_tool: Callable[[str, object], None] | None = None,
 ) -> str:
@@ -804,7 +880,7 @@ def run(
 
 def _complete(
     session: Session,
-    client: OpenAI | None,
+    client: OpenAI | AnthropicClient | None,
     show_tools: bool,
     on_tool: Callable[[str, object], None] | None,
 ) -> str:
@@ -814,15 +890,13 @@ def _complete(
         write_log({"event": "turn", "turn": turn}, session.workspace)
         _compact(session, api)
         try:
-            response = _request_completion(
-                api,
-                model=session.model,
-                messages=session.messages,
-                tools=session.skills.schemas(),
-            )
-            msg, usage = _consume_stream(session, response)
+            msg, usage = _completion(session, api)
         except APIConnectionError as exc:
             return _close_with(session, _api_failure(exc))
+        except APIStatusError as exc:
+            return _close_with(session, status_message(exc))
+        except CompletionError as exc:
+            return _close_with(session, str(exc))
         stored = assistant_message(msg)
         session.messages.append(stored)
         _remember_context(session, usage, api)

@@ -6,6 +6,9 @@ api_key = sk-...
 api_url = http://127.0.0.1:11434/v1
 model = qwen3.5-128k
 
+# provider = openai
+# max_tokens = 8192
+# context_limit = 200000
 # max_turns = 45
 # compact_at = 0.5
 # max_tool_result = 8000

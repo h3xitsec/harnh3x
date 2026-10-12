@@ -22,7 +22,7 @@ pipx install "git+https://github.com/h3xitsec/harn3x.git"
 
 - Python 3.14
 - [Poetry](https://python-poetry.org/)
-- An OpenAI-compatible chat API (OpenAI, Ollama, or another server that speaks the same protocol)
+- An OpenAI-compatible chat API (OpenAI, Ollama, or another server that speaks the same protocol), or Claude via the Anthropic Messages API
 - macOS, if you want the agent to run shell commands or Python. Those tools use Seatbelt and refuse to start when the sandbox cannot be applied.
 
 ## Setup
@@ -50,6 +50,14 @@ HARNH3X_MODEL=qwen3.5-128k
 `python-dotenv` loads a `.env` from the working directory when the process starts, without overriding variables that are already set. Do not commit that file. `--model` overrides the model.
 
 Startup exits with a short error when `api_key` or `api_url` is missing from both the config file and the environment.
+
+`provider` is `openai` by default. Set it to `anthropic` to call Claude's Messages API. The key is then `ANTHROPIC_API_KEY` when that variable is set, otherwise `api_key`. `OPENAI_API_KEY` does not override the Claude key. `api_url` is optional in that mode and defaults to `https://api.anthropic.com`. `max_tokens` (default 8192) is sent on every Messages call, including compaction. `context_limit` sets the window used for compaction; when it is unset, Claude uses 200000.
+
+```
+provider = anthropic
+api_key = sk-ant-...
+model = claude-sonnet-4-6
+```
 
 Other tunables use the same file: `max_turns`, `compact_at`, `max_tool_result`, `fetch_timeout`, `fetch_max_bytes`, `fetch_max_redirects`, `search_max_results`, `feed_max_items`, `shell_timeout`, `shell_max_timeout`, `list_files_max`, `search_files_max`, `pdf_max_pages`, `preview_rows`, `wikipedia_lang`, and `base_dir`. Each one also accepts `HARNH3X_` plus that name in uppercase, such as `HARNH3X_MAX_TURNS`. `base_dir` defaults to `~/.harnh3x`: sessions are created under `workspaces/` inside it, and `memory.md` sits next to that directory. `HARNH3X_CONFIG` points at a different file; an empty value skips the file.
 
