@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
-from textual.events import Key
+from textual.events import Click, Key
 from textual.screen import ModalScreen, Screen
 from textual.content import Content
 from textual.widgets import Markdown, OptionList, Static, TextArea
@@ -38,7 +38,9 @@ Commands
 Hotkeys
   Shift+Enter  new line
   Ctrl+N       new session
-  Ctrl+T       expand or collapse thinking
+  Click        expand or collapse a thinking box
+  Ctrl+T       expand or collapse the latest thinking
+  Ctrl+H       hide or show thinking, tools, and compaction
   Ctrl+Q       quit"""
 
 
@@ -63,19 +65,29 @@ def wrap_lines(text: str, width: int) -> list[str]:
     return lines
 
 
-def thinking_hint(*, expanded: bool, hold: bool) -> str:
+def thinking_hint(*, expanded: bool, hold: bool, click: bool = False) -> str:
     action = "collapse" if expanded else "expand"
-    hint = f"ctrl+t to {action}"
+    control = "click" if click else "ctrl+t"
+    hint = f"{control} to {action}"
     if hold:
         hint += " · enter to close"
     return hint
 
 
-def thinking_shown(reasoning: str, *, expanded: bool, width: int) -> list[str]:
+def _thinking_wrapped(reasoning: str, *, width: int) -> tuple[list[str], str]:
     limit = line_limit(width)
     indent = "  " if limit > 2 else ""
     body_limit = max(limit - len(indent), 1)
-    wrapped = wrap_lines(reasoning, body_limit)
+    return wrap_lines(reasoning, body_limit), indent
+
+
+def thinking_overflows(reasoning: str, *, width: int) -> bool:
+    wrapped, _indent = _thinking_wrapped(reasoning, width=width)
+    return len(wrapped) > THINKING_ROWS
+
+
+def thinking_shown(reasoning: str, *, expanded: bool, width: int) -> list[str]:
+    wrapped, indent = _thinking_wrapped(reasoning, width=width)
     shown = wrapped if expanded else wrapped[-THINKING_ROWS:]
     return [f"{indent}{line}" for line in shown]
 
@@ -117,6 +129,7 @@ class Turn:
     tools: list[tuple[str, object]]
     reasoning: str
     answer: str | None
+    steps: tuple = ()
 
 
 def _turn_tools(span: list) -> list[tuple[str, object]]:
@@ -198,6 +211,60 @@ def compact_label(compaction: Compaction) -> str:
     return header
 
 
+def _call_steps(message: dict) -> tuple:
+    calls = []
+    for call in message.get("tool_calls") or []:
+        if not isinstance(call, dict):
+            continue
+        function = call.get("function")
+        if not isinstance(function, dict):
+            continue
+        name = function.get("name")
+        if not isinstance(name, str):
+            name = ""
+        calls.append((name, displayed_args(function.get("arguments"))))
+    return tuple(calls)
+
+
+def _assistant_steps(message: dict, answer: str | None, *, is_final: bool) -> list:
+    reasoning = message.get("reasoning")
+    if not isinstance(reasoning, str):
+        reasoning = ""
+    content = message.get("content")
+    if not isinstance(content, str):
+        content = ""
+    calls = _call_steps(message)
+    steps = []
+    if reasoning and (content or calls or reasoning != (answer or "")):
+        steps.append(("thinking", reasoning))
+    if content:
+        steps.append(("answer", content))
+    elif not calls and reasoning and reasoning == (answer or ""):
+        steps.append(("answer", reasoning))
+    elif is_final and not calls and not reasoning and not content and answer:
+        steps.append(("answer", answer))
+    if calls:
+        steps.append(("tools", calls))
+    return steps
+
+
+def _span_steps(span: list, answer: str | None) -> list:
+    final = None
+    for message in span:
+        if (
+            isinstance(message, dict)
+            and message.get("role") == "assistant"
+            and not _call_steps(message)
+        ):
+            final = message
+    steps = []
+    for message in span:
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        steps.extend(_assistant_steps(message, answer, is_final=message is final))
+    return steps
+
+
 def transcript_items(messages: list) -> list[tuple]:
     items: list[tuple] = []
     index = 0
@@ -239,7 +306,13 @@ def transcript_items(messages: list) -> list[tuple]:
         items.append(
             (
                 "turn",
-                Turn(user, _turn_tools(span), reasoning, answer),
+                Turn(
+                    user,
+                    _turn_tools(span),
+                    reasoning,
+                    answer,
+                    tuple(_span_steps(span, answer)),
+                ),
             )
         )
     return items
@@ -267,7 +340,7 @@ def reply_reasoning(session, start: int, answer: str) -> str:
 
 class Thinking(Static):
     def __init__(self, reasoning: str, *, hold: bool) -> None:
-        super().__init__("", markup=False, classes="panel")
+        super().__init__("", markup=False, classes="panel trace")
         self.reasoning = reasoning
         self.expanded = False
         self.hold = hold
@@ -280,8 +353,18 @@ class Thinking(Static):
     def on_resize(self, event) -> None:
         self._sync(event.size.width or 80)
 
+    def on_click(self, event: Click) -> None:
+        event.stop()
+        self.toggle()
+
     def toggle(self) -> None:
+        if not self._expandable:
+            return
         self.expanded = not self.expanded
+        self._sync(self.size.width or 80)
+
+    def append(self, text: str) -> None:
+        self.reasoning += text
         self._sync(self.size.width or 80)
 
     def _inner_width(self, outer: int) -> int:
@@ -292,13 +375,24 @@ class Thinking(Static):
         return max(outer - horizontal, 1)
 
     def _sync(self, width: int) -> None:
+        inner = self._inner_width(width)
+        self._expandable = thinking_overflows(self.reasoning, width=inner)
+        if not self._expandable:
+            self.expanded = False
         self.border_title = "Thinking"
-        self.border_subtitle = thinking_hint(expanded=self.expanded, hold=self.hold)
+        if self._expandable:
+            self.border_subtitle = thinking_hint(
+                expanded=self.expanded, hold=self.hold, click=True
+            )
+        elif self.hold:
+            self.border_subtitle = "enter to close"
+        else:
+            self.border_subtitle = ""
         self.plain = "\n".join(
             thinking_shown(
                 self.reasoning,
                 expanded=self.expanded,
-                width=self._inner_width(width),
+                width=inner,
             )
         )
         self.update(self.plain)
@@ -313,10 +407,22 @@ class AgentAnswer(Vertical):
         yield Static("Agent", markup=False)
         yield Markdown(self.source, open_links=False)
 
+    def on_mount(self) -> None:
+        self._refresh()
+
+    def append(self, text: str) -> None:
+        self.source += text
+        self._refresh()
+
+    def _refresh(self) -> None:
+        found = self.query(Markdown)
+        if found:
+            found.first().update(self.source)
+
 
 class ToolBox(Static):
     def __init__(self) -> None:
-        super().__init__("", markup=False, classes="panel")
+        super().__init__("", markup=False, classes="panel trace")
         self.lines: list[str] = []
         self.border_title = "Tools"
 
@@ -598,6 +704,7 @@ class HarnessApp(App):
     BINDINGS = [
         Binding("ctrl+q", "quit", "Quit", priority=True),
         Binding("ctrl+t", "toggle_thinking", "Thinking", priority=True),
+        Binding("ctrl+h", "toggle_trace", "Details", priority=True),
         Binding("ctrl+n", "new_session", "New session", priority=True),
     ]
     CSS = """
@@ -622,6 +729,9 @@ class HarnessApp(App):
         color: $text-muted;
         height: auto;
     }
+    #transcript.details-hidden .trace {
+        display: none;
+    }
     AgentAnswer {
         height: auto;
     }
@@ -635,18 +745,22 @@ class HarnessApp(App):
         show_tools: bool = True,
         review: tuple | None = None,
         context_limit: Callable[[str], int | None] | None = None,
+        initial: str | None = None,
     ) -> None:
         super().__init__()
         self.session = session
         self._run = run
         self.show_tools = show_tools
         self.review = review
+        self.initial = initial
         self._context_limit = context_limit
         self.latest: Thinking | None = None
         self._shown_compactions: list[Compaction] = []
         self._compacting: Static | None = None
         self._rendering = False
         self.tools: ToolBox | None = None
+        self._hold_close = False
+        self._reset_live()
 
     def _yolo(self) -> bool:
         return bool(getattr(self.session, "yolo", False))
@@ -696,7 +810,7 @@ class HarnessApp(App):
     def compose(self) -> ComposeResult:
         yield Static(self._banner(), id="banner", markup=False)
         yield VerticalScroll(id="transcript")
-        if self.review is None:
+        if self.review is None and self.initial is None:
             yield Composer()
 
     def on_mount(self) -> None:
@@ -708,15 +822,33 @@ class HarnessApp(App):
                 self._append_tool(name, args)
             self._finish(answer, reasoning, refocus=False)
             return
+        self.session.on_delta = self._queue_delta
         self.session.on_compact = self._on_compact
+        if self.initial:
+            self._append_user(self.initial)
+            self.run_worker(
+                lambda: self._turn(self.initial), thread=True, exclusive=True
+            )
+            return
         self.query_one(Composer).focus()
 
     def action_toggle_thinking(self) -> None:
         if self.latest is not None:
             self.latest.toggle()
 
+    def action_toggle_trace(self) -> None:
+        transcript = self.query_one("#transcript")
+        transcript.set_class(
+            "details-hidden" not in transcript.classes, "details-hidden"
+        )
+
     async def action_new_session(self) -> None:
-        if self.review is not None or self._run is None or len(self.screen_stack) > 1:
+        if (
+            self.review is not None
+            or self.initial is not None
+            or self._run is None
+            or len(self.screen_stack) > 1
+        ):
             return
         composer = self.query_one(Composer)
         if composer.disabled:
@@ -789,7 +921,7 @@ class HarnessApp(App):
     def _show_compacting(self) -> None:
         if self._compacting is not None:
             return
-        block = Static("Compacting context…", markup=False, classes="panel")
+        block = Static("Compacting context…", markup=False, classes="panel trace")
         block.border_title = "Context"
         self._compacting = block
         transcript = self.query_one("#transcript")
@@ -851,15 +983,13 @@ class HarnessApp(App):
                     self._mount_compact(item)
                     continue
                 self._append_user(item.user)
-                for name, args in item.tools:
-                    self._append_tool(name, args)
-                self._finish(item.answer, item.reasoning, refocus=False)
+                self._render_steps(item.steps)
         finally:
             self._shown_compactions = notes
             self._rendering = False
 
     def _mount_compact(self, compaction: Compaction) -> None:
-        block = Static(compaction.summary, markup=False, classes="panel")
+        block = Static(compaction.summary, markup=False, classes="panel trace")
         block.border_title = "Context compacted"
         change = compact_change(compaction.before, compaction.after)
         if change is not None:
@@ -881,7 +1011,7 @@ class HarnessApp(App):
         self._shown_compactions = notes
 
     def action_close(self) -> None:
-        if self.review is not None:
+        if self._hold_close or self.review is not None:
             self.exit()
 
     def transcript_plain(self) -> str:
@@ -895,8 +1025,69 @@ class HarnessApp(App):
                 parts.append(_static_text(child))
         return "\n".join(parts)
 
+    def _reset_live(self) -> None:
+        self._streamed = False
+        self._tools_open = False
+        self._reasoning_open = False
+        self._content_open = False
+        self._msg_reasoning = ""
+        self._msg_content = ""
+        self._live_thinking: Thinking | None = None
+        self._live_answer: AgentAnswer | None = None
+
+    def _queue_delta(self, kind: str, text: str) -> None:
+        self.call_from_thread(self._apply_delta, kind, text)
+
+    def _apply_delta(self, kind: str, text: str) -> None:
+        if not text:
+            return
+        self._streamed = True
+        self._tools_open = False
+        transcript = self.query_one("#transcript")
+        if kind == "reasoning":
+            if not self._reasoning_open:
+                self._reasoning_open = True
+                if not self._content_open:
+                    self._msg_reasoning = ""
+                    self._msg_content = ""
+                block = Thinking("", hold=False)
+                self._live_thinking = block
+                self.latest = block
+                transcript.mount(block)
+            assert self._live_thinking is not None
+            self._msg_reasoning += text
+            self._live_thinking.append(text)
+            self.latest = self._live_thinking
+        elif kind == "content":
+            if not self._content_open:
+                self._content_open = True
+                self._msg_content = ""
+                block = AgentAnswer("")
+                self._live_answer = block
+                transcript.mount(block)
+            assert self._live_answer is not None
+            self._msg_content += text
+            self._live_answer.append(text)
+        transcript.scroll_end(animate=False)
+
+    def _render_steps(self, steps: tuple) -> None:
+        transcript = self.query_one("#transcript")
+        for kind, payload in steps:
+            if kind == "thinking":
+                block = Thinking(payload, hold=False)
+                self.latest = block
+                transcript.mount(block)
+            elif kind == "answer":
+                transcript.mount(AgentAnswer(payload))
+            elif kind == "tools":
+                self.tools = None
+                for name, args in payload:
+                    self._append_tool(name, args)
+        transcript.scroll_end(animate=False)
+
     def _turn(self, text: str) -> None:
         start = len(getattr(self.session, "messages", []) or [])
+        self._reset_live()
 
         def on_tool(name: str, args: object) -> None:
             self.call_from_thread(self._append_tool, name, args)
@@ -908,10 +1099,7 @@ class HarnessApp(App):
             show_tools=self.show_tools,
             on_tool=on_tool if self.show_tools else None,
         )
-        reasoning = ""
-        if self.show_tools:
-            reasoning = reply_reasoning(self.session, start, answer)
-        self.call_from_thread(self._finish, answer, reasoning, True)
+        self.call_from_thread(self._after_turn, answer, start)
 
     def _append_user(self, text: str) -> None:
         self.tools = None
@@ -919,6 +1107,15 @@ class HarnessApp(App):
 
     def _append_tool(self, name: str, args: object) -> None:
         self._mount_new_compactions()
+        if not self._rendering and not self._tools_open:
+            self.tools = None
+            self._tools_open = True
+            self._reasoning_open = False
+            self._content_open = False
+            self._msg_reasoning = ""
+            self._msg_content = ""
+            self._live_thinking = None
+            self._live_answer = None
         transcript = self.query_one("#transcript")
         if self.tools is None:
             self.tools = ToolBox()
@@ -938,10 +1135,62 @@ class HarnessApp(App):
             transcript.mount(AgentAnswer(answer))
         transcript.scroll_end(animate=False)
         self._refresh_banner()
-        if refocus and self.review is None:
+        if refocus and self.review is None and self.initial is None:
             composer = self.query_one(Composer)
             composer.disabled = False
             composer.focus()
+
+    def _after_turn(self, answer: str, start: int) -> None:
+        if not self._streamed:
+            reasoning = ""
+            if self.show_tools:
+                reasoning = reply_reasoning(self.session, start, answer)
+            self._finish(answer, reasoning, refocus=self.initial is None)
+            self._maybe_hold(reasoning)
+            return
+        transcript = self.query_one("#transcript")
+        self._mount_new_compactions()
+        promoted = (
+            not self._msg_content
+            and bool(self._msg_reasoning)
+            and answer == self._msg_reasoning
+            and self._live_thinking is not None
+            and self._live_thinking.parent is not None
+        )
+        if promoted:
+            if self.latest is self._live_thinking:
+                self.latest = None
+            self._live_thinking.remove()
+            self._live_thinking = None
+            transcript.mount(AgentAnswer(answer))
+        elif answer and answer != self._msg_content:
+            transcript.mount(AgentAnswer(answer))
+        transcript.scroll_end(animate=False)
+        self._refresh_banner()
+        if self.initial is None and self.review is None:
+            composer = self.query_one(Composer)
+            composer.disabled = False
+            composer.focus()
+        held = bool(list(self.query(Thinking)))
+        self._maybe_hold("shown" if held else "")
+
+    def _maybe_hold(self, reasoning: str) -> None:
+        if self.initial is None:
+            return
+        if reasoning:
+            self._hold_close = True
+            for block in self.query(Thinking):
+                block.hold = True
+                block._sync(block.size.width or 80)
+            return
+        self.exit()
+
+
+class OneShotApp(HarnessApp):
+    BINDINGS = [
+        *HarnessApp.BINDINGS,
+        Binding("enter", "close", "Close", priority=True),
+    ]
 
 
 class ReviewApp(HarnessApp):
@@ -963,12 +1212,16 @@ class ReviewApp(HarnessApp):
         )
 
 
-def run_interactive(session, run: Callable, *, show_tools: bool) -> None:
-    HarnessApp(
+def run_interactive(
+    session, run: Callable, *, show_tools: bool, initial: str | None = None
+) -> None:
+    app_cls = OneShotApp if initial else HarnessApp
+    app_cls(
         session,
         run,
         show_tools=show_tools,
         context_limit=model_context_limit,
+        initial=initial,
     ).run()
 
 

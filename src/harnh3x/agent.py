@@ -8,8 +8,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
-from openai import APIConnectionError, APITimeoutError, OpenAI
+from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI
 
 import harnh3x.config as config
 from harnh3x.config import (
@@ -578,6 +579,147 @@ def _notify_compact(session: Session, phase: str) -> None:
         callback(phase)
 
 
+def _notify_delta(session: Session, kind: str, text: str) -> None:
+    if not isinstance(text, str) or text == "":
+        return
+    callback = getattr(session, "on_delta", None)
+    if callback is None:
+        return
+    callback(kind, text)
+    session._delta_open_line = not text.endswith("\n")
+
+
+def _rejects_stream_options(exc: APIStatusError) -> bool:
+    param = getattr(exc, "param", None)
+    if isinstance(param, str) and "stream_options" in param:
+        return True
+    text = str(exc).lower()
+    return "stream_options" in text or "include_usage" in text
+
+
+def _request_completion(api, **kwargs):
+    try:
+        return api.chat.completions.create(
+            stream=True,
+            stream_options={"include_usage": True},
+            **kwargs,
+        )
+    except APIConnectionError:
+        raise
+    except APIStatusError as exc:
+        if not _rejects_stream_options(exc):
+            raise
+        return api.chat.completions.create(stream=True, **kwargs)
+
+
+def _complete_message(response):
+    choices = getattr(response, "choices", None)
+    if not choices:
+        return None
+    return getattr(choices[0], "message", None)
+
+
+def _emit_complete(session: Session, message) -> None:
+    _notify_delta(session, "reasoning", _reasoning_text(message))
+    content = getattr(message, "content", None)
+    if isinstance(content, str):
+        _notify_delta(session, "content", content)
+
+
+def _delta_reasoning(delta) -> str:
+    for name in ("reasoning", "reasoning_content"):
+        value = getattr(delta, name, None)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+class _Draft:
+    def __init__(self) -> None:
+        self.content = ""
+        self.reasoning = ""
+        self.calls: dict[int, dict[str, str]] = {}
+        self.usage = None
+
+
+def _absorb_chunk(session: Session, draft: _Draft, chunk) -> None:
+    usage = getattr(chunk, "usage", None)
+    if usage is not None:
+        draft.usage = usage
+    choices = getattr(chunk, "choices", None) or []
+    if not choices:
+        return
+    delta = getattr(choices[0], "delta", None)
+    if delta is None:
+        return
+    reasoning = _delta_reasoning(delta)
+    if reasoning:
+        draft.reasoning += reasoning
+        _notify_delta(session, "reasoning", reasoning)
+    content = getattr(delta, "content", None)
+    if isinstance(content, str) and content:
+        draft.content += content
+        _notify_delta(session, "content", content)
+    for call in getattr(delta, "tool_calls", None) or []:
+        index = getattr(call, "index", None)
+        if not isinstance(index, int) or isinstance(index, bool):
+            index = 0
+        slot = draft.calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
+        call_id = getattr(call, "id", None)
+        if isinstance(call_id, str) and call_id:
+            slot["id"] += call_id
+        function = getattr(call, "function", None)
+        if function is None:
+            continue
+        name = getattr(function, "name", None)
+        if isinstance(name, str) and name:
+            slot["name"] += name
+        arguments = getattr(function, "arguments", None)
+        if isinstance(arguments, str) and arguments:
+            slot["arguments"] += arguments
+
+
+def _draft_message(draft: _Draft):
+    calls = []
+    for index in sorted(draft.calls):
+        slot = draft.calls[index]
+        if not slot["id"] and not slot["name"] and not slot["arguments"]:
+            continue
+        calls.append(
+            SimpleNamespace(
+                id=slot["id"],
+                type="function",
+                function=SimpleNamespace(
+                    name=slot["name"], arguments=slot["arguments"]
+                ),
+            )
+        )
+    return SimpleNamespace(
+        content=draft.content,
+        reasoning=draft.reasoning,
+        tool_calls=calls or None,
+    )
+
+
+def _consume_stream(session: Session, response):
+    message = _complete_message(response)
+    if message is not None:
+        _emit_complete(session, message)
+        return message, response
+    draft = _Draft()
+
+    def absorb(stream) -> None:
+        for chunk in stream:
+            _absorb_chunk(session, draft, chunk)
+
+    if hasattr(response, "__enter__") and hasattr(response, "__exit__"):
+        with response as stream:
+            absorb(stream)
+    else:
+        absorb(response)
+    return _draft_message(draft), SimpleNamespace(usage=draft.usage)
+
+
 def _compact(session: Session, api, *, force: bool = False) -> bool:
     if session.context_limit is None:
         limit = model_context_limit(session.model, api)
@@ -672,17 +814,18 @@ def _complete(
         write_log({"event": "turn", "turn": turn}, session.workspace)
         _compact(session, api)
         try:
-            response = api.chat.completions.create(
+            response = _request_completion(
+                api,
                 model=session.model,
                 messages=session.messages,
                 tools=session.skills.schemas(),
             )
+            msg, usage = _consume_stream(session, response)
         except APIConnectionError as exc:
             return _close_with(session, _api_failure(exc))
-        msg = response.choices[0].message
         stored = assistant_message(msg)
         session.messages.append(stored)
-        _remember_context(session, response, api)
+        _remember_context(session, usage, api)
         write_log(
             {"event": "model", "turn": turn, "message": _log_preview(stored)},
             session.workspace,
@@ -706,6 +849,9 @@ def _complete(
                 if on_tool is not None:
                     on_tool(tc.function.name, shown)
                 else:
+                    if getattr(session, "_delta_open_line", False):
+                        print()
+                        session._delta_open_line = False
                     print(f"  🔧 {tc.function.name}({shown})")
             write_log(
                 {

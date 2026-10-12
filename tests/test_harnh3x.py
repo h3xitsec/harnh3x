@@ -34,12 +34,15 @@ from harnh3x.tools import _tool_result, execute_tool
 from harnh3x.tui import (
     YOLO_PLAIN,
     YOLO_TITLE,
+    AgentAnswer,
     HarnessApp,
     HelpScreen,
     ModelApp,
     ResumeOptions,
     ResumeScreen,
     ReviewApp,
+    Thinking,
+    ToolBox,
     context_line,
     conversation_turns,
     transcript_items,
@@ -207,6 +210,181 @@ def test_run_sends_reasoning_back(tmp_path):
     assert assistant["reasoning"] == "need the file"
     assert assistant["content"] == ""
     assert session.messages[2]["reasoning"] == "need the file"
+
+
+def _delta(**fields):
+    usage = fields.pop("usage", None)
+    return SimpleNamespace(
+        choices=[SimpleNamespace(delta=SimpleNamespace(**fields))],
+        usage=usage,
+    )
+
+
+def _usage_chunk(total: int):
+    return SimpleNamespace(choices=[], usage=SimpleNamespace(total_tokens=total))
+
+
+def test_run_streams_deltas_into_one_message(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent, "model_context_limit", lambda model, client=None: None)
+    seen = []
+    (tmp_path / "a.txt").write_text("body")
+
+    def create(**kwargs):
+        assert kwargs["stream"] is True
+        assert kwargs["stream_options"] == {"include_usage": True}
+        if len(seen) == 0:
+            seen.append(kwargs["messages"])
+            return [
+                _delta(reasoning="need "),
+                _delta(reasoning_content="the file"),
+                _delta(
+                    tool_calls=[
+                        SimpleNamespace(
+                            index=0,
+                            id="call_1",
+                            function=SimpleNamespace(name="read_", arguments=""),
+                        )
+                    ]
+                ),
+                _delta(
+                    tool_calls=[
+                        SimpleNamespace(
+                            index=0,
+                            id=None,
+                            function=SimpleNamespace(
+                                name="file", arguments='{"path": "'
+                            ),
+                        )
+                    ]
+                ),
+                _delta(
+                    tool_calls=[
+                        SimpleNamespace(
+                            index=0,
+                            id=None,
+                            function=SimpleNamespace(name=None, arguments='a.txt"}'),
+                        )
+                    ]
+                ),
+                _usage_chunk(42),
+            ]
+        seen.append(kwargs["messages"])
+        return [
+            _delta(content="all "),
+            _delta(content="set"),
+            _usage_chunk(50),
+        ]
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    session = agent.Session(workspace=tmp_path)
+    deltas = []
+    session.on_delta = lambda kind, text: deltas.append((kind, text))
+
+    text = agent.run("read a.txt", session, client=client)
+
+    assert text == "all set"
+    assert deltas == [
+        ("reasoning", "need "),
+        ("reasoning", "the file"),
+        ("content", "all "),
+        ("content", "set"),
+    ]
+    stored = session.messages[2]
+    assert stored["reasoning"] == "need the file"
+    assert stored["content"] == ""
+    assert stored["tool_calls"] == [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "read_file", "arguments": '{"path": "a.txt"}'},
+        }
+    ]
+    assert session.context_tokens == 50
+    assistant = next(msg for msg in seen[1] if msg["role"] == "assistant")
+    assert assistant["reasoning"] == "need the file"
+
+
+def test_run_emits_a_whole_message_once(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent, "model_context_limit", lambda model, client=None: None)
+    deltas = []
+
+    def create(**kwargs):
+        assert kwargs["stream"] is True
+        message = SimpleNamespace(content="ready", reasoning="think", tool_calls=None)
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=message)],
+            usage=SimpleNamespace(total_tokens=7),
+        )
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    session = agent.Session(workspace=tmp_path)
+    session.on_delta = lambda kind, text: deltas.append((kind, text))
+
+    assert agent.run("hi", session, client=client) == "ready"
+    assert deltas == [("reasoning", "think"), ("content", "ready")]
+    assert session.context_tokens == 7
+
+
+def test_run_retries_when_stream_options_are_rejected(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent, "model_context_limit", lambda model, client=None: None)
+    calls = []
+
+    def create(**kwargs):
+        calls.append("stream_options" in kwargs)
+        if "stream_options" in kwargs:
+            raise _status_error("unknown parameter stream_options")
+        message = SimpleNamespace(content="ok", tool_calls=None)
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    session = agent.Session(workspace=tmp_path)
+
+    assert agent.run("hi", session, client=client) == "ok"
+    assert calls == [True, False]
+
+
+def test_run_drops_a_partial_stream_when_the_api_drops(tmp_path):
+    def create(**kwargs):
+        def chunks():
+            yield _delta(content="partial")
+            raise _unreachable("connection")
+
+        return chunks()
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    session = agent.Session(workspace=tmp_path)
+    seen = []
+    session.on_delta = lambda kind, text: seen.append((kind, text))
+
+    text = agent.run("hello", session, client=client)
+
+    assert text == "Could not reach the API."
+    assert seen == [("content", "partial")]
+    assert [message["role"] for message in session.messages] == [
+        "system",
+        "user",
+        "assistant",
+    ]
+    assert session.messages[-1] == {"role": "assistant", "content": text}
+
+
+def _status_error(message: str):
+    import httpx2
+    from openai import BadRequestError
+
+    response = httpx2.Response(
+        400,
+        request=httpx2.Request("POST", "http://127.0.0.1:9/v1/chat/completions"),
+    )
+    return BadRequestError(message, response=response, body=None)
 
 
 def test_run_returns_reasoning_when_content_is_empty(tmp_path):
@@ -1112,6 +1290,7 @@ def test_compact_session_forces_a_summary_under_the_threshold(tmp_path):
     def create(**kwargs):
         phases.append("create")
         assert not kwargs.get("tools")
+        assert "stream" not in kwargs
         return _completion("forced summary", 10)
 
     client = SimpleNamespace(
@@ -1896,6 +2075,41 @@ def test_query_shows_a_collapsed_thinking_panel(monkeypatch, capsys, tmp_path):
     assert "Agent: final answer" in output
 
 
+def test_plain_stdout_streams_tokens_before_the_turn_returns(
+    monkeypatch, capsys, tmp_path
+):
+    cli = _load_cli()
+    monkeypatch.setattr(cli, "_tty", lambda: False)
+    monkeypatch.setattr(agent, "model_context_limit", lambda model, client=None: None)
+    monkeypatch.setattr(
+        cli,
+        "Session",
+        lambda **kwargs: agent.Session(workspace=tmp_path, **kwargs),
+    )
+    mid = {}
+
+    def create(**kwargs):
+        def chunks():
+            yield _delta(reasoning="alpha ")
+            mid["out"] = capsys.readouterr().out
+            yield _delta(content="done")
+
+        return chunks()
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    monkeypatch.setattr(agent, "get_client", lambda: client)
+
+    cli.main(["fix the notes"])
+
+    assert "alpha" in mid["out"]
+    assert "done" not in mid["out"]
+    output = capsys.readouterr().out
+    assert "Agent: done" in output
+    assert "ctrl+t" not in output
+
+
 def test_answer_only_hides_the_thinking_panel(monkeypatch, capsys, tmp_path):
     cli = _load_cli()
     messages = []
@@ -2098,6 +2312,29 @@ def test_transcript_items_keep_compaction_notes_in_order():
     assert [turn.user for turn in conversation_turns(messages)] == [
         "What tools do you have"
     ]
+    past = transcript_items(
+        [
+            {"role": "user", "content": "fix the notes"},
+            {
+                "role": "assistant",
+                "content": "",
+                "reasoning": "alpha\nbeta\ngamma\ndelta",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "load_skill",
+                            "arguments": '{"name": "file_ops"}',
+                        },
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "loaded"},
+            {"role": "assistant", "content": "### **Done**"},
+        ]
+    )
+    assert [step[0] for step in past[0][1].steps] == ["thinking", "tools", "answer"]
 
 
 def test_compacting_indicator_shows_and_hides():
@@ -2227,6 +2464,7 @@ def test_help_command_lists_commands_and_hotkeys():
             assert "Shift+Enter" in shown
             assert "Ctrl+N" in shown
             assert "Ctrl+T" in shown
+            assert "Ctrl+H" in shown
             assert "Ctrl+Q" in shown
             await pilot.press("escape")
             await pilot.pause()
@@ -2543,6 +2781,92 @@ def test_ctrl_t_reveals_the_head_of_the_thinking_text():
     asyncio.run(drive())
 
 
+def test_click_toggles_the_thinking_box_that_was_hit():
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+    app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+    first = Thinking("alpha\nbeta\ngamma\ndelta", hold=False)
+    second = Thinking("one\ntwo\nthree\nfour", hold=False)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            app.query_one("#transcript").mount(first, second)
+            await pilot.pause()
+            assert "click to expand" in (first.border_subtitle or "")
+            assert "alpha" not in first.plain
+            assert "one" not in second.plain
+            await pilot.click(first)
+            assert "alpha" in first.plain
+            assert "click to collapse" in (first.border_subtitle or "")
+            assert "one" not in second.plain
+            await pilot.click(second)
+            assert "four" in second.plain
+            assert "one" in second.plain
+            assert first.expanded
+            await pilot.click(first)
+            assert "alpha" not in first.plain
+            assert second.expanded
+
+    asyncio.run(drive())
+
+
+def test_ctrl_h_hides_thinking_tools_and_compaction():
+    from textual.widgets import Static
+
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+    app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+    thinking = Thinking("alpha\nbeta\ngamma\ndelta", hold=False)
+    tools = ToolBox()
+    tools.add("read_file", {"path": "a.txt"})
+    compact = Static("kept the plan", markup=False, classes="panel trace")
+    compact.border_title = "Context compacted"
+    note = Static("You: hello", markup=False)
+    answer = AgentAnswer("done")
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            transcript = app.query_one("#transcript")
+            transcript.mount(note, thinking, tools, compact, answer)
+            await pilot.pause()
+            assert thinking.display
+            await pilot.press("ctrl+h")
+            assert not thinking.display
+            assert not tools.display
+            assert not compact.display
+            assert note.display
+            assert answer.display
+            later = Thinking("one\ntwo\nthree\nfour", hold=False)
+            transcript.mount(later)
+            await pilot.pause()
+            assert not later.display
+            await pilot.press("ctrl+h")
+            assert thinking.display
+            assert tools.display
+            assert compact.display
+            assert later.display
+            assert note.display
+            assert answer.display
+
+    asyncio.run(drive())
+
+
+def test_short_thinking_hides_the_expand_hint():
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+    app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+    short = Thinking("alpha\nbeta\ngamma", hold=False)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            app.query_one("#transcript").mount(short)
+            await pilot.pause()
+            assert "click" not in str(short.border_subtitle or "")
+            assert "alpha" in short.plain
+            await pilot.click(short)
+            assert not short.expanded
+            assert "click" not in str(short.border_subtitle or "")
+
+    asyncio.run(drive())
+
+
 def test_tool_callback_line_shows_in_the_transcript():
     session = SimpleNamespace(workspace="ws", model="m", messages=[])
 
@@ -2566,6 +2890,56 @@ def test_tool_callback_line_shows_in_the_transcript():
 
     asyncio.run(drive())
     assert "🔧 load_skill({'name': 'file_ops'})" in captured["plain"]
+
+
+def test_deltas_show_before_the_turn_returns():
+    import time
+
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+    holder = {}
+    errors = []
+
+    def fake_run(message, active, show_tools=True, on_tool=None):
+        app = holder["app"]
+        try:
+            active.on_delta("reasoning", "alpha\nbeta\ngamma\n")
+            active.on_delta("reasoning", "delta")
+            plain = ""
+            for _ in range(40):
+                plain = app.transcript_plain()
+                if "delta" in plain and "alpha" not in plain:
+                    break
+                time.sleep(0.05)
+            else:
+                raise AssertionError(plain)
+            on_tool("read_file", {"path": "a.txt"})
+            active.on_delta("content", "Do")
+            active.on_delta("content", "ne")
+            for _ in range(40):
+                plain = app.transcript_plain()
+                if "Agent: Done" in plain and "read_file" in plain:
+                    break
+                time.sleep(0.05)
+            else:
+                raise AssertionError(plain)
+            assert plain.index("delta") < plain.index("read_file")
+            assert plain.index("read_file") < plain.index("Agent: Done")
+        except Exception as exc:
+            errors.append(exc)
+            return "Done"
+        errors.append(None)
+        return "Done"
+
+    app = HarnessApp(session, fake_run, show_tools=True)
+    holder["app"] = app
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press(*"hello", "enter")
+            await _wait_for(pilot, lambda: "Agent: Done" in app.transcript_plain())
+
+    asyncio.run(drive())
+    assert errors == [None]
 
 
 def test_agent_answer_renders_markdown():

@@ -20,7 +20,6 @@ from harnh3x.tui import (
     pick_model,
     reply_reasoning,
     run_interactive,
-    run_review,
     thinking_text,
     transcript_items,
     wrap_lines,
@@ -151,12 +150,21 @@ def _print_turns(session, *, answer_only: bool) -> None:
             continue
         turn = item
         print(f"\nYou: {turn.user}")
-        if not answer_only:
-            _print_tools(turn.tools)
-        if turn.answer is None:
+        if answer_only:
+            if turn.answer is not None:
+                _present(turn.answer, "", answer_only=True)
             continue
-        reasoning = "" if answer_only else turn.reasoning
-        _present(turn.answer, reasoning, answer_only=answer_only)
+        for kind, payload in turn.steps:
+            if kind == "thinking":
+                panel = format_thinking(
+                    payload, expanded=False, width=terminal_width(), hold=False
+                )
+                sys.stdout.write(f"\n{panel}\n")
+                sys.stdout.flush()
+            elif kind == "tools":
+                _print_tools(payload)
+            elif kind == "answer":
+                _present(payload, "", answer_only=False)
 
 
 def _choose_session(sessions: list):
@@ -231,6 +239,75 @@ def _present(answer: str, reasoning: str, *, answer_only: bool) -> None:
     sys.stdout.flush()
 
 
+class _LiveReply:
+    def __init__(self, *, answer_only: bool) -> None:
+        self.answer_only = answer_only
+        self.saw = False
+        self.reasoning = ""
+        self.content = ""
+        self._agent = False
+
+    def __call__(self, kind: str, text: str) -> None:
+        self.saw = True
+        if kind == "reasoning":
+            self.reasoning += text
+            if self.answer_only:
+                return
+            sys.stdout.write(f"\x1b[2m{text}\x1b[0m")
+            sys.stdout.flush()
+            return
+        if kind != "content":
+            return
+        self.content += text
+        if not self.answer_only and not self._agent:
+            if self.reasoning and not self.reasoning.endswith("\n"):
+                sys.stdout.write("\n")
+            sys.stdout.write("\nAgent: ")
+            self._agent = True
+        sys.stdout.write(text)
+        sys.stdout.flush()
+
+
+def _finish_live(
+    live: _LiveReply, answer: str, reasoning: str, *, answer_only: bool
+) -> None:
+    if not live.saw:
+        _present(answer, reasoning, answer_only=answer_only)
+        return
+    if answer_only:
+        if not live.content:
+            sys.stdout.write(answer)
+        shown = live.content or answer
+        if not shown.endswith("\n"):
+            sys.stdout.write("\n")
+        sys.stdout.flush()
+        return
+    if live.content:
+        if not live.content.endswith("\n"):
+            sys.stdout.write("\n")
+        sys.stdout.flush()
+        return
+    if live.reasoning and answer == live.reasoning:
+        if not live.reasoning.endswith("\n"):
+            sys.stdout.write("\n")
+        sys.stdout.flush()
+        return
+    _present(answer, "", answer_only=False)
+
+
+def _run_printed(session, text: str, *, show_tools: bool, answer_only: bool) -> None:
+    live = _LiveReply(answer_only=answer_only)
+    previous = getattr(session, "on_delta", None)
+    session.on_delta = live
+    start = len(getattr(session, "messages", []) or [])
+    try:
+        answer = run(text, session, show_tools=show_tools)
+    finally:
+        session.on_delta = previous
+    reasoning = "" if answer_only else reply_reasoning(session, start, answer)
+    _finish_live(live, answer, reasoning, answer_only=answer_only)
+
+
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     require_api_settings()
@@ -239,34 +316,16 @@ def main(argv: list[str] | None = None) -> None:
     use_tui = _tty() and not args.answer_only
     if args.query is not None:
         if use_tui:
-            tools: list[tuple[str, object]] = []
-
-            def on_tool(name: str, args_text: object) -> None:
-                tools.append((name, args_text))
-
-            start = len(getattr(session, "messages", []) or [])
-            response = run(
-                args.query,
-                session,
-                show_tools=show_tools,
-                on_tool=on_tool,
-            )
-            reasoning = reply_reasoning(session, start, response)
-            if reasoning:
-                run_review(session, args.query, tools, reasoning, response)
-                return
-            _print_session(session, answer_only=False)
-            _print_tools(tools)
-            _present(response, "", answer_only=False)
+            run_interactive(session, run, show_tools=show_tools, initial=args.query)
             return
 
         _print_session(session, answer_only=args.answer_only)
-        start = len(getattr(session, "messages", []) or [])
-        response = run(args.query, session, show_tools=show_tools)
-        reasoning = (
-            "" if args.answer_only else reply_reasoning(session, start, response)
+        _run_printed(
+            session,
+            args.query,
+            show_tools=show_tools,
+            answer_only=args.answer_only,
         )
-        _present(response, reasoning, answer_only=args.answer_only)
         return
 
     if use_tui:
@@ -287,12 +346,12 @@ def main(argv: list[str] | None = None) -> None:
             if _handle_command(session, *command, answer_only=args.answer_only):
                 break
             continue
-        start = len(session.messages)
-        response = run(user_input, session, show_tools=show_tools)
-        reasoning = (
-            "" if args.answer_only else reply_reasoning(session, start, response)
+        _run_printed(
+            session,
+            user_input,
+            show_tools=show_tools,
+            answer_only=args.answer_only,
         )
-        _present(response, reasoning, answer_only=args.answer_only)
 
 
 if __name__ == "__main__":
