@@ -60,6 +60,22 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--project",
+        metavar="PATH",
+        help=(
+            "Grant sandboxed read, write, and shell access to this existing "
+            "directory. The session workspace stays separate."
+        ),
+    )
+    parser.add_argument(
+        "--coding",
+        action="store_true",
+        help=(
+            "Start a coding session in the --project directory. "
+            "Uses a coding system prompt and that project's Cursor rules."
+        ),
+    )
+    parser.add_argument(
         "--model",
         nargs="?",
         const="",
@@ -141,6 +157,11 @@ def _print_session(session, *, answer_only: bool) -> None:
     if getattr(session, "yolo", False):
         print(YOLO_PLAIN)
     print(f"Workspace: {session.workspace}")
+    project = getattr(session, "project", None)
+    if project:
+        print(f"Project: {project}")
+    if getattr(session, "coding", False):
+        print("Coding")
     print(f"Model: {session.model}")
 
 
@@ -316,8 +337,18 @@ def _run_printed(session, text: str, *, show_tools: bool, answer_only: bool) -> 
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
+    if args.coding and not args.project:
+        raise SystemExit("--coding requires --project")
     require_api_settings()
-    session = Session(model=resolve_model(args.model), yolo=args.yolo)
+    try:
+        session = Session(
+            model=resolve_model(args.model),
+            yolo=args.yolo,
+            project=args.project,
+            coding=args.coding,
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     show_tools = not args.answer_only
     use_tui = _tty() and not args.answer_only
     if args.query is not None:

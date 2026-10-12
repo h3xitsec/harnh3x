@@ -48,6 +48,9 @@ DENIED_COMMANDS = {"rm", "mv", "chmod", "sudo"}
 _yolo: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "harnh3x_yolo", default=False
 )
+_project: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
+    "harnh3x_project", default=None
+)
 # shell=False does not interpret these; refuse them so a model cannot smuggle a chain or redirect.
 SHELL_META = set("><|&;`$")
 # Directories that list_files and search_files never descend into.
@@ -707,32 +710,70 @@ def cap_result(text: str, limit: int = MAX_TOOL_RESULT, hint: str = "") -> str:
     return text[:keep] + marker
 
 
-def resolve_in_workspace(workspace: Path, raw: str) -> Path:
-    return _resolve_path(workspace, raw, allow_outside=False)
+def resolve_in_workspace(
+    workspace: Path, raw: str, *, include_project: bool = True
+) -> Path:
+    return _resolve_path(
+        workspace, raw, allow_outside=False, include_project=include_project
+    )
 
 
 def resolve_readable(workspace: Path, raw: str) -> Path:
     return _resolve_path(workspace, raw, allow_outside=_yolo.get())
 
 
-def _resolve_path(workspace: Path, raw: str, *, allow_outside: bool) -> Path:
+def _resolve_path(
+    workspace: Path, raw: str, *, allow_outside: bool, include_project: bool = True
+) -> Path:
     if not isinstance(raw, str) or not raw.strip():
         raise ValueError("path is required")
-    root = workspace.resolve()
     path = Path(raw)
     if not path.is_absolute():
-        path = root / path
+        path = _relative_base(workspace, include_project=include_project) / path
     resolved = path.resolve()
-    if not allow_outside and not resolved.is_relative_to(root):
-        raise ValueError("outside workspace")
-    return resolved
+    if allow_outside or _inside_roots(
+        workspace, resolved, include_project=include_project
+    ):
+        return resolved
+    raise ValueError("outside workspace")
+
+
+def _granted_project() -> Path | None:
+    project = _project.get()
+    if project is None:
+        return None
+    return project.resolve()
+
+
+def _relative_base(workspace: Path, *, include_project: bool) -> Path:
+    project = _granted_project() if include_project else None
+    if project is not None:
+        return project
+    return workspace.resolve()
+
+
+def _inside_roots(workspace: Path, path: Path, *, include_project: bool) -> bool:
+    roots = [workspace.resolve()]
+    if include_project:
+        project = _granted_project()
+        if project is not None:
+            roots.append(project)
+    return any(path.is_relative_to(root) for root in roots)
 
 
 def _relative(workspace: Path, path: Path) -> str:
-    try:
-        return str(path.relative_to(workspace.resolve()))
-    except ValueError:
-        return str(path)
+    resolved = path.resolve()
+    bases = []
+    project = _granted_project()
+    if project is not None:
+        bases.append(project)
+    bases.append(workspace.resolve())
+    for base in bases:
+        try:
+            return str(resolved.relative_to(base))
+        except ValueError:
+            continue
+    return str(resolved)
 
 
 def _positive_int(raw, name: str, default: int) -> int:
@@ -1079,19 +1120,21 @@ def _stdin_arg(raw) -> str | None:
 def _run_process(
     argv: list[str], workspace: Path, timeout: int, stdin: str | None
 ) -> str:
+    project = _project.get()
+    cwd = project if project is not None else workspace
     if _yolo.get():
         command = argv
         env = os.environ.copy()
     else:
         try:
-            command, env = sandboxed_argv(argv, workspace)
+            command, env = sandboxed_argv(argv, workspace, project)
         except ValueError as exc:
             return f"Error: {exc}"
     try:
         completed = subprocess.run(
             command,
             shell=False,
-            cwd=workspace,
+            cwd=cwd,
             env=env,
             capture_output=True,
             text=True,
@@ -1302,13 +1345,13 @@ def _write_fetched(workspace: Path, url: str, path_arg) -> tuple[Path, int, str]
     parsed = validate_url(url)
     path = None
     if path_arg is not None:
-        path = resolve_in_workspace(workspace, path_arg)
+        path = resolve_in_workspace(workspace, path_arg, include_project=False)
     status, media, body = _checked_get(url)
     if path is None:
         relative = default_download_path(
             url.strip(), parsed.hostname or "page", FETCH_TYPES[media]
         )
-        path = resolve_in_workspace(workspace, relative)
+        path = resolve_in_workspace(workspace, relative, include_project=False)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(body)
     return path, status, media
@@ -2320,8 +2363,16 @@ TOOL_FNS = {
 }
 
 
-def execute_tool(name: str, args: dict, workspace: Path, *, yolo: bool = False) -> str:
-    token = _yolo.set(yolo)
+def execute_tool(
+    name: str,
+    args: dict,
+    workspace: Path,
+    *,
+    yolo: bool = False,
+    project: Path | None = None,
+) -> str:
+    yolo_token = _yolo.set(yolo)
+    project_token = _project.set(project)
     try:
         fn = TOOL_FNS.get(name)
         if fn is None:
@@ -2333,11 +2384,18 @@ def execute_tool(name: str, args: dict, workspace: Path, *, yolo: bool = False) 
         except OSError as exc:
             return f"Error: {exc}"
     finally:
-        _yolo.reset(token)
+        _project.reset(project_token)
+        _yolo.reset(yolo_token)
 
 
 def _tool_result(
-    name: str, arguments: str, workspace: Path, registry=None, *, yolo: bool = False
+    name: str,
+    arguments: str,
+    workspace: Path,
+    registry=None,
+    *,
+    yolo: bool = False,
+    project: Path | None = None,
 ) -> tuple[dict | None, str]:
     try:
         args = json.loads(arguments)
@@ -2346,5 +2404,5 @@ def _tool_result(
     if not isinstance(args, dict):
         return None, "Error: tool arguments must be an object"
     if registry is None:
-        return args, execute_tool(name, args, workspace, yolo=yolo)
-    return args, registry.execute(name, args, workspace, yolo=yolo)
+        return args, execute_tool(name, args, workspace, yolo=yolo, project=project)
+    return args, registry.execute(name, args, workspace, yolo=yolo, project=project)

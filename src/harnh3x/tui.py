@@ -770,6 +770,11 @@ class HarnessApp(App):
         if self.review is None:
             lines.append(f"🤖 Harnh3x {__version__}")
         lines.append(f"Workspace: {self.session.workspace}")
+        project = getattr(self.session, "project", None)
+        if project:
+            lines.append(f"Project: {project}")
+        if getattr(self.session, "coding", False):
+            lines.append("Coding")
         lines.append(f"Model: {self.session.model}")
         context = context_line(
             getattr(self.session, "context_tokens", None),

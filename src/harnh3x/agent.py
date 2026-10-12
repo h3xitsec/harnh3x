@@ -22,6 +22,7 @@ from harnh3x.config import (
     TRANSCRIPT_FILE,
 )
 from harnh3x.prompt import system_prompt
+from harnh3x.rules import append_matching_rules, format_rules, load_project_rules
 from harnh3x.skills import SkillRegistry
 from harnh3x.tools import _tool_result
 
@@ -169,6 +170,43 @@ def _session_workspace(workspace: Path | str | None) -> Path:
     return path
 
 
+def _bind_project(raw: Path | str, workspace: Path) -> Path:
+    path = _expand(raw).resolve()
+    if path == Path("/") or any(char in str(path) for char in '()"\\\n\x00'):
+        raise ValueError("project path is not allowed")
+    if not path.is_dir():
+        raise ValueError(f"project must be an existing directory: {path}")
+    root = workspace.resolve()
+    if path.is_relative_to(root) or root.is_relative_to(path):
+        raise ValueError("project must not overlap the session workspace")
+    return path
+
+
+def _stored_project(data: dict, workspace: Path) -> Path | None:
+    if "project" not in data or data["project"] is None:
+        return None
+    raw = data["project"]
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("Cannot resume: invalid project")
+    try:
+        return _bind_project(raw, workspace)
+    except ValueError as exc:
+        raise ValueError(f"Cannot resume: {exc}") from exc
+
+
+def _stored_coding(data: dict, project: Path | None) -> bool:
+    if "coding" not in data:
+        return False
+    raw = data["coding"]
+    if raw is False:
+        return False
+    if raw is True:
+        if project is None:
+            raise ValueError("Cannot resume: coding session has no project")
+        return True
+    raise ValueError("Cannot resume: invalid coding")
+
+
 class Session:
     def __init__(
         self,
@@ -176,50 +214,65 @@ class Session:
         model: str | None = None,
         *,
         yolo: bool = False,
+        project: Path | str | None = None,
+        coding: bool = False,
     ):
         self.workspace = _session_workspace(workspace)
         self.model = model or MODEL
         self.yolo = yolo
-        self.skills = SkillRegistry(yolo=yolo)
+        self.project = (
+            None if project is None else _bind_project(project, self.workspace)
+        )
+        if coding and self.project is None:
+            raise ValueError("--coding requires --project")
+        self.coding = coding
+        self.skills = SkillRegistry(yolo=yolo, project=self.project)
+        self.applied_rules: set[str] = set()
         self.context_tokens: int | None = None
         self.context_limit: int | None = None
         self.on_compact: Callable[[str], None] | None = None
-        self.messages: list[dict] = [
-            {
-                "role": "system",
-                "content": system_prompt(
-                    self.workspace, self.skills.get_menu(), yolo=self.yolo
-                ),
-            }
-        ]
+        self.messages: list[dict] = [self._system_message()]
+
+    def _system_message(self) -> dict:
+        rules = ""
+        if self.coding:
+            rules = format_rules(load_project_rules(self.project))
+        return {
+            "role": "system",
+            "content": system_prompt(
+                self.workspace,
+                self.skills.get_menu(),
+                yolo=self.yolo,
+                project=self.project,
+                rules=rules,
+                coding=self.coding,
+            ),
+        }
 
     def reset(self) -> None:
         self.workspace = _session_workspace(_workspaces_dir() / str(uuid.uuid4()))
-        self.skills = SkillRegistry(yolo=self.yolo)
+        if self.project is not None:
+            self.project = _bind_project(self.project, self.workspace)
+        self.skills = SkillRegistry(yolo=self.yolo, project=self.project)
+        self.applied_rules = set()
         self.context_tokens = None
-        self.messages = [
-            {
-                "role": "system",
-                "content": system_prompt(
-                    self.workspace, self.skills.get_menu(), yolo=self.yolo
-                ),
-            }
-        ]
+        self.messages = [self._system_message()]
 
     def sync_prompt(self) -> None:
-        self.messages[0]["content"] = system_prompt(
-            self.workspace, self.skills.get_menu(), yolo=self.yolo
-        )
+        self.messages[0]["content"] = self._system_message()["content"]
 
     def resume(self, workspace: Path) -> None:
         path = _expand(workspace).resolve()
         data = _read_transcript(path / TRANSCRIPT_FILE)
         self.workspace = path
+        self.project = _stored_project(data, path)
+        self.coding = _stored_coding(data, self.project)
         self.model = data["model"]
         self.messages = data["messages"]
         self.context_tokens = _stored_context_tokens(data)
         self.context_limit = None
-        self.skills = SkillRegistry(yolo=self.yolo)
+        self.skills = SkillRegistry(yolo=self.yolo, project=self.project)
+        self.applied_rules = set()
         _replay_skills(self)
         _load_saved_skills(self, data)
         self.sync_prompt()
@@ -382,6 +435,10 @@ def _save_transcript(session: Session) -> None:
     loaded = session.skills.loaded_names()
     if loaded:
         payload["skills"] = loaded
+    if session.project is not None:
+        payload["project"] = str(session.project)
+    if session.coding:
+        payload["coding"] = True
     temporary = path.with_name(f".{TRANSCRIPT_FILE}.tmp")
     temporary.write_text(
         json.dumps(payload, ensure_ascii=False) + "\n",
@@ -915,7 +972,12 @@ def _complete(
                 session.workspace,
                 session.skills,
                 yolo=session.yolo,
+                project=session.project,
             )
+            if session.coding:
+                result = append_matching_rules(
+                    session.project, args, result, session.applied_rules
+                )
             if tc.function.name in {"load_skill", "unload_skill"} and args is not None:
                 session.sync_prompt()
             if show_tools:

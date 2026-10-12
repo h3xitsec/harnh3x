@@ -6,3 +6,4 @@ workspaces/
 *.egg-info/
 build/
 harnh3x.conf.dev
+.harnh3x/

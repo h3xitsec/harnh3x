@@ -1,6 +1,6 @@
 # Harnh3x
 
-A AI harness: an OpenAI-compatible chat loop with tools confined to one workspace. Each session gets its own directory under `~/.harnh3x/workspaces/`, a `transcript.json` you can resume, and a JSONL `session.log`. Facts saved with the memory skill live in `~/.harnh3x/memory.md`, shared by every session.
+A AI harness: an OpenAI-compatible chat loop with tools confined to one workspace. Each session gets its own directory under `~/.harnh3x/workspaces/`, a `transcript.json` you can resume, and a JSONL `session.log`. `--project` grants that same access to one extra folder while the session directory stays put. Facts saved with the memory skill live in `~/.harnh3x/memory.md`, shared by every session.
 
 On a terminal it runs a Textual interface. Piped input and `--answer-only` stay plain stdout.
 
@@ -79,13 +79,21 @@ poetry run harnh3x --answer-only "What is 17 * 43?"
 poetry run harnh3x --model gpt-4.1 "List the files here"
 poetry run harnh3x --model
 poetry run harnh3x --yolo
+poetry run harnh3x --project ~/Github/my-project
+poetry run harnh3x --coding --project ~/Github/my-project
 ```
 
 `--model` with a name selects that model. `--model` alone lists models from the API: a Textual picker on a tty, a numbered prompt otherwise.
 
-`--yolo` turns off the macOS Seatbelt sandbox for that process. The header’s first line is `YOLO — sandbox off` in bright yellow, and plain output prints the same warning before the workspace. The agent can read any file and run any command, including `sudo`. Writes, edits, deletes, and moves through the file tools still stay in the workspace. `--answer-only` does not print the warning.
+`--project PATH` grants sandboxed read, write, and shell access to an existing directory. The path is expanded and must not be `/` or overlap the session workspace. Relative tool paths and the shell working directory use that folder. Absolute paths may also use the session workspace. Downloads, plans, and the transcript stay in the session directory. The grant is stored in `transcript.json` and restored by `/resume`. A new session in the same process (Ctrl+N) keeps it. Plain output and the header print `Project:` when one is set.
 
-A new session prints its workspace path. Files the agent writes, downloads, and notes all stay in that directory.
+`--coding` requires `--project` and starts a coding session in that folder. The system prompt is a coding agent: read the project before changing it, load the coding skill before editing source, make the smallest change, and confirm the paths. The flag is stored in `transcript.json` and restored by `/resume`. Ctrl+N keeps it. A resumed transcript with no `coding` value clears it. Plain output and the header print `Coding` on the line after `Project:`.
+
+Cursor rules in `<project>/.cursor/rules/**/*.mdc` load only in a coding session. Rules with `alwaysApply: true` are in the system prompt. Other rules are listed there by description. A rule with `globs` is appended once, the first time a file tool uses a matching project path. A rule with only a description is read from that file when the description matches the task.
+
+`--yolo` turns off the macOS Seatbelt sandbox for that process. The header’s first line is `YOLO — sandbox off` in bright yellow, and plain output prints the same warning before the workspace. The agent can read any file and run any command, including `sudo`. Writes, edits, deletes, and moves through the file tools still stay in the workspace, or in the project when `--project` is set. `--answer-only` does not print the warning.
+
+A new session prints its workspace path. Files the agent writes, downloads, and notes all stay in that directory unless `--project` points them at the granted folder.
 
 ### Interactive session
 
@@ -104,7 +112,7 @@ Enter submits. Shift+Enter inserts a newline.
 | `/compact` | Summarize older turns now |
 | `/exit` | Quit |
 
-The header title is Harnh3x followed by the package version, then the workspace, the model, and how much of the context window the last completion used. With `--yolo` the header’s first line is `YOLO — sandbox off` in bright yellow, and that mark stays for a new session or a resumed transcript. Tool calls for a turn share one box. The thinking box keeps the last three lines until you expand it. When the history is compacted, the transcript shows a compaction note and then the answer as Markdown.
+The header title is Harnh3x followed by the package version, then the workspace, the project when one is set, Coding when the session is a coding session, the model, and how much of the context window the last completion used. With `--yolo` the header’s first line is `YOLO — sandbox off` in bright yellow, and that mark stays for a new session or a resumed transcript. Tool calls for a turn share one box. The thinking box keeps the last three lines until you expand it. When the history is compacted, the transcript shows a compaction note and then the answer as Markdown.
 
 One-shot on a tty, when the model returned reasoning, waits for Enter before the process exits.
 
@@ -114,7 +122,7 @@ Without a tty (piped input, or `--answer-only`), the same commands work as plain
 
 Nothing is loaded at the start. The system prompt names the date, the OS, a one-line listing of the workspace, and any saved memory keys, then a menu of skills. The model calls `load_skill` before it can use that skill's tools, and can keep several skills loaded. `unload_skill` drops one. Only the loaded tools, plus those two, are sent on the next completion.
 
-Tool paths stay inside the session workspace. Shell and Python run with `shell=False`, a short allowlist of environment variables, and a macOS Seatbelt profile that can read and write only that workspace (plus the OS and Python runtime). Network is denied for those processes. `rm`, `mv`, `chmod`, and `sudo` are rejected before the process starts. `--yolo` skips that sandbox and those command checks, and lets read tools open any path. Pipes and redirects stay blocked. File mutation tools stay in the workspace.
+Tool paths stay inside the session workspace, plus the `--project` directory when one is granted. Shell and Python run with `shell=False`, a short allowlist of environment variables, and a macOS Seatbelt profile that can read and write only that workspace and the project (plus the OS and Python runtime). `HOME` and the temp directory stay on the session workspace. Network is denied for those processes. `rm`, `mv`, `chmod`, and `sudo` are rejected before the process starts. `--yolo` skips that sandbox and those command checks, and lets read tools open any path. Pipes and redirects stay blocked. File mutation tools stay in the workspace or the project.
 
 Web and API tools run in the parent process. They accept only public `http` and `https` URLs, follow redirects with the same check, and cap body size and time.
 
@@ -131,7 +139,7 @@ Each session directory holds:
 
 | File | Role |
 | --- | --- |
-| `transcript.json` | Model, messages, loaded skills, and the last token count. Replaced atomically. |
+| `transcript.json` | Model, messages, loaded skills, the project path when one is granted, and the last token count. Replaced atomically. |
 | `session.log` | One JSON object per line: model turns, tool calls, tool results, and compactions. |
 | `plan.md` | Checklist for multi-step work. |
 

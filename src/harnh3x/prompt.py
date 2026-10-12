@@ -12,6 +12,27 @@ YOLO_NOTE = (
 )
 
 
+def project_note(project: Path) -> str:
+    return (
+        f"A project folder is granted at {project}. "
+        "Relative paths and the shell working directory use the project. "
+        "Absolute paths may also use the session workspace. "
+        "Downloads and plans stay in the workspace."
+    )
+
+
+def yolo_note(project: Path | None = None) -> str:
+    if project is None:
+        return YOLO_NOTE
+    return (
+        "Yolo mode is on. The seatbelt sandbox is off. "
+        "read_file and the other read tools may use any filesystem path. "
+        "run_shell and run_python may run any program, including sudo, and may read or write any path. "
+        "write_file, edit_file, append_file, delete_file, move_file, and run_script "
+        f"stay inside the workspace or the project at {project}."
+    )
+
+
 def _memory_line(keys: list[str]) -> str:
     if not keys:
         return "No saved memories yet. Load the memory skill to keep facts the user wants remembered."
@@ -22,22 +43,53 @@ def _memory_line(keys: list[str]) -> str:
 
 
 def system_prompt(
-    workspace: Path, menu: str, now: datetime | None = None, *, yolo: bool = False
+    workspace: Path,
+    menu: str,
+    now: datetime | None = None,
+    *,
+    yolo: bool = False,
+    project: Path | None = None,
+    rules: str = "",
+    coding: bool = False,
 ) -> str:
     moment = now or datetime.now().astimezone()
     today = moment.strftime("%A, %B %d, %Y, %H:%M %Z").rstrip()
-    note = f"\n{YOLO_NOTE}\n" if yolo else ""
-    return f"""You are a helpful personal assistant.
-Today is {today}. The host runs {platform.system()}. Your workspace is {workspace}.
+    note = f"\n{yolo_note(project)}\n" if yolo else ""
+    rules_block = f"{rules}\n" if rules else ""
+    if project is None:
+        project_line = ""
+        code_home = "the workspace"
+    else:
+        project_line = (
+            f" Your project is {project}. Relative paths and the shell working directory use the project."
+            " Downloads, plans, and this session's notes stay in the workspace."
+        )
+        code_home = "the project"
+    header = f"""Today is {today}. The host runs {platform.system()}. Your workspace is {workspace}.{project_line}
 {workspace_listing(workspace)}
-{_memory_line(memory_keys())}
-Call load_skill before using a capability. Several skills can stay loaded at once; unload a skill only when you are sure you will not need it again.
+{_memory_line(memory_keys())}"""
+    skills = """Call load_skill before using a capability. Several skills can stay loaded at once; unload a skill only when you are sure you will not need it again.
 A skill name is not a tool. After loading a skill, call one of the tools listed for it.
 Use the tool interface. Do not write a tool call as JSON in your reply.
-If a tool returns an error, tell the user the error. Do not guess.
+If a tool returns an error, tell the user the error. Do not guess."""
+    if coding:
+        return f"""You are a coding agent working in a granted project.
+{header}
+Read the project before you change it, and match the code already there.
+{skills}
+Load the coding skill before you read or change source. Load file_ops to list or search, and shell to run a command in the project. Use the python skill only to compute an answer.
+When a job takes several steps, load the tasks skill, write a plan, and work through it.
+Follow the project rules in this prompt. When a listed rule has no globs, read that .mdc file if its description matches the task.
+Make the smallest change that does the job. Prefer editing an existing file over rewriting it.
+Always confirm what you changed, including the paths.
+{note}
+{rules_block}{menu}"""
+    return f"""You are a helpful personal assistant.
+{header}
+{skills}
 Answer from sources you have read: search snippets are not answers, so read the pages that matter before answering, and cite them.
 When a job takes several steps, load the tasks skill, write a plan, and work through it.
-When the user asks for a program, script, or code change, load the coding skill and write it to a file in the workspace. Use the python skill only to compute an answer.
+When the user asks for a program, script, or code change, load the coding skill and write it to a file in {code_home}. Use the python skill only to compute an answer.
 Always confirm what you did after completing a task.
 {note}
-{menu}"""
+{rules_block}{menu}"""
