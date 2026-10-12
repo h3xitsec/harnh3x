@@ -79,7 +79,7 @@ def _subpath(path: Path) -> str:
     return f'(subpath "{text}")'
 
 
-def _read_roots(workspace: Path) -> list[Path]:
+def _read_roots(workspace: Path, project: Path | None = None) -> list[Path]:
     found: list[Path] = []
     seen: set[Path] = set()
 
@@ -95,14 +95,23 @@ def _read_roots(workspace: Path) -> list[Path]:
     add(sys.base_prefix)
     add(sys.prefix)
     add(workspace)
+    if project is not None:
+        add(project)
     return found
 
 
-def seatbelt_profile(workspace: Path) -> str:
+def seatbelt_profile(workspace: Path, project: Path | None = None) -> str:
     root = workspace.resolve()
+    granted = None if project is None else project.resolve()
+    write_roots = [root]
+    if granted is not None and granted != root:
+        write_roots.append(granted)
     # exec needs to read the root directory itself. literal "/" does not
     # grant access to anything inside it.
-    reads = '(literal "/") ' + " ".join(_subpath(path) for path in _read_roots(root))
+    reads = '(literal "/") ' + " ".join(
+        _subpath(path) for path in _read_roots(root, granted)
+    )
+    writes = " ".join(_subpath(path) for path in write_roots)
     devices = " ".join(f'(literal "{device}")' for device in _DEVICES)
     return "\n".join(
         [
@@ -118,14 +127,14 @@ def seatbelt_profile(workspace: Path) -> str:
             '(allow file-ioctl (literal "/dev/null"))',
             f"(allow file-read-data {devices})",
             f"(allow file-read* file-map-executable {reads})",
-            f"(allow file-write* {_subpath(root)})",
+            f"(allow file-write* {writes})",
             "(deny network*)",
         ]
     )
 
 
 def sandboxed_argv(
-    argv: list[str], workspace: Path
+    argv: list[str], workspace: Path, project: Path | None = None
 ) -> tuple[list[str], dict[str, str]]:
     if sys.platform != "darwin":
         raise ValueError("sandbox is unavailable")
@@ -135,5 +144,5 @@ def sandboxed_argv(
     env = {key: os.environ[key] for key in _ENV_KEEP if key in os.environ}
     env["HOME"] = str(root)
     env["TMPDIR"] = str(tmp)
-    env[PROFILE_ENV] = seatbelt_profile(root)
+    env[PROFILE_ENV] = seatbelt_profile(root, project)
     return [sys.executable, "-I", "-c", RUNNER, *argv], env

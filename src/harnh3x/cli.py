@@ -17,6 +17,7 @@ from harnh3x.tui import (
     YOLO_PLAIN,
     compact_label,
     conversation_turns,
+    debug_text,
     line_limit,
     pick_model,
     reply_reasoning,
@@ -58,6 +59,27 @@ def build_parser() -> argparse.ArgumentParser:
             "Disable the seatbelt sandbox. The agent can read any file "
             "and run any command, including sudo."
         ),
+    )
+    parser.add_argument(
+        "--project",
+        metavar="PATH",
+        help=(
+            "Grant sandboxed read, write, and shell access to this existing "
+            "directory. The session workspace stays separate."
+        ),
+    )
+    parser.add_argument(
+        "--coding",
+        action="store_true",
+        help=(
+            "Start a coding session in the --project directory. "
+            "Uses a coding system prompt and that project's Cursor rules."
+        ),
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help=("Show the system prompt and the request sent on each completion."),
     )
     parser.add_argument(
         "--model",
@@ -108,6 +130,10 @@ def format_thinking(reasoning: str, *, expanded: bool, width: int, hold: bool) -
     )
 
 
+def format_debug(title: str, body: str, *, width: int) -> str:
+    return "\x1b[36m" + debug_text(title, body, expanded=False, width=width) + "\x1b[0m"
+
+
 def terminal_width() -> int:
     return shutil.get_terminal_size(fallback=(80, 24)).columns or 80
 
@@ -141,6 +167,13 @@ def _print_session(session, *, answer_only: bool) -> None:
     if getattr(session, "yolo", False):
         print(YOLO_PLAIN)
     print(f"Workspace: {session.workspace}")
+    project = getattr(session, "project", None)
+    if project:
+        print(f"Project: {project}")
+    if getattr(session, "coding", False):
+        print("Coding")
+    if getattr(session, "debug", False):
+        print("Debug")
     print(f"Model: {session.model}")
 
 
@@ -232,6 +265,14 @@ def _handle_command(session, name: str, rest: str, *, answer_only: bool) -> bool
     return False
 
 
+def _print_debug(system: str | None, request: str) -> None:
+    width = terminal_width()
+    if system is not None:
+        sys.stdout.write(f"\n{format_debug('System', system, width=width)}\n")
+    sys.stdout.write(f"\n{format_debug('Request', request, width=width)}\n")
+    sys.stdout.flush()
+
+
 def _present(answer: str, reasoning: str, *, answer_only: bool) -> None:
     sys.stdout.write(
         format_reply(
@@ -316,10 +357,23 @@ def _run_printed(session, text: str, *, show_tools: bool, answer_only: bool) -> 
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
+    if args.coding and not args.project:
+        raise SystemExit("--coding requires --project")
     require_api_settings()
-    session = Session(model=resolve_model(args.model), yolo=args.yolo)
+    try:
+        session = Session(
+            model=resolve_model(args.model),
+            yolo=args.yolo,
+            project=args.project,
+            coding=args.coding,
+            debug=args.debug and not args.answer_only,
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     show_tools = not args.answer_only
     use_tui = _tty() and not args.answer_only
+    if getattr(session, "debug", False) and not use_tui:
+        session.on_debug = _print_debug
     if args.query is not None:
         if use_tui:
             run_interactive(session, run, show_tools=show_tools, initial=args.query)
