@@ -16,6 +16,9 @@ load_dotenv()
 MEMORY_FILE = "memory.md"
 PLAN_FILE = "plan.md"
 TRANSCRIPT_FILE = "transcript.json"
+ANTHROPIC_API_URL = "https://api.anthropic.com"
+ANTHROPIC_CONTEXT_LIMIT = 200_000
+_PROVIDERS = {"openai", "anthropic"}
 
 
 class _Setting:
@@ -27,8 +30,11 @@ class _Setting:
 
 
 _SETTINGS = {
+    "provider": _Setting("PROVIDER", "HARNH3X_PROVIDER", "openai", str),
     "api_key": _Setting("API_KEY", "OPENAI_API_KEY", None, str),
     "api_url": _Setting("API_URL", "OPENAI_BASE_URL", None, str),
+    "max_tokens": _Setting("MAX_TOKENS", "HARNH3X_MAX_TOKENS", 8192, int),
+    "context_limit": _Setting("CONTEXT_LIMIT", "HARNH3X_CONTEXT_LIMIT", None, int),
     "model": _Setting("MODEL", "HARNH3X_MODEL", "qwen3.5-128k", str),
     "max_turns": _Setting("MAX_TURNS", "HARNH3X_MAX_TURNS", 45, int),
     "compact_at": _Setting("COMPACT_AT", "HARNH3X_COMPACT_AT", 0.5, float),
@@ -107,24 +113,74 @@ def resolve_settings(
     path: Path,
 ) -> dict[str, object]:
     resolved: dict[str, object] = {}
+    origins: dict[str, str] = {}
     for key, spec in _SETTINGS.items():
         env_raw = _present(environ.get(spec.env))
         if env_raw is not None:
             resolved[spec.attr] = _cast(spec.kind, env_raw, spec.env)
+            origins[spec.attr] = spec.env
             continue
         if key in file_values:
             raw, line = file_values[key]
-            resolved[spec.attr] = _cast(spec.kind, raw, f"{path}:{line}")
+            origin = f"{path}:{line}"
+            resolved[spec.attr] = _cast(spec.kind, raw, origin)
+            origins[spec.attr] = origin
             continue
         resolved[spec.attr] = spec.default
+    _apply_provider(resolved, origins, file_values, environ, path)
     return resolved
+
+
+def _apply_provider(
+    resolved: dict[str, object],
+    origins: dict[str, str],
+    file_values: Mapping[str, tuple[str, int]],
+    environ: Mapping[str, str],
+    path: Path,
+) -> None:
+    provider = resolved["PROVIDER"]
+    if not isinstance(provider, str) or provider not in _PROVIDERS:
+        origin = origins.get("PROVIDER", "provider")
+        raise SystemExit(f"{origin}: expected openai or anthropic")
+    _require_positive(resolved, origins, "MAX_TOKENS", "max_tokens")
+    _require_positive(resolved, origins, "CONTEXT_LIMIT", "context_limit")
+    if provider != "anthropic":
+        return
+    anthropic_key = _present(environ.get("ANTHROPIC_API_KEY"))
+    if anthropic_key is not None:
+        resolved["API_KEY"] = anthropic_key
+    elif origins.get("API_KEY") == "OPENAI_API_KEY":
+        if "api_key" in file_values:
+            raw, line = file_values["api_key"]
+            resolved["API_KEY"] = _cast(str, raw, f"{path}:{line}")
+        else:
+            resolved["API_KEY"] = None
+    if resolved["API_URL"] is None:
+        resolved["API_URL"] = ANTHROPIC_API_URL
+
+
+def _require_positive(
+    resolved: dict[str, object],
+    origins: dict[str, str],
+    attr: str,
+    label: str,
+) -> None:
+    value = resolved[attr]
+    if value is None:
+        return
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return
+    origin = origins.get(attr, label)
+    raise SystemExit(f"{origin}: must be a positive integer")
 
 
 def require_api_settings() -> None:
     missing: list[str] = []
+    anthropic = PROVIDER == "anthropic"
     if not API_KEY:
-        missing.append("api_key (OPENAI_API_KEY)")
-    if not API_URL:
+        key_env = "ANTHROPIC_API_KEY" if anthropic else "OPENAI_API_KEY"
+        missing.append(f"api_key ({key_env})")
+    if not anthropic and not API_URL:
         missing.append("api_url (OPENAI_BASE_URL)")
     if not missing:
         return
@@ -183,8 +239,11 @@ def _cast(kind: type, raw: str, origin: str) -> object:
 
 
 _loaded = load_settings()
+PROVIDER = _loaded["PROVIDER"]
 API_KEY = _loaded["API_KEY"]
 API_URL = _loaded["API_URL"]
+MAX_TOKENS = _loaded["MAX_TOKENS"]
+CONTEXT_LIMIT = _loaded["CONTEXT_LIMIT"]
 MODEL = _loaded["MODEL"]
 MAX_TURNS = _loaded["MAX_TURNS"]
 COMPACT_AT = _loaded["COMPACT_AT"]
