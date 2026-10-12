@@ -216,10 +216,14 @@ class Session:
         yolo: bool = False,
         project: Path | str | None = None,
         coding: bool = False,
+        debug: bool = False,
     ):
         self.workspace = _session_workspace(workspace)
         self.model = model or MODEL
         self.yolo = yolo
+        self.debug = debug
+        self.on_debug: Callable[[str | None, str], None] | None = None
+        self._debug_system: str | None = None
         self.project = (
             None if project is None else _bind_project(project, self.workspace)
         )
@@ -256,6 +260,7 @@ class Session:
         self.skills = SkillRegistry(yolo=self.yolo, project=self.project)
         self.applied_rules = set()
         self.context_tokens = None
+        self._debug_system = None
         self.messages = [self._system_message()]
 
     def sync_prompt(self) -> None:
@@ -273,6 +278,7 @@ class Session:
         self.context_limit = None
         self.skills = SkillRegistry(yolo=self.yolo, project=self.project)
         self.applied_rules = set()
+        self._debug_system = None
         _replay_skills(self)
         _load_saved_skills(self, data)
         self.sync_prompt()
@@ -720,6 +726,82 @@ def _request_completion(api, **kwargs):
         return api.chat.completions.create(stream=True, **kwargs)
 
 
+def _debug_text(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return ""
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _debug_args(arguments: object) -> str:
+    if isinstance(arguments, str):
+        try:
+            parsed = json.loads(arguments)
+        except json.JSONDecodeError:
+            return arguments
+        if isinstance(parsed, dict):
+            return json.dumps(parsed, ensure_ascii=False)
+        return arguments
+    if isinstance(arguments, dict):
+        return json.dumps(arguments, ensure_ascii=False)
+    return _debug_text(arguments)
+
+
+def _debug_message(message: dict) -> str:
+    role = message.get("role")
+    if not isinstance(role, str) or not role:
+        role = "message"
+    content = _debug_text(message.get("content"))
+    if role == "tool":
+        call_id = message.get("tool_call_id")
+        label = f"tool {call_id}" if isinstance(call_id, str) and call_id else "tool"
+        line = f"{label}: {content}".rstrip()
+        return line
+    lines = [f"{role}: {content}".rstrip()]
+    if role == "assistant":
+        for call in message.get("tool_calls") or []:
+            if not isinstance(call, dict):
+                continue
+            function = call.get("function")
+            if not isinstance(function, dict):
+                continue
+            name = function.get("name")
+            if not isinstance(name, str):
+                name = ""
+            lines.append(f"  {name}({_debug_args(function.get('arguments'))})")
+    return "\n".join(lines)
+
+
+def _format_debug_request(messages: list) -> str:
+    blocks = []
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") == "system":
+            continue
+        blocks.append(_debug_message(message))
+    return "\n\n".join(blocks)
+
+
+def _emit_debug(session: Session) -> None:
+    if not session.debug or session.on_debug is None:
+        return
+    messages = session.messages
+    system = ""
+    rest = messages
+    if (
+        messages
+        and isinstance(messages[0], dict)
+        and messages[0].get("role") == "system"
+    ):
+        content = messages[0].get("content")
+        system = content if isinstance(content, str) else _debug_text(content)
+        rest = messages[1:]
+    shown = system if system != session._debug_system else None
+    if shown is not None:
+        session._debug_system = system
+    session.on_debug(shown, _format_debug_request(rest))
+
+
 def _completion(session: Session, api):
     if isinstance(api, AnthropicClient):
         return api.stream_turn(
@@ -946,6 +1028,7 @@ def _complete(
     for turn in range(MAX_TURNS):
         write_log({"event": "turn", "turn": turn}, session.workspace)
         _compact(session, api)
+        _emit_debug(session)
         try:
             msg, usage = _completion(session, api)
         except APIConnectionError as exc:

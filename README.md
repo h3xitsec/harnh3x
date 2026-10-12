@@ -81,6 +81,7 @@ poetry run harnh3x --model
 poetry run harnh3x --yolo
 poetry run harnh3x --project ~/Github/my-project
 poetry run harnh3x --coding --project ~/Github/my-project
+poetry run harnh3x --debug
 ```
 
 `--model` with a name selects that model. `--model` alone lists models from the API: a Textual picker on a tty, a numbered prompt otherwise.
@@ -92,6 +93,8 @@ poetry run harnh3x --coding --project ~/Github/my-project
 Cursor rules in `<project>/.cursor/rules/**/*.mdc` load only in a coding session. Rules with `alwaysApply: true` are in the system prompt. Other rules are listed there by description. A rule with `globs` is appended once, the first time a file tool uses a matching project path. A rule with only a description is read from that file when the description matches the task.
 
 `--yolo` turns off the macOS Seatbelt sandbox for that process. The header’s first line is `YOLO — sandbox off` in bright yellow, and plain output prints the same warning before the workspace. The agent can read any file and run any command, including `sudo`. Writes, edits, deletes, and moves through the file tools still stay in the workspace, or in the project when `--project` is set. `--answer-only` does not print the warning.
+
+`--debug` shows the system prompt once at the start of the session, and again only when that prompt changes, plus the rest of each completion request. The panels match thinking and tool boxes and use cyan. Each one keeps the last three lines until you click it. Plain output prints the same blocks in cyan. The header and plain output print `Debug` on the line after `Coding`. The flag is not stored in the transcript. Ctrl+N and `/resume` keep it. `--answer-only` hides the panels. The compaction summary call is not shown.
 
 A new session prints its workspace path. Files the agent writes, downloads, and notes all stay in that directory unless `--project` points them at the granted folder.
 
@@ -111,7 +114,7 @@ Enter submits. Shift+Enter inserts a newline.
 | `/compact` | Summarize older turns now |
 | `/exit` | Quit |
 
-The header title is Harnh3x followed by the package version, then the workspace, the project when one is set, Coding when the session is a coding session, the model, and how much of the context window the last completion used. With `--yolo` the header’s first line is `YOLO — sandbox off` in bright yellow, and that mark stays for a new session or a resumed transcript. Tool calls for a turn share one box, which keeps the last three lines until you click it. The thinking box keeps the last three lines until you click it. Ctrl+H hides those with the thinking, tool, and compaction boxes. When the history is compacted, the transcript shows a compaction note and then the answer as Markdown.
+The header title is Harnh3x followed by the package version, then the workspace, the project when one is set, Coding when the session is a coding session, Debug when `--debug` is set, the model, and how much of the context window the last completion used. With `--yolo` the header’s first line is `YOLO — sandbox off` in bright yellow, and that mark stays for a new session or a resumed transcript. Tool calls for a turn share one box, which keeps the last three lines until you click it. The thinking box keeps the last three lines until you click it. With `--debug`, the first completion adds a cyan System box, and a later completion adds another only when the prompt changed. Every completion adds a cyan Request box. Both collapse the same way. Ctrl+H hides those with the thinking, tool, and compaction boxes. When the history is compacted, the transcript shows a compaction note and then the answer as Markdown.
 
 One-shot on a tty, when the model returned reasoning, waits for Enter before the process exits.
 

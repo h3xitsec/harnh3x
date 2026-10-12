@@ -39,7 +39,7 @@ Commands
 Hotkeys
   Shift+Enter  new line
   Ctrl+N       new session
-  Ctrl+H       hide or show thinking, tool calls, and compaction boxes
+  Ctrl+H       hide or show thinking, tool calls, debug, and compaction boxes
   Ctrl+Q       quit"""
 
 
@@ -426,6 +426,47 @@ class AgentAnswer(Vertical):
             found.first().update(self.source)
 
 
+class DebugBox(Static):
+    def __init__(self, title: str, body: str) -> None:
+        super().__init__("", markup=False, classes="panel trace debug")
+        self.title = title
+        self.body = body
+        self.expanded = False
+        self._sync(80)
+
+    def on_mount(self) -> None:
+        self._sync(self.size.width or 80)
+
+    def on_resize(self, event) -> None:
+        self._sync(event.size.width or 80)
+
+    def on_click(self, event: Click) -> None:
+        event.stop()
+        self.toggle()
+
+    def toggle(self) -> None:
+        if not self._expandable:
+            return
+        self.expanded = not self.expanded
+        self._sync(self.size.width or 80)
+
+    def _sync(self, width: int) -> None:
+        inner = _panel_inner_width(self, width)
+        self._expandable = thinking_overflows(self.body, width=inner)
+        if not self._expandable:
+            self.expanded = False
+        self.border_title = self.title
+        if self._expandable:
+            self.border_subtitle = thinking_hint(
+                expanded=self.expanded, hold=False, click=True
+            )
+        else:
+            self.border_subtitle = ""
+        self.update(
+            "\n".join(thinking_shown(self.body, expanded=self.expanded, width=inner))
+        )
+
+
 class ToolBox(Static):
     def __init__(self) -> None:
         super().__init__("", markup=False, classes="panel trace")
@@ -771,6 +812,10 @@ class HarnessApp(App):
     #transcript.details-hidden .trace {
         display: none;
     }
+    .panel.debug {
+        color: ansi_cyan;
+        border: round ansi_cyan;
+    }
     AgentAnswer {
         height: auto;
     }
@@ -813,6 +858,8 @@ class HarnessApp(App):
             lines.append(f"Project: {project}")
         if getattr(self.session, "coding", False):
             lines.append("Coding")
+        if getattr(self.session, "debug", False):
+            lines.append("Debug")
         lines.append(f"Model: {self.session.model}")
         context = context_line(
             getattr(self.session, "context_tokens", None),
@@ -867,6 +914,7 @@ class HarnessApp(App):
             return
         self.session.on_delta = self._queue_delta
         self.session.on_compact = self._on_compact
+        self.session.on_debug = self._queue_debug
         if self.initial:
             self._append_user(self.initial)
             self.run_worker(
@@ -1071,6 +1119,15 @@ class HarnessApp(App):
         self._msg_content = ""
         self._live_thinking: Thinking | None = None
         self._live_answer: AgentAnswer | None = None
+
+    def _queue_debug(self, system: str | None, request: str) -> None:
+        self.call_from_thread(self._show_debug, system, request)
+
+    def _show_debug(self, system: str | None, request: str) -> None:
+        transcript = self.query_one("#transcript")
+        if system is not None:
+            transcript.mount(DebugBox("System", system))
+        transcript.mount(DebugBox("Request", request))
 
     def _queue_delta(self, kind: str, text: str) -> None:
         self.call_from_thread(self._apply_delta, kind, text)

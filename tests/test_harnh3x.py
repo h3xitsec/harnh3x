@@ -906,6 +906,95 @@ def test_session_defaults_to_a_unique_workspace(tmp_path, monkeypatch):
     uuid.UUID(first.workspace.name)
     uuid.UUID(second.workspace.name)
 
+
+def test_debug_hook_reports_each_completion_and_stays_a_launch_flag(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("WORKSPACE", raising=False)
+    seen = []
+    calls = {"n": 0}
+
+    def create(**kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            message = SimpleNamespace(
+                content="",
+                tool_calls=[
+                    SimpleNamespace(
+                        id="call_1",
+                        function=SimpleNamespace(
+                            name="load_skill",
+                            arguments='{"name": "file_ops"}',
+                        ),
+                    )
+                ],
+            )
+            return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+        message = SimpleNamespace(content="done", tool_calls=None)
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    session = agent.Session(workspace=tmp_path / "ws", debug=True)
+    session.on_debug = lambda system, request: seen.append((system, request))
+
+    assert agent.run("read the notes", session, client=client) == "done"
+    assert agent.run("again", session, client=client) == "done"
+
+    assert len(seen) == 3
+    assert seen[0][1] == "user: read the notes"
+    assert "load_skill" not in seen[0][1]
+    assert "[loaded:" not in seen[0][0]
+    assert "[loaded:" in seen[1][0]
+    assert seen[1][0] == session.messages[0]["content"]
+    assert "user: read the notes" in seen[1][1]
+    assert 'load_skill({"name": "file_ops"})' in seen[1][1]
+    assert "tool call_1:" in seen[1][1]
+    assert seen[2][0] is None
+    assert "user: again" in seen[2][1]
+    saved = json.loads((session.workspace / TRANSCRIPT_FILE).read_text())
+    assert "debug" not in saved
+
+    session.reset()
+    assert session.debug is True
+    assert agent.run("fresh", session, client=client) == "done"
+    assert seen[-1][0] == session.messages[0]["content"]
+
+    past = tmp_path / "past"
+    _write_transcript(
+        past,
+        "saved-model",
+        [
+            {"role": "system", "content": "stale"},
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi"},
+        ],
+    )
+    session.resume(past)
+    assert session.debug is True
+    assert agent.run("resumed", session, client=client) == "done"
+    assert seen[-1][0] == session.messages[0]["content"]
+
+    quiet = []
+    plain = agent.Session(workspace=tmp_path / "plain")
+
+    def create_once(**kwargs):
+        message = SimpleNamespace(content="ok", tool_calls=None)
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    plain.on_debug = lambda system, request: quiet.append((system, request))
+    agent.run(
+        "hello",
+        plain,
+        client=SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=create_once))
+        ),
+    )
+    assert quiet == []
+
+
 def test_session_reset_starts_a_new_conversation(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("WORKSPACE", str(tmp_path / "pinned"))
@@ -1992,6 +2081,53 @@ def test_coding_option_requires_a_project_and_prints_the_mode(
     assert output.index(project_line) < output.index("\nCoding\n")
     assert "Agent: final answer" in output
 
+
+def test_debug_option_prints_the_request_and_hides_it_for_answer_only(
+    monkeypatch, capsys, tmp_path
+):
+    cli = _load_cli()
+    seen = {}
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
+    monkeypatch.setattr(cli, "terminal_width", lambda: 80)
+    monkeypatch.setattr(
+        cli,
+        "Session",
+        lambda **kwargs: seen.update(kwargs)
+        or SimpleNamespace(workspace=tmp_path, messages=[], **kwargs),
+    )
+
+    def fake_run(message, session, show_tools=True):
+        session.on_debug(
+            "\n".join(f"system-{index}" for index in range(6)),
+            f"user: {message}",
+        )
+        return "final answer"
+
+    monkeypatch.setattr(cli, "run", fake_run)
+
+    cli.main(["--debug", "fix the notes"])
+
+    assert seen["debug"] is True
+    output = capsys.readouterr().out
+    assert "\nDebug\n" in output
+    assert output.index("\nDebug\n") < output.index("\nModel:")
+    assert "\x1b[36m" in output
+    assert "System" in output
+    assert "Request" in output
+    assert "system-0" not in output
+    assert "system-5" in output
+    assert "user: fix the notes" in output
+    assert "Agent: final answer" in output
+
+    seen.clear()
+    monkeypatch.setattr(cli, "run", lambda *args, **kwargs: "final answer")
+    cli.main(["--debug", "--answer-only", "fix the notes"])
+
+    assert seen["debug"] is False
+    assert capsys.readouterr().out == "final answer\n"
+
+
 def test_answer_only_hides_the_yolo_warning(monkeypatch, capsys, tmp_path):
     cli = _load_cli()
     monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
@@ -2619,6 +2755,67 @@ def test_ctrl_q_quits_the_app():
             assert app._exit
 
     asyncio.run(drive())
+
+
+def test_debug_panels_collapse_and_hide():
+    system = "\n".join(f"system-{index}" for index in range(6))
+    request = "\n".join(f"request-{index}" for index in range(6))
+    session = SimpleNamespace(workspace="ws", model="m", messages=[], debug=True)
+
+    def fake_run(message, active, show_tools=True, on_tool=None):
+        active.on_debug(system, request)
+        active.on_debug(None, "user: later")
+        return "done"
+
+    app = HarnessApp(session, fake_run, show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            banner = str(app.query_one("#banner").content)
+            assert "\nDebug\n" in banner
+            await pilot.press(*"hi", "enter")
+            await _wait_for(pilot, lambda: "Agent: done" in app.transcript_plain())
+            boxes = list(app.query(".debug"))
+            assert [box.border_title for box in boxes] == [
+                "System",
+                "Request",
+                "Request",
+            ]
+            assert all("debug" in box.classes for box in boxes)
+            assert all(box.styles.color.ansi == 6 for box in boxes)
+            assert all(box.styles.border.top[1].ansi == 6 for box in boxes)
+            plain = app.transcript_plain()
+            assert plain.index("You: hi") < plain.index("System")
+            assert plain.index("System") < plain.index("Request")
+            assert plain.index("Request") < plain.index("Agent: done")
+            assert "system-0" not in plain
+            assert "system-5" in plain
+            assert "request-0" not in plain
+            assert "request-5" in plain
+            await pilot.press("ctrl+h")
+            await pilot.pause()
+            assert all(not box.display for box in boxes)
+
+    asyncio.run(drive())
+
+
+def test_debug_banner_stays_after_a_new_session(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("WORKSPACE", raising=False)
+    session = agent.Session(
+        workspace=tmp_path / "first", model="custom-model", debug=True
+    )
+    app = HarnessApp(session, lambda *args, **kwargs: "done", show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            assert "\nDebug\n" in str(app.query_one("#banner").content)
+            await pilot.press("ctrl+n")
+            assert "\nDebug\n" in str(app.query_one("#banner").content)
+            assert session.debug is True
+
+    asyncio.run(drive())
+
 
 def test_yolo_banner_stays_after_a_new_session(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)

@@ -17,6 +17,7 @@ from harnh3x.tui import (
     YOLO_PLAIN,
     compact_label,
     conversation_turns,
+    debug_text,
     line_limit,
     pick_model,
     reply_reasoning,
@@ -76,6 +77,11 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--debug",
+        action="store_true",
+        help=("Show the system prompt and the request sent on each completion."),
+    )
+    parser.add_argument(
         "--model",
         nargs="?",
         const="",
@@ -124,6 +130,10 @@ def format_thinking(reasoning: str, *, expanded: bool, width: int, hold: bool) -
     )
 
 
+def format_debug(title: str, body: str, *, width: int) -> str:
+    return "\x1b[36m" + debug_text(title, body, expanded=False, width=width) + "\x1b[0m"
+
+
 def terminal_width() -> int:
     return shutil.get_terminal_size(fallback=(80, 24)).columns or 80
 
@@ -162,6 +172,8 @@ def _print_session(session, *, answer_only: bool) -> None:
         print(f"Project: {project}")
     if getattr(session, "coding", False):
         print("Coding")
+    if getattr(session, "debug", False):
+        print("Debug")
     print(f"Model: {session.model}")
 
 
@@ -251,6 +263,14 @@ def _handle_command(session, name: str, rest: str, *, answer_only: bool) -> bool
     shown = f"/{name}" if name else "/"
     print(f"Unknown command: {shown}")
     return False
+
+
+def _print_debug(system: str | None, request: str) -> None:
+    width = terminal_width()
+    if system is not None:
+        sys.stdout.write(f"\n{format_debug('System', system, width=width)}\n")
+    sys.stdout.write(f"\n{format_debug('Request', request, width=width)}\n")
+    sys.stdout.flush()
 
 
 def _present(answer: str, reasoning: str, *, answer_only: bool) -> None:
@@ -346,11 +366,14 @@ def main(argv: list[str] | None = None) -> None:
             yolo=args.yolo,
             project=args.project,
             coding=args.coding,
+            debug=args.debug and not args.answer_only,
         )
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
     show_tools = not args.answer_only
     use_tui = _tty() and not args.answer_only
+    if getattr(session, "debug", False) and not use_tui:
+        session.on_debug = _print_debug
     if args.query is not None:
         if use_tui:
             run_interactive(session, run, show_tools=show_tools, initial=args.query)
