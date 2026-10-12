@@ -38,9 +38,8 @@ Commands
 Hotkeys
   Shift+Enter  new line
   Ctrl+N       new session
-  Click        expand or collapse a thinking box
   Ctrl+T       expand or collapse the latest thinking
-  Ctrl+H       hide or show thinking, tools, and compaction
+  Ctrl+H       hide or show thinking, tool calls, and compaction boxes
   Ctrl+Q       quit"""
 
 
