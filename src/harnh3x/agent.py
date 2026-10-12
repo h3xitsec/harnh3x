@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from openai import OpenAI
+from openai import APIConnectionError, APITimeoutError, OpenAI
 
 import harnh3x.config as config
 from harnh3x.config import (
@@ -37,9 +37,18 @@ def get_client() -> OpenAI:
     return _client
 
 
+def _api_failure(exc: APIConnectionError) -> str:
+    if isinstance(exc, APITimeoutError):
+        return "The API request timed out."
+    return "Could not reach the API."
+
+
 def list_models(client: OpenAI | None = None) -> list[str]:
     api = client or get_client()
-    names = {model.id for model in api.models.list() if getattr(model, "id", None)}
+    try:
+        names = {model.id for model in api.models.list() if getattr(model, "id", None)}
+    except APIConnectionError as exc:
+        raise SystemExit(_api_failure(exc)) from None
     return sorted(names)
 
 
@@ -662,11 +671,14 @@ def _complete(
     for turn in range(MAX_TURNS):
         write_log({"event": "turn", "turn": turn}, session.workspace)
         _compact(session, api)
-        response = api.chat.completions.create(
-            model=session.model,
-            messages=session.messages,
-            tools=session.skills.schemas(),
-        )
+        try:
+            response = api.chat.completions.create(
+                model=session.model,
+                messages=session.messages,
+                tools=session.skills.schemas(),
+            )
+        except APIConnectionError as exc:
+            return _close_with(session, _api_failure(exc))
         msg = response.choices[0].message
         stored = assistant_message(msg)
         session.messages.append(stored)
@@ -717,11 +729,15 @@ def _complete(
                 {"role": "tool", "tool_call_id": tc.id, "content": result}
             )
 
-    text = "Max turns reached."
+    return _close_with(session, "Max turns reached.", compact=api)
+
+
+def _close_with(session: Session, text: str, compact=None) -> str:
     session.messages.append({"role": "assistant", "content": text})
     write_log(
         {"event": "model", "message": {"role": "assistant", "content": text}},
         session.workspace,
     )
-    _compact(session, api)
+    if compact is not None:
+        _compact(session, compact)
     return text

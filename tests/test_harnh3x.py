@@ -237,6 +237,69 @@ def test_run_reports_an_empty_model_answer(tmp_path):
     )
 
 
+def _unreachable(kind: str):
+    import httpx2
+    from openai import APIConnectionError, APITimeoutError
+
+    error = APITimeoutError if kind == "timeout" else APIConnectionError
+    return error(
+        request=httpx2.Request("POST", "http://127.0.0.1:9/v1/chat/completions")
+    )
+
+
+def test_run_reports_when_the_api_is_unreachable(tmp_path):
+    def create(**kwargs):
+        raise _unreachable("connection")
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    session = agent.Session(workspace=tmp_path)
+
+    text = agent.run("hello", session, client=client)
+
+    assert text == "Could not reach the API."
+    assert session.messages[-2]["content"] == "hello"
+    assert session.messages[-1] == {"role": "assistant", "content": text}
+    events = [
+        json.loads(line)["event"]
+        for line in (tmp_path / "session.log").read_text().splitlines()
+    ]
+    assert events == ["turn", "model"]
+
+
+def test_run_reports_when_the_api_times_out(tmp_path):
+    calls = {"n": 0}
+
+    def create(**kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            message = SimpleNamespace(
+                content="",
+                tool_calls=[
+                    SimpleNamespace(
+                        id="call_1",
+                        function=SimpleNamespace(
+                            name="read_file", arguments='{"path": "a.txt"}'
+                        ),
+                    )
+                ],
+            )
+            return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+        raise _unreachable("timeout")
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    session = agent.Session(workspace=tmp_path)
+
+    text = agent.run("read a.txt", session, client=client)
+
+    assert text == "The API request timed out."
+    assert session.messages[-2]["role"] == "tool"
+    assert session.messages[-1] == {"role": "assistant", "content": text}
+
+
 def test_model_log_truncates_reasoning(tmp_path):
     thinking = "r" * 600
 
@@ -1916,6 +1979,16 @@ def test_list_models_returns_sorted_ids():
     client = SimpleNamespace(models=SimpleNamespace(list=lambda: models))
 
     assert agent.list_models(client) == ["alpha", "zeta"]
+
+
+def test_list_models_exits_when_the_api_is_unreachable():
+    def listing():
+        raise _unreachable("connection")
+
+    client = SimpleNamespace(models=SimpleNamespace(list=listing))
+
+    with pytest.raises(SystemExit, match="Could not reach the API"):
+        agent.list_models(client)
 
 
 def test_model_option_selects_that_model(monkeypatch, capsys, tmp_path):
