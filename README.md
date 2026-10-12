@@ -102,7 +102,6 @@ Enter submits. Shift+Enter inserts a newline.
 | Key | Action |
 | --- | --- |
 | Ctrl+N | New session in a new workspace |
-| Ctrl+T | Expand or collapse the thinking box |
 | Ctrl+Q | Quit |
 
 | Command | Action |
@@ -112,7 +111,7 @@ Enter submits. Shift+Enter inserts a newline.
 | `/compact` | Summarize older turns now |
 | `/exit` | Quit |
 
-The header title is Harnh3x followed by the package version, then the workspace, the project when one is set, Coding when the session is a coding session, the model, and how much of the context window the last completion used. With `--yolo` the header’s first line is `YOLO — sandbox off` in bright yellow, and that mark stays for a new session or a resumed transcript. Tool calls for a turn share one box. The thinking box keeps the last three lines until you expand it. When the history is compacted, the transcript shows a compaction note and then the answer as Markdown.
+The header title is Harnh3x followed by the package version, then the workspace, the project when one is set, Coding when the session is a coding session, the model, and how much of the context window the last completion used. With `--yolo` the header’s first line is `YOLO — sandbox off` in bright yellow, and that mark stays for a new session or a resumed transcript. Tool calls for a turn share one box, which keeps the last three lines until you click it. The thinking box keeps the last three lines until you click it. Ctrl+H hides those with the thinking, tool, and compaction boxes. When the history is compacted, the transcript shows a compaction note and then the answer as Markdown.
 
 One-shot on a tty, when the model returned reasoning, waits for Enter before the process exits.
 

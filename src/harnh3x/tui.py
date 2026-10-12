@@ -39,7 +39,6 @@ Commands
 Hotkeys
   Shift+Enter  new line
   Ctrl+N       new session
-  Ctrl+T       expand or collapse the latest thinking
   Ctrl+H       hide or show thinking, tool calls, and compaction boxes
   Ctrl+Q       quit"""
 
@@ -66,12 +65,13 @@ def wrap_lines(text: str, width: int) -> list[str]:
 
 
 def thinking_hint(*, expanded: bool, hold: bool, click: bool = False) -> str:
-    action = "collapse" if expanded else "expand"
-    control = "click" if click else "ctrl+t"
-    hint = f"{control} to {action}"
+    parts = []
+    if click:
+        action = "collapse" if expanded else "expand"
+        parts.append(f"click to {action}")
     if hold:
-        hint += " · enter to close"
-    return hint
+        parts.append("enter to close")
+    return " · ".join(parts)
 
 
 def _thinking_wrapped(reasoning: str, *, width: int) -> tuple[list[str], str]:
@@ -93,11 +93,16 @@ def thinking_shown(reasoning: str, *, expanded: bool, width: int) -> list[str]:
 
 
 def thinking_text(reasoning: str, *, expanded: bool, width: int, hold: bool) -> str:
-    limit = line_limit(width)
     hint = thinking_hint(expanded=expanded, hold=hold)
-    header = "\n".join(wrap_lines(f"Thinking · {hint}", limit))
-    body = "\n".join(thinking_shown(reasoning, expanded=expanded, width=width))
-    return f"{header}\n{body}"
+    title = f"Thinking · {hint}" if hint else "Thinking"
+    return debug_text(title, reasoning, expanded=expanded, width=width)
+
+
+def debug_text(title: str, body: str, *, expanded: bool, width: int) -> str:
+    limit = line_limit(width)
+    header = "\n".join(wrap_lines(title, limit))
+    shown = "\n".join(thinking_shown(body, expanded=expanded, width=width))
+    return f"{header}\n{shown}"
 
 
 def context_line(used: int | None, limit: int | None) -> str | None:
@@ -322,6 +327,14 @@ def conversation_turns(messages: list) -> list[Turn]:
     return [item for kind, item in transcript_items(messages) if kind == "turn"]
 
 
+def _panel_inner_width(widget: Static, outer: int) -> int:
+    gutter = widget.styles.gutter
+    horizontal = gutter.left + gutter.right
+    if horizontal == 0:
+        horizontal = 4
+    return max(outer - horizontal, 1)
+
+
 def reply_reasoning(session, start: int, answer: str) -> str:
     messages = getattr(session, "messages", None)
     if not messages:
@@ -367,15 +380,8 @@ class Thinking(Static):
         self.reasoning += text
         self._sync(self.size.width or 80)
 
-    def _inner_width(self, outer: int) -> int:
-        gutter = self.styles.gutter
-        horizontal = gutter.left + gutter.right
-        if horizontal == 0:
-            horizontal = 4
-        return max(outer - horizontal, 1)
-
     def _sync(self, width: int) -> None:
-        inner = self._inner_width(width)
+        inner = _panel_inner_width(self, width)
         self._expandable = thinking_overflows(self.reasoning, width=inner)
         if not self._expandable:
             self.expanded = False
@@ -424,11 +430,45 @@ class ToolBox(Static):
     def __init__(self) -> None:
         super().__init__("", markup=False, classes="panel trace")
         self.lines: list[str] = []
-        self.border_title = "Tools"
+        self.expanded = False
+        self._sync(80)
+
+    def on_mount(self) -> None:
+        self._sync(self.size.width or 80)
+
+    def on_resize(self, event) -> None:
+        self._sync(event.size.width or 80)
+
+    def on_click(self, event: Click) -> None:
+        event.stop()
+        self.toggle()
+
+    def toggle(self) -> None:
+        if not self._expandable:
+            return
+        self.expanded = not self.expanded
+        self._sync(self.size.width or 80)
 
     def add(self, name: str, args: object) -> None:
         self.lines.append(f"🔧 {name}({args})")
-        self.update("\n".join(self.lines))
+        self._sync(self.size.width or 80)
+
+    def _sync(self, width: int) -> None:
+        text = "\n".join(self.lines)
+        inner = _panel_inner_width(self, width)
+        self._expandable = thinking_overflows(text, width=inner)
+        if not self._expandable:
+            self.expanded = False
+        self.border_title = "Tools"
+        if self._expandable:
+            self.border_subtitle = thinking_hint(
+                expanded=self.expanded, hold=False, click=True
+            )
+        else:
+            self.border_subtitle = ""
+        self.update(
+            "\n".join(thinking_shown(text, expanded=self.expanded, width=inner))
+        )
 
 
 class Composer(TextArea):
@@ -703,7 +743,6 @@ class HelpScreen(ModalScreen):
 class HarnessApp(App):
     BINDINGS = [
         Binding("ctrl+q", "quit", "Quit", priority=True),
-        Binding("ctrl+t", "toggle_thinking", "Thinking", priority=True),
         Binding("ctrl+h", "toggle_trace", "Details", priority=True),
         Binding("ctrl+n", "new_session", "New session", priority=True),
     ]
@@ -754,7 +793,6 @@ class HarnessApp(App):
         self.review = review
         self.initial = initial
         self._context_limit = context_limit
-        self.latest: Thinking | None = None
         self._shown_compactions: list[Compaction] = []
         self._compacting: Static | None = None
         self._rendering = False
@@ -837,10 +875,6 @@ class HarnessApp(App):
             return
         self.query_one(Composer).focus()
 
-    def action_toggle_thinking(self) -> None:
-        if self.latest is not None:
-            self.latest.toggle()
-
     def action_toggle_trace(self) -> None:
         transcript = self.query_one("#transcript")
         transcript.set_class(
@@ -860,7 +894,6 @@ class HarnessApp(App):
             return
         self.session.reset()
         self.query_one("#banner", Static).update(self._banner())
-        self.latest = None
         self.tools = None
         self._shown_compactions = []
         self._compacting = None
@@ -968,7 +1001,6 @@ class HarnessApp(App):
             self._note(str(exc))
             composer.focus()
             return
-        self.latest = None
         self.tools = None
         self.query_one("#banner", Static).update(self._banner())
         await self.query_one("#transcript").remove_children()
@@ -1057,12 +1089,10 @@ class HarnessApp(App):
                     self._msg_content = ""
                 block = Thinking("", hold=False)
                 self._live_thinking = block
-                self.latest = block
                 transcript.mount(block)
             assert self._live_thinking is not None
             self._msg_reasoning += text
             self._live_thinking.append(text)
-            self.latest = self._live_thinking
         elif kind == "content":
             if not self._content_open:
                 self._content_open = True
@@ -1079,9 +1109,7 @@ class HarnessApp(App):
         transcript = self.query_one("#transcript")
         for kind, payload in steps:
             if kind == "thinking":
-                block = Thinking(payload, hold=False)
-                self.latest = block
-                transcript.mount(block)
+                transcript.mount(Thinking(payload, hold=False))
             elif kind == "answer":
                 transcript.mount(AgentAnswer(payload))
             elif kind == "tools":
@@ -1133,9 +1161,7 @@ class HarnessApp(App):
         self._mount_new_compactions()
         transcript = self.query_one("#transcript")
         if reasoning:
-            block = Thinking(reasoning, hold=self.review is not None)
-            self.latest = block
-            transcript.mount(block)
+            transcript.mount(Thinking(reasoning, hold=self.review is not None))
         if answer is not None:
             transcript.mount(AgentAnswer(answer))
         transcript.scroll_end(animate=False)
@@ -1163,8 +1189,6 @@ class HarnessApp(App):
             and self._live_thinking.parent is not None
         )
         if promoted:
-            if self.latest is self._live_thinking:
-                self.latest = None
             self._live_thinking.remove()
             self._live_thinking = None
             transcript.mount(AgentAnswer(answer))

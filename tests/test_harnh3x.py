@@ -2080,11 +2080,12 @@ def test_thinking_panel_keeps_the_tail_until_expanded():
     assert "alpha" not in collapsed
     assert "beta" in collapsed
     assert "delta" in collapsed
-    assert "ctrl+t to expand" in collapsed
+    assert "ctrl+t" not in collapsed
+    assert "Thinking" in collapsed
 
     expanded = cli.format_thinking(reasoning, expanded=True, width=80, hold=True)
     assert expanded.index("alpha") < expanded.index("delta")
-    assert "ctrl+t to collapse" in expanded
+    assert "ctrl+t" not in expanded
     assert "enter to close" in expanded
 
     text = "".join(f"{digit}" * 10 for digit in "1234")
@@ -2143,7 +2144,7 @@ def test_query_shows_a_collapsed_thinking_panel(monkeypatch, capsys, tmp_path):
     output = capsys.readouterr().out
     assert "alpha" not in output
     assert "delta" in output
-    assert "ctrl+t to expand" in output
+    assert "ctrl+t" not in output
     assert "Agent: final answer" in output
 
 
@@ -2537,7 +2538,7 @@ def test_help_command_lists_commands_and_hotkeys():
             assert "/exit" in shown
             assert "Shift+Enter" in shown
             assert "Ctrl+N" in shown
-            assert "Ctrl+T" in shown
+            assert "Ctrl+T" not in shown
             assert "Ctrl+H" in shown
             assert "Ctrl+Q" in shown
             await pilot.press("escape")
@@ -2855,26 +2856,6 @@ def test_resume_says_when_there_are_no_sessions(tmp_path, monkeypatch):
     asyncio.run(drive())
 
 
-def test_ctrl_t_reveals_the_head_of_the_thinking_text():
-    session = SimpleNamespace(workspace="ws", model="m", messages=[])
-    app = ReviewApp(
-        session,
-        "fix the notes",
-        [],
-        "alpha\nbeta\ngamma\ndelta",
-        "final answer",
-    )
-
-    async def drive():
-        async with app.run_test(size=(80, 24)) as pilot:
-            thinking = app.query_one("Thinking")
-            assert "alpha" not in thinking.plain
-            assert "delta" in thinking.plain
-            await pilot.press("ctrl+t")
-            assert "alpha" in thinking.plain
-
-    asyncio.run(drive())
-
 def test_click_toggles_the_thinking_box_that_was_hit():
     session = SimpleNamespace(workspace="ws", model="m", messages=[])
     app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
@@ -2959,6 +2940,76 @@ def test_short_thinking_hides_the_expand_hint():
             assert "click" not in str(short.border_subtitle or "")
 
     asyncio.run(drive())
+
+
+def test_click_toggles_the_tool_box():
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+    app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+    tools = ToolBox()
+    for name in ("one", "two", "three", "four"):
+        tools.add(name, {})
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            app.query_one("#transcript").mount(tools)
+            await pilot.pause()
+            shown = str(tools.content)
+            assert "one" not in shown
+            assert "four" in shown
+            assert "click to expand" in (tools.border_subtitle or "")
+            await pilot.click(tools)
+            shown = str(tools.content)
+            assert "one" in shown
+            assert "click to collapse" in (tools.border_subtitle or "")
+            await pilot.click(tools)
+            assert "one" not in str(tools.content)
+            tools.add("five", {})
+            assert not tools.expanded
+            assert "one" not in str(tools.content)
+            assert "five" in str(tools.content)
+
+    asyncio.run(drive())
+
+
+def test_short_tool_box_hides_the_expand_hint():
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+    app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+    tools = ToolBox()
+    tools.add("read_file", {"path": "a.txt"})
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            app.query_one("#transcript").mount(tools)
+            await pilot.pause()
+            assert "click" not in str(tools.border_subtitle or "")
+            assert "read_file" in str(tools.content)
+            await pilot.click(tools)
+            assert not tools.expanded
+            assert "click" not in str(tools.border_subtitle or "")
+
+    asyncio.run(drive())
+
+
+def test_expanded_tool_box_keeps_a_new_call():
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+    app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+    tools = ToolBox()
+    for name in ("one", "two", "three", "four"):
+        tools.add(name, {})
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            app.query_one("#transcript").mount(tools)
+            await pilot.pause()
+            await pilot.click(tools)
+            tools.add("five", {})
+            shown = str(tools.content)
+            assert tools.expanded
+            assert "one" in shown
+            assert "five" in shown
+
+    asyncio.run(drive())
+
 
 def test_tool_callback_line_shows_in_the_transcript():
     session = SimpleNamespace(workspace="ws", model="m", messages=[])
