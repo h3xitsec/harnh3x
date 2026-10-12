@@ -1875,6 +1875,16 @@ def _load_cli():
     return module
 
 
+def test_version_flag_prints_the_package_version(capsys):
+    cli = _load_cli()
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--version"])
+
+    assert exc.value.code == 0
+    assert capsys.readouterr().out == f"harnh3x {cli.__version__}\n"
+
+
 def test_query_argument_runs_once(monkeypatch, capsys, tmp_path):
     cli = _load_cli()
     calls = []

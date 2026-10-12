@@ -2,6 +2,7 @@ import argparse
 import shutil
 import sys
 
+from harnh3x import __version__
 from harnh3x.agent import (
     Session,
     compact_session,
@@ -35,6 +36,11 @@ Commands
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="File agent")
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"harnh3x {__version__}",
+    )
     parser.add_argument(
         "query",
         nargs="?",

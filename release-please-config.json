@@ -1,0 +1,11 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bootstrap-sha": "ea970c4c99359cc09d5c29bc13d5f590157095da",
+  "packages": {
+    ".": {
+      "release-type": "python",
+      "package-name": "harnh3x",
+      "extra-files": ["src/harnh3x/__init__.py"]
+    }
+  }
+}

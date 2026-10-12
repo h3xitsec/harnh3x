@@ -4,6 +4,20 @@ A AI harness: an OpenAI-compatible chat loop with tools confined to one workspac
 
 On a terminal it runs a Textual interface. Piped input and `--answer-only` stay plain stdout.
 
+## Install
+
+Releases are cut from conventional commits on `main`. Install one with pipx:
+
+```bash
+pipx install "git+https://github.com/h3xitsec/harn3x.git@vX.Y.Z"
+```
+
+Omit the tag to track the default branch:
+
+```bash
+pipx install "git+https://github.com/h3xitsec/harn3x.git"
+```
+
 ## Requirements
 
 - Python 3.14
