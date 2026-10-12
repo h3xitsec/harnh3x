@@ -9,13 +9,13 @@ On a terminal it runs a Textual interface. Piped input and `--answer-only` stay 
 Releases are cut from conventional commits on `main`. Install one with pipx:
 
 ```bash
-pipx install "git+https://github.com/h3xitsec/harn3x.git@vX.Y.Z"
+pipx install "git+https://github.com/h3xitsec/harnh3x.git@vX.Y.Z"
 ```
 
 Omit the tag to track the default branch:
 
 ```bash
-pipx install "git+https://github.com/h3xitsec/harn3x.git"
+pipx install "git+https://github.com/h3xitsec/harnh3x.git"
 ```
 
 ## Requirements
