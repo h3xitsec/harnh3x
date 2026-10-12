@@ -18,6 +18,7 @@ import pytest
 import harnh3x.agent as agent
 import harnh3x.anthropic_api as anthropic_api
 import harnh3x.config as config
+from harnh3x import __version__
 from harnh3x.anthropic_api import AnthropicClient, to_anthropic
 import harnh3x.sandbox as sandbox
 import harnh3x.skills as skills
@@ -2464,7 +2465,9 @@ def test_banner_shows_context_and_updates_after_a_turn():
 
     async def drive():
         async with app.run_test(size=(80, 24)) as pilot:
-            assert "Context: 1,234 / 8,192" in str(app.query_one("#banner").content)
+            banner = str(app.query_one("#banner").content)
+            assert f"🤖 Harnh3x {__version__}" in banner
+            assert "Context: 1,234 / 8,192" in banner
             await pilot.press(*"hi", "enter")
             await _wait_for(pilot, lambda: "Agent: done" in app.transcript_plain())
             banner = str(app.query_one("#banner").content)

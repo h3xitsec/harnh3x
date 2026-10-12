@@ -9,13 +9,13 @@ On a terminal it runs a Textual interface. Piped input and `--answer-only` stay 
 Releases are cut from conventional commits on `main`. Install one with pipx:
 
 ```bash
-pipx install "git+https://github.com/h3xitsec/harn3x.git@vX.Y.Z"
+pipx install "git+https://github.com/h3xitsec/harnh3x.git@vX.Y.Z"
 ```
 
 Omit the tag to track the default branch:
 
 ```bash
-pipx install "git+https://github.com/h3xitsec/harn3x.git"
+pipx install "git+https://github.com/h3xitsec/harnh3x.git"
 ```
 
 ## Requirements
@@ -104,7 +104,7 @@ Enter submits. Shift+Enter inserts a newline.
 | `/compact` | Summarize older turns now |
 | `/exit` | Quit |
 
-The header shows the workspace, the model, and how much of the context window the last completion used. With `--yolo` the header’s first line is `YOLO — sandbox off` in bright yellow, and that mark stays for a new session or a resumed transcript. Tool calls for a turn share one box. The thinking box keeps the last three lines until you expand it. When the history is compacted, the transcript shows a compaction note and then the answer as Markdown.
+The header title is Harnh3x followed by the package version, then the workspace, the model, and how much of the context window the last completion used. With `--yolo` the header’s first line is `YOLO — sandbox off` in bright yellow, and that mark stays for a new session or a resumed transcript. Tool calls for a turn share one box. The thinking box keeps the last three lines until you expand it. When the history is compacted, the transcript shows a compaction note and then the answer as Markdown.
 
 One-shot on a tty, when the model returned reasoning, waits for Enter before the process exits.
 
