@@ -30,6 +30,7 @@ SKILL_TOOLS = {
     "data": ("inspect_csv", "inspect_json"),
     "memory": ("remember", "recall"),
     "tasks": ("write_plan", "update_plan", "show_plan"),
+    "sql-injection": ("http_request",),
 }
 
 
@@ -39,6 +40,7 @@ class Skill:
     description: str
     doc: str
     tools: tuple
+    category: str = ""
 
 
 def _blurb(doc: str) -> str:
@@ -61,6 +63,15 @@ def _tool_schemas(names: tuple[str, ...], tools: list) -> tuple:
     return tuple(chosen)
 
 
+def _skill_files(skills_dir: Path) -> list[Path]:
+    files = []
+    for skill_md in skills_dir.rglob("SKILL.md"):
+        if skill_md.parent == skills_dir or not skill_md.is_file():
+            continue
+        files.append(skill_md)
+    return sorted(files, key=lambda path: path.relative_to(skills_dir).as_posix())
+
+
 def _load_catalog(
     skills_dir: Path = SKILLS_DIR,
     manifest: dict | None = None,
@@ -68,31 +79,39 @@ def _load_catalog(
 ) -> dict[str, Skill]:
     manifest = SKILL_TOOLS if manifest is None else manifest
     tools = TOOLS if tools is None else tools
-    catalog: dict[str, Skill] = {}
-    found: set[str] = set()
-    for skill_dir in sorted(skills_dir.iterdir()):
-        if not skill_dir.is_dir():
-            continue
-        skill_md = skill_dir / "SKILL.md"
-        if not skill_md.exists():
-            continue
+    found: dict[str, Skill] = {}
+    paths: dict[str, str] = {}
+    for skill_md in _skill_files(skills_dir):
+        skill_dir = skill_md.parent
+        relative = skill_dir.relative_to(skills_dir)
         name = skill_dir.name
-        found.add(name)
+        location = relative.as_posix()
+        if name in paths:
+            raise RuntimeError(
+                f"duplicate skill '{name}' in {paths[name]} and {location}"
+            )
+        paths[name] = location
         tool_names = manifest.get(name)
         if tool_names is None:
             raise RuntimeError(f"skill '{name}' has no tool manifest")
+        category = "" if relative.parent == Path(".") else relative.parent.as_posix()
         doc = skill_md.read_text(encoding="utf-8")
-        catalog[name] = Skill(
+        found[name] = Skill(
             name=name,
             description=_blurb(doc),
             doc=doc,
             tools=_tool_schemas(tuple(tool_names), tools),
+            category=category,
         )
-    missing = set(manifest) - found
+    missing = set(manifest) - set(found)
     if missing:
         joined = ", ".join(sorted(missing))
         raise RuntimeError(f"skill manifest has no SKILL.md for: {joined}")
-    return catalog
+    ordered = sorted(
+        found.values(),
+        key=lambda skill: (bool(skill.category), skill.category, skill.name),
+    )
+    return {skill.name: skill for skill in ordered}
 
 
 _CATALOG = _load_catalog()
@@ -145,7 +164,12 @@ class SkillRegistry:
             "Available skills (use load_skill to activate).",
             "A skill name is not a tool. After loading, call only the tools listed for that skill.",
         ]
+        category = ""
         for name, skill in self._catalog.items():
+            if skill.category != category:
+                category = skill.category
+                if category:
+                    lines.append(f"{category}:")
             status = ""
             if name in self._active:
                 listed = ", ".join(self.skill_tools(name) or ())

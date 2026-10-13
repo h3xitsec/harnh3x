@@ -1831,6 +1831,8 @@ def test_skill_menu_starts_unloaded():
         "tasks",
     ):
         assert f"- {name}:" in menu
+    assert "web-testing:\n- sql-injection:" in menu
+    assert menu.index("- http:") < menu.index("web-testing:")
     assert "news:" not in menu
     assert "- search:" not in menu
     assert "[loaded" not in menu
@@ -1882,6 +1884,74 @@ def test_skill_load_unload_and_gated_execute(tmp_path):
 def test_skill_manifest_requires_tools_entries():
     with pytest.raises(RuntimeError, match="missing from TOOLS"):
         skills._tool_schemas(("read_file", "not_a_tool"), tools.TOOLS)
+
+
+def _write_skill(root: Path, *parts: str, body: str = "Do the thing.\n") -> None:
+    folder = root.joinpath(*parts)
+    folder.mkdir(parents=True)
+    (folder / "SKILL.md").write_text(f"# {parts[-1]}\n\n{body}")
+
+
+def test_catalog_loads_skills_in_category_folders(tmp_path):
+    root = tmp_path / "skills"
+    _write_skill(root, "http", body="Send requests.\n")
+    _write_skill(root, "web-testing", "sql-injection", body="Test endpoints.\n")
+    _write_skill(root, "web-testing", "owasp", "probe", body="Probe a page.\n")
+    (root / "web-testing" / "notes.txt").write_text("not a skill")
+    catalog = skills._load_catalog(
+        root,
+        manifest={
+            "http": ("http_request",),
+            "sql-injection": ("http_request",),
+            "probe": ("http_request",),
+        },
+        tools=tools.TOOLS,
+    )
+
+    assert list(catalog) == ["http", "sql-injection", "probe"]
+    assert "web-testing" not in catalog
+    assert catalog["http"].category == ""
+    assert catalog["sql-injection"].category == "web-testing"
+    assert catalog["probe"].category == "web-testing/owasp"
+    assert catalog["sql-injection"].description == "Test endpoints."
+
+
+def test_catalog_rejects_duplicate_skill_names(tmp_path):
+    root = tmp_path / "skills"
+    _write_skill(root, "other", "probe")
+    _write_skill(root, "web-testing", "probe")
+
+    with pytest.raises(
+        RuntimeError,
+        match=("duplicate skill 'probe' in other/probe and web-testing/probe"),
+    ):
+        skills._load_catalog(
+            root,
+            manifest={"probe": ("http_request",)},
+            tools=tools.TOOLS,
+        )
+
+
+def test_catalog_requires_a_skill_file_for_each_manifest_entry(tmp_path):
+    root = tmp_path / "skills" / "web-testing"
+    root.mkdir(parents=True)
+
+    with pytest.raises(
+        RuntimeError, match="skill manifest has no SKILL.md for: missing"
+    ):
+        skills._load_catalog(
+            root.parent,
+            manifest={"missing": ("http_request",)},
+            tools=tools.TOOLS,
+        )
+
+
+def test_catalog_rejects_a_skill_file_with_no_manifest_entry(tmp_path):
+    root = tmp_path / "skills"
+    _write_skill(root, "web-testing", "extra")
+
+    with pytest.raises(RuntimeError, match="skill 'extra' has no tool manifest"):
+        skills._load_catalog(root, manifest={}, tools=tools.TOOLS)
 
 
 def test_run_sends_skill_schemas_after_load(tmp_path):
