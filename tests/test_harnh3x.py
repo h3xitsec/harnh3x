@@ -1,4 +1,5 @@
 import asyncio
+import http.client
 import importlib.util
 import io
 import json
@@ -8,6 +9,7 @@ import shlex
 import subprocess
 import sys
 import urllib.parse
+import urllib.request
 import uuid
 import zipfile
 from datetime import datetime, timezone
@@ -1822,7 +1824,7 @@ def test_skill_menu_starts_unloaded():
         "coding",
         "research",
         "reference",
-        "api",
+        "http",
         "documents",
         "data",
         "memory",
@@ -1862,19 +1864,19 @@ def test_skill_load_unload_and_gated_execute(tmp_path):
     assert registry.unload_skill("file_ops") == "Skill 'file_ops' is not loaded."
     assert "[loaded]" not in registry.get_menu()
 
-    registry.load_skill("api")
+    registry.load_skill("http")
     mistook = registry.execute(
-        "api",
+        "http",
         {"http_get_json": "https://1.1.1.1/api"},
         tmp_path,
     )
     assert mistook.startswith(
-        "Error: 'api' is a skill, not a tool. It is already loaded."
+        "Error: 'http' is a skill, not a tool. It is already loaded."
     )
-    assert "Call one of: http_get_json." in mistook
+    assert "Call one of: http_get_json, http_request." in mistook
     assert "Call http_get_json directly, with its own parameters." in mistook
-    unloaded = SkillRegistry().execute("api", {}, tmp_path)
-    assert "Call load_skill with name 'api'" in unloaded
+    unloaded = SkillRegistry().execute("http", {}, tmp_path)
+    assert "Call load_skill with name 'http'" in unloaded
 
 
 def test_skill_manifest_requires_tools_entries():
@@ -4514,7 +4516,7 @@ def test_read_feed_rejects_bad_xml_and_entities(tmp_path, monkeypatch):
     )
 
 
-# --- reference and api ----------------------------------------------------
+# --- reference and http ---------------------------------------------------
 
 
 def _json_get(payloads):
@@ -4639,6 +4641,262 @@ def test_http_get_json_adds_params_and_rejects_non_json(tmp_path, monkeypatch):
             "http_get_json", {"url": "https://1.1.1.1/api", "params": ["a"]}, tmp_path
         )
         == "Error: params must be an object"
+    )
+
+
+class _FakeHTTPResponse:
+    def __init__(self, code, reason, body, url, headers):
+        self.code = code
+        self.status = code
+        self.reason = reason
+        self.msg = reason
+        self.url = url
+        self._body = body
+        self.headers = http.client.HTTPMessage()
+        for key, value in headers.items():
+            self.headers[key] = value
+
+    def read(self, amt=-1):
+        if amt is None or amt < 0:
+            data, self._body = self._body, b""
+            return data
+        data, self._body = self._body[:amt], self._body[amt:]
+        return data
+
+    def info(self):
+        return self.headers
+
+    def geturl(self):
+        return self.url
+
+    def close(self):
+        return None
+
+
+def _install_http(monkeypatch, replies):
+    seen = []
+    pending = list(replies)
+
+    def http_open(self, req):
+        seen.append(req)
+        reply = pending.pop(0)
+        return _FakeHTTPResponse(
+            reply["code"],
+            reply.get("reason", "OK"),
+            reply.get("body", b""),
+            req.full_url,
+            reply.get("headers", {}),
+        )
+
+    monkeypatch.setattr(urllib.request.HTTPHandler, "http_open", http_open)
+    return seen
+
+
+def test_http_request_blocks_targets_and_bad_arguments(tmp_path):
+    for url in (
+        "file:///etc/passwd",
+        "http://user:pass@1.1.1.1/",
+        "http://127.0.0.1/",
+        "http://10.0.0.1/",
+    ):
+        result = execute_tool("http_request", {"method": "GET", "url": url}, tmp_path)
+        assert result.startswith("Error:")
+        assert "blocked" in result
+    assert (
+        execute_tool(
+            "http_request", {"method": "TRACE", "url": "http://1.1.1.1/"}, tmp_path
+        )
+        == "Error: Method not allowed: TRACE"
+    )
+    assert (
+        execute_tool(
+            "http_request",
+            {"method": "GET", "url": "http://1.1.1.1/", "params": ["a"]},
+            tmp_path,
+        )
+        == "Error: params must be an object"
+    )
+    assert (
+        execute_tool(
+            "http_request",
+            {
+                "method": "POST",
+                "url": "http://1.1.1.1/",
+                "json_body": {"a": 1},
+                "body": "raw",
+            },
+            tmp_path,
+        )
+        == "Error: json_body and body cannot both be set"
+    )
+
+
+def test_http_request_posts_json_and_returns_status(tmp_path, monkeypatch):
+    seen = _install_http(
+        monkeypatch,
+        [
+            {
+                "code": 404,
+                "reason": "Not Found",
+                "body": b"missing",
+                "headers": {"Content-Type": "application/json"},
+            }
+        ],
+    )
+
+    result = execute_tool(
+        "http_request",
+        {
+            "method": "post",
+            "url": "http://1.1.1.1/api",
+            "params": {"q": "1"},
+            "json_body": {"name": "Ada"},
+            "headers": {"X-Test": "yes"},
+        },
+        tmp_path,
+    )
+
+    assert not result.startswith("Error:")
+    assert "status_code: 404" in result
+    assert "reason: Not Found" in result
+    assert "final_url: http://1.1.1.1/api?q=1" in result
+    assert "content_type: application/json" in result
+    assert "truncated: false" in result
+    assert "body:\nmissing" in result
+    request = seen[0]
+    assert request.get_method() == "POST"
+    assert request.data == b'{"name": "Ada"}'
+    assert request.headers["Content-type"] == "application/json"
+    assert request.headers["User-agent"] == tools.http.USER_AGENT
+    assert request.headers["X-test"] == "yes"
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(request.full_url).query)
+    assert query == {"q": ["1"]}
+
+    seen = _install_http(
+        monkeypatch,
+        [
+            {
+                "code": 401,
+                "reason": "Unauthorized",
+                "body": b"Invalid email or password.",
+                "headers": {"Content-Type": "text/html"},
+            }
+        ],
+    )
+    as_string = execute_tool(
+        "http_request",
+        {
+            "method": "POST",
+            "url": "http://1.1.1.1/login",
+            "json_body": ('{"email": "test@example.com", "password": "password123"}'),
+        },
+        tmp_path,
+    )
+    assert "status_code: 401" in as_string
+    assert seen[-1].data == (
+        b'{"email": "test@example.com", "password": "password123"}'
+    )
+    assert seen[-1].headers["Content-type"] == "application/json"
+    rejected = execute_tool(
+        "http_request",
+        {"method": "POST", "url": "http://1.1.1.1/login", "json_body": "not-json"},
+        tmp_path,
+    )
+    assert rejected.startswith("Error: json_body must be an object or array.")
+    assert '{"email": "a@b.c", "password": "secret"}' in rejected
+
+
+def test_http_request_redirects_and_truncates(tmp_path, monkeypatch):
+    stayed_seen = _install_http(
+        monkeypatch,
+        [
+            {
+                "code": 302,
+                "reason": "Found",
+                "body": b"stay",
+                "headers": {
+                    "Location": "http://127.0.0.1/secret",
+                    "Content-Type": "text/plain",
+                },
+            }
+        ],
+    )
+    stayed = execute_tool(
+        "http_request", {"method": "GET", "url": "http://1.1.1.1/go"}, tmp_path
+    )
+    assert "status_code: 302" in stayed
+    assert "final_url: http://1.1.1.1/go" in stayed
+    assert "body:\nstay" in stayed
+    assert len(stayed_seen) == 1
+
+    followed_seen = _install_http(
+        monkeypatch,
+        [
+            {
+                "code": 302,
+                "reason": "Found",
+                "body": b"go",
+                "headers": {"Location": "http://127.0.0.1/secret"},
+            }
+        ],
+    )
+    blocked = execute_tool(
+        "http_request",
+        {
+            "method": "GET",
+            "url": "http://1.1.1.1/go",
+            "follow_redirects": True,
+        },
+        tmp_path,
+    )
+    assert blocked.startswith("Error:")
+    assert "blocked" in blocked
+    assert len(followed_seen) == 1
+
+    monkeypatch.setattr(tools.http, "FETCH_MAX_BYTES", 9000)
+    _install_http(
+        monkeypatch,
+        [
+            {
+                "code": 200,
+                "reason": "OK",
+                "body": b"y" * 9001,
+                "headers": {"Content-Type": "text/plain"},
+            }
+        ],
+    )
+    truncated = execute_tool(
+        "http_request", {"method": "GET", "url": "http://1.1.1.1/big"}, tmp_path
+    )
+    assert "truncated: true" in truncated
+    assert "...[truncated," in truncated
+    assert "save the full response with fetch_url" in truncated
+
+
+def test_http_request_yolo_allows_localhost(tmp_path, monkeypatch):
+    _install_http(
+        monkeypatch,
+        [
+            {
+                "code": 200,
+                "reason": "OK",
+                "body": b"local",
+                "headers": {"Content-Type": "text/plain"},
+            }
+        ],
+    )
+    result = execute_tool(
+        "http_request",
+        {"method": "GET", "url": "http://127.0.0.1/local"},
+        tmp_path,
+        yolo=True,
+    )
+    assert "status_code: 200" in result
+    assert "body:\nlocal" in result
+    assert "blocked" in execute_tool(
+        "http_request",
+        {"method": "GET", "url": "http://127.0.0.1/local"},
+        tmp_path,
     )
 
 
@@ -4976,7 +5234,7 @@ def test_system_prompt_mentions_yolo_only_when_enabled(tmp_path):
     assert loaded.endswith(YOLO_NOTE)
     assert YOLO_NOTE not in SkillRegistry(yolo=True).load_skill("memory")
     assert YOLO_NOTE not in SkillRegistry().load_skill("shell")
-    for name in ("api", "research", "reference"):
+    for name in ("http", "research", "reference"):
         assert SkillRegistry(yolo=True).load_skill(name).endswith(YOLO_NOTE)
         assert "localhost" not in SkillRegistry().load_skill(name)
 

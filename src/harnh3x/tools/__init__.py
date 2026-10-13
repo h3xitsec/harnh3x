@@ -81,6 +81,7 @@ _ORDER = (
     "wikipedia_search",
     "wikipedia_summary",
     "http_get_json",
+    "http_request",
     "read_pdf",
     "read_docx",
     "inspect_csv",

@@ -4,7 +4,7 @@ from pathlib import Path
 from harnh3x.prompt import project_note, yolo_note
 from harnh3x.tools import TOOLS, execute_tool
 
-_YOLO_SKILLS = {"file_ops", "shell", "python", "api", "research", "reference"}
+_YOLO_SKILLS = {"file_ops", "shell", "python", "http", "research", "reference"}
 _PROJECT_SKILLS = {"file_ops", "shell", "python", "coding"}
 
 SKILLS_DIR = Path(__file__).resolve().parent
@@ -25,7 +25,7 @@ SKILL_TOOLS = {
     "coding": ("read_source", "write_source", "edit_source", "run_script"),
     "research": ("web_search", "read_url", "fetch_url", "parse_html", "read_feed"),
     "reference": ("wikipedia_search", "wikipedia_summary"),
-    "api": ("http_get_json",),
+    "http": ("http_get_json", "http_request"),
     "documents": ("read_pdf", "read_docx"),
     "data": ("inspect_csv", "inspect_json"),
     "memory": ("remember", "recall"),

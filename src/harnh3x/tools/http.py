@@ -51,6 +51,68 @@ SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "http_request",
+            "description": (
+                "Send an HTTP request and return the status code, headers, and body. "
+                "Use for calling APIs. Response bodies are truncated, then the text "
+                "result is capped. Redirects are not followed unless follow_redirects "
+                "is true."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "method": {
+                        "type": "string",
+                        "enum": [
+                            "DELETE",
+                            "GET",
+                            "HEAD",
+                            "OPTIONS",
+                            "PATCH",
+                            "POST",
+                            "PUT",
+                        ],
+                        "description": "HTTP method",
+                    },
+                    "url": {
+                        "type": "string",
+                        "description": "Full http or https URL",
+                    },
+                    "headers": {
+                        "type": "object",
+                        "additionalProperties": {"type": "string"},
+                        "description": "Request headers",
+                    },
+                    "params": {
+                        "type": "object",
+                        "description": "Query string parameters",
+                    },
+                    "json_body": {
+                        "description": (
+                            "JSON object or array, not a quoted JSON string. "
+                            'Example: {"email": "a@b.c", "password": "secret"}. '
+                            "Sets Content-Type to application/json when that header is absent."
+                        ),
+                        "anyOf": [{"type": "object"}, {"type": "array"}],
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "Raw request body when the payload is not JSON",
+                    },
+                    "follow_redirects": {
+                        "type": "boolean",
+                        "description": (
+                            "Follow redirects. Each hop is checked. Default false."
+                        ),
+                    },
+                },
+                "required": ["method", "url"],
+            },
+        },
+    },
 ]
 
 HTML_TYPES = {"text/html", "application/xhtml+xml"}
@@ -86,6 +148,9 @@ USER_AGENT = (
 ACCEPT_HEADER = (
     "text/html,application/xhtml+xml,application/json,application/xml,"
     "text/plain,application/pdf;q=0.9,*/*;q=0.5"
+)
+ALLOWED_METHODS = frozenset(
+    {"DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"}
 )
 
 
@@ -156,6 +221,29 @@ class _CheckedRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         validate_url(newurl)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+class _ReturnStatus(urllib.request.HTTPErrorProcessor):
+    """Leave 3xx, 4xx, and 5xx as responses instead of raising."""
+
+    def http_response(self, request, response):
+        return response
+
+    https_response = http_response
+
+
+class _RedirectOrReturn(urllib.request.HTTPErrorProcessor):
+    """Follow 3xx; return every other status as a response."""
+
+    def http_response(self, request, response):
+        code = response.status
+        if 300 <= code < 400:
+            return self.parent.error(
+                "http", request, response, code, response.msg, response.info()
+            )
+        return response
+
+    https_response = http_response
 
 
 def _open_request(request: urllib.request.Request) -> tuple[int, str, bytes]:
@@ -273,7 +361,163 @@ def http_get_json(workspace: Path, args: dict) -> str:
     )
 
 
+def _header_map(headers) -> dict[str, str]:
+    if headers is None:
+        headers = {}
+    if not isinstance(headers, dict):
+        raise ValueError("headers must be an object")
+    cleaned: dict[str, str] = {}
+    for key, value in headers.items():
+        if not isinstance(key, str) or not key.strip():
+            raise ValueError("header names must be strings")
+        if not isinstance(value, str):
+            raise ValueError("header values must be strings")
+        if any(char in key or char in value for char in "\r\n"):
+            raise ValueError("headers must not contain newlines")
+        cleaned[key] = value
+    return cleaned
+
+
+def _has_header(headers: dict[str, str], name: str) -> bool:
+    target = name.lower()
+    return any(key.lower() == target for key in headers)
+
+
+_JSON_BODY_ERROR = (
+    "json_body must be an object or array. "
+    'Example: {"email": "a@b.c", "password": "secret"}'
+)
+
+
+def _as_json_body(json_body):
+    if isinstance(json_body, str):
+        try:
+            json_body = json.loads(json_body)
+        except json.JSONDecodeError as exc:
+            raise ValueError(_JSON_BODY_ERROR) from exc
+    if not isinstance(json_body, (dict, list)):
+        raise ValueError(_JSON_BODY_ERROR)
+    return json_body
+
+
+def _request_bytes(json_body, body, headers: dict[str, str]) -> bytes | None:
+    if json_body is not None and body is not None:
+        raise ValueError("json_body and body cannot both be set")
+    if json_body is not None:
+        json_body = _as_json_body(json_body)
+        if not _has_header(headers, "content-type"):
+            headers["Content-Type"] = "application/json"
+        try:
+            encoded = json.dumps(json_body, ensure_ascii=False).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"json_body must be JSON: {exc}") from exc
+        return encoded
+    if body is None:
+        return None
+    if not isinstance(body, str):
+        raise ValueError("body must be a string")
+    return body.encode("utf-8")
+
+
+def _http_opener(follow_redirects: bool) -> urllib.request.OpenerDirector:
+    proxy = urllib.request.ProxyHandler({})
+    if follow_redirects:
+        return urllib.request.build_opener(
+            proxy, _CheckedRedirectHandler, _RedirectOrReturn
+        )
+    return urllib.request.build_opener(proxy, _ReturnStatus)
+
+
+def _read_capped(response, limit: int) -> tuple[bytes, bool]:
+    chunks = []
+    total = 0
+    while total < limit:
+        chunk = response.read(min(65536, limit - total))
+        if not chunk:
+            return b"".join(chunks), False
+        chunks.append(chunk)
+        total += len(chunk)
+    return b"".join(chunks), bool(response.read(1))
+
+
+def _decode_body(raw: bytes, encoding: str | None) -> str:
+    try:
+        return raw.decode(encoding or "utf-8", errors="replace")
+    except LookupError:
+        return raw.decode("utf-8", errors="replace")
+
+
+def _format_http_result(response, raw: bytes, truncated: bool) -> str:
+    content_type = response.headers.get("Content-Type", "")
+    media = _media_type(content_type) if content_type else ""
+    header_lines = [
+        f"{key}: {value}"
+        for key, value in sorted(
+            response.headers.items(), key=lambda item: item[0].lower()
+        )
+    ]
+    text = _decode_body(raw, response.headers.get_content_charset())
+    return (
+        f"status_code: {response.status}\n"
+        f"reason: {response.reason or ''}\n"
+        f"final_url: {response.geturl()}\n"
+        f"content_type: {media}\n"
+        f"truncated: {str(truncated).lower()}\n"
+        f"headers:\n" + "\n".join(header_lines) + f"\nbody:\n{text}"
+    )
+
+
+def _request_hint(method: str) -> str:
+    if method == "GET":
+        return "narrow the request, or save the full response with fetch_url"
+    return "narrow the request"
+
+
+def http_request(workspace: Path, args: dict) -> str:
+    method = args.get("method", "")
+    if not isinstance(method, str) or not method.strip():
+        raise ValueError("method is required")
+    method = method.strip().upper()
+    if method not in ALLOWED_METHODS:
+        raise ValueError(f"Method not allowed: {method}")
+    follow = args.get("follow_redirects", False)
+    if not isinstance(follow, bool):
+        raise ValueError("follow_redirects must be a boolean")
+    url = args.get("url", "")
+    if not isinstance(url, str):
+        url = ""
+    target = _with_params(url, args.get("params"))
+    validate_url(target)
+    headers = _header_map(args.get("headers"))
+    data = _request_bytes(args.get("json_body"), args.get("body"), headers)
+    if not _has_header(headers, "user-agent"):
+        headers["User-Agent"] = USER_AGENT
+    request = urllib.request.Request(target, data=data, headers=headers, method=method)
+    opener = _http_opener(follow)
+    try:
+        response = opener.open(request, timeout=FETCH_TIMEOUT)
+        try:
+            raw, truncated = _read_capped(response, FETCH_MAX_BYTES)
+            rendered = _format_http_result(response, raw, truncated)
+        finally:
+            response.close()
+    except ValueError:
+        raise
+    except urllib.error.HTTPError as exc:
+        detail = exc.reason if isinstance(exc.reason, str) and exc.reason else ""
+        raise ValueError(detail or f"http status {exc.code}") from exc
+    except urllib.error.URLError as exc:
+        reason = exc.reason
+        if isinstance(reason, TimeoutError):
+            raise ValueError("timed out") from exc
+        raise ValueError(str(reason)) from exc
+    except TimeoutError as exc:
+        raise ValueError("timed out") from exc
+    return cap_result(rendered, hint=_request_hint(method))
+
+
 FNS = {
     "fetch_url": fetch_url,
     "http_get_json": http_get_json,
+    "http_request": http_request,
 }

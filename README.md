@@ -157,7 +157,7 @@ Each session directory holds:
 | `coding` | Write or edit a source file and run a `.py` script |
 | `research` | Web search, fetch and read pages, parse saved HTML, read a feed |
 | `reference` | Wikipedia search and summaries |
-| `api` | GET a public JSON API |
+| `http` | Send HTTP requests and call JSON endpoints |
 | `documents` | PDF and Word files in the workspace |
 | `data` | CSV and JSON shape, columns, and a short preview |
 | `memory` | Remember and recall facts in the shared `memory.md` |
