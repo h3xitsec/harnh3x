@@ -41,10 +41,10 @@ from harnh3x.skills import SkillRegistry
 from harnh3x.tools import _tool_result, execute_tool
 from harnh3x.tui import (
     YOLO_PLAIN,
-    YOLO_TITLE,
     AgentAnswer,
     HarnessApp,
     HelpScreen,
+    WarningScreen,
     ModelApp,
     ResumeOptions,
     ResumeScreen,
@@ -2740,11 +2740,16 @@ def test_banner_shows_context_and_updates_after_a_turn():
         async with app.run_test(size=(80, 24)) as pilot:
             banner = str(app.query_one("#banner").content)
             assert f"🤖 Harnh3x {__version__}" in banner
-            assert "Context: 1,234 / 8,192" in banner
+            assert "Context:" not in banner
+            assert "Model:" not in banner
+            status = str(app.query_one("#status").content)
+            assert status == "Model: m · Context: 1,234 / 8,192"
             await pilot.press(*"hi", "enter")
             await _wait_for(pilot, lambda: "Agent: done" in app.transcript_plain())
             banner = str(app.query_one("#banner").content)
-            assert "Context: 5,000 / 8,192" in banner
+            assert "Context:" not in banner
+            status = str(app.query_one("#status").content)
+            assert status == "Model: m · Context: 5,000 / 8,192"
             assert "Shift+Enter" not in banner
             assert "/resume" not in banner
 
@@ -2768,6 +2773,8 @@ def test_help_command_lists_commands_and_hotkeys():
             assert "Ctrl+N" in shown
             assert "Ctrl+T" not in shown
             assert "Ctrl+H" in shown
+            assert "Ctrl+W" in shown
+            assert "open warning details" in shown
             assert "Ctrl+Q" in shown
             await pilot.press("escape")
             await pilot.pause()
@@ -2864,7 +2871,8 @@ def test_debug_panels_collapse_and_hide():
     async def drive():
         async with app.run_test(size=(80, 24)) as pilot:
             banner = str(app.query_one("#banner").content)
-            assert "\nDebug\n" in banner
+            assert "\nDebug\n" not in banner
+            assert str(app.query_one("#status").content) == "Model: m · Debug"
             await pilot.press(*"hi", "enter")
             await _wait_for(pilot, lambda: "Agent: done" in app.transcript_plain())
             boxes = list(app.query(".debug"))
@@ -2901,9 +2909,16 @@ def test_debug_banner_stays_after_a_new_session(tmp_path, monkeypatch):
 
     async def drive():
         async with app.run_test(size=(80, 24)) as pilot:
-            assert "\nDebug\n" in str(app.query_one("#banner").content)
+            skills, tools = session.skills.available_counts()
+            expected = f"Model: custom-model · {skills} skills · {tools} tools · Debug"
+            assert "\nDebug\n" not in str(app.query_one("#banner").content)
+            assert "Model:" not in str(app.query_one("#banner").content)
+            assert str(app.query_one("#status").content) == expected
             await pilot.press("ctrl+n")
-            assert "\nDebug\n" in str(app.query_one("#banner").content)
+            skills, tools = session.skills.available_counts()
+            expected = f"Model: custom-model · {skills} skills · {tools} tools · Debug"
+            assert "\nDebug\n" not in str(app.query_one("#banner").content)
+            assert str(app.query_one("#status").content) == expected
             assert session.debug is True
 
     asyncio.run(drive())
@@ -2921,15 +2936,50 @@ def test_yolo_banner_stays_after_a_new_session(tmp_path, monkeypatch):
 
     async def drive():
         async with plain_app.run_test(size=(80, 24)) as pilot:
-            assert YOLO_TITLE not in str(plain_app.query_one("#banner").content)
+            assert "YOLO" not in str(plain_app.query_one("#banner").content)
+            skills, tools = plain.skills.available_counts()
+            assert (
+                str(plain_app.query_one("#status").content)
+                == f"Model: custom-model · {skills} skills · {tools} tools"
+            )
+            composer = plain_app.query_one("#composer")
+            status_bar = plain_app.query_one("#status")
+            assert composer.region.bottom == status_bar.region.y
+            assert status_bar.region.bottom == plain_app.size.height
         async with app.run_test(size=(80, 24)) as pilot:
-            content = app.query_one("#banner").content
-            assert str(content).startswith(YOLO_TITLE)
-            assert content.spans[0].style == "bold ansi_bright_yellow"
+            assert "YOLO" not in str(app.query_one("#banner").content)
+            content = app.query_one("#status").content
+            skills, tools = session.skills.available_counts()
+            assert (
+                str(content)
+                == f"Model: custom-model · {skills} skills · {tools} tools · YOLO"
+            )
+            text = str(content)
+            yellow = [
+                text[span.start : span.end]
+                for span in content.spans
+                if span.style == "bold ansi_bright_yellow"
+            ]
+            assert yellow == ["YOLO"]
+            composer = app.query_one("#composer")
+            status_bar = app.query_one("#status")
+            assert composer.region.bottom == status_bar.region.y
+            assert status_bar.region.bottom == app.size.height
             await pilot.press("ctrl+n")
-            content = app.query_one("#banner").content
-            assert str(content).startswith(YOLO_TITLE)
-            assert content.spans[0].style == "bold ansi_bright_yellow"
+            assert "YOLO" not in str(app.query_one("#banner").content)
+            content = app.query_one("#status").content
+            skills, tools = session.skills.available_counts()
+            assert (
+                str(content)
+                == f"Model: custom-model · {skills} skills · {tools} tools · YOLO"
+            )
+            text = str(content)
+            yellow = [
+                text[span.start : span.end]
+                for span in content.spans
+                if span.style == "bold ansi_bright_yellow"
+            ]
+            assert yellow == ["YOLO"]
             assert session.yolo is True
 
     asyncio.run(drive())
@@ -3068,7 +3118,8 @@ def test_resume_restores_the_transcript(tmp_path, monkeypatch):
             assert app.query_one("MarkdownH3")
             banner = str(app.query_one("#banner").content)
             assert f"Workspace: {past.resolve()}" in banner
-            assert "Model: saved-model" in banner
+            assert "Model:" not in banner
+            assert "Model: saved-model" in str(app.query_one("#status").content)
             captured["plain"] = app.transcript_plain()
             await pilot.press(*"next", "enter")
             await _wait_for(pilot, lambda: bool(seen))
@@ -6112,6 +6163,8 @@ def test_mcp_server_name_cannot_match_a_built_in_skill():
 def test_configured_mcp_server_stays_out_of_schemas_until_load(tmp_path):
     registry = SkillRegistry(servers=(_mcp_server(),))
     try:
+        base_skills, base_tools = SkillRegistry().available_counts()
+        assert registry.available_counts() == (base_skills + 1, base_tools)
         menu = registry.get_menu()
         assert "mcp:\n- caido: Browse and replay HTTP traffic" in menu
         assert menu.index("mcp:") < menu.index("web-testing:")
@@ -6124,6 +6177,7 @@ def test_configured_mcp_server_stays_out_of_schemas_until_load(tmp_path):
         assert "caido_list_requests" in names
         assert "caido_send_request" in names
         assert "caido_read_resource" in names
+        assert registry.available_counts() == (base_skills + 1, base_tools + 8)
         assert "local Caido proxy" in loaded
         assert "Use HTTPQL." in loaded
         assert "caido://project: Current project" in loaded
@@ -6239,6 +6293,9 @@ def test_missing_mcp_command_is_an_error(tmp_path):
         )
         assert "caido" not in registry.loaded_names()
         assert "caido" not in registry.get_menu()
+        assert registry.warnings == [
+            ("caido", "command not found: harnh3x-missing-mcp")
+        ]
         again = registry.load_skill("caido")
         assert again == "Error: Unknown skill 'caido'. Check the skill menu."
     finally:
@@ -6257,11 +6314,61 @@ def test_unreachable_mcp_url_is_omitted_and_a_server_without_one_stays(tmp_path)
         assert "mcp:" not in menu
         assert "caido" not in menu
         assert "caido_list_requests" not in _tool_names(closed.schemas())
+        assert closed.warnings == [
+            ("caido", f"not accepting connections: http://127.0.0.1:{port}")
+        ]
+        base_skills, base_tools = SkillRegistry().available_counts()
+        assert closed.available_counts() == (base_skills, base_tools)
     finally:
         closed.close()
 
     plain = SkillRegistry(servers=(_mcp_server(description="Widgets."),))
     try:
         assert "- caido: Widgets." in plain.get_menu()
+        assert plain.warnings == []
+        assert plain.available_counts() == (base_skills + 1, base_tools)
     finally:
         plain.close()
+
+
+def test_status_bar_warns_when_an_mcp_server_is_unavailable(tmp_path):
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    url = f"http://127.0.0.1:{port}"
+    session = agent.Session(workspace=tmp_path)
+    session.skills.close()
+    session.skills = SkillRegistry(servers=(_mcp_server(env={"CAIDO_URL": url}),))
+    app = HarnessApp(session, lambda *args, **kwargs: "done", show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            content = app.query_one("#status").content
+            status = str(content)
+            skills, tools = session.skills.available_counts()
+            assert f"Model: {session.model}" in status
+            assert f"{skills} skills · {tools} tools" in status
+            warning = "⚠ caido unavailable · Ctrl+W for warning details"
+            assert warning in status
+            red = [
+                status[span.start : span.end]
+                for span in content.spans
+                if span.style == "bold ansi_bright_red"
+            ]
+            assert red == [warning]
+            assert "caido" not in str(app.query_one("#banner").content)
+            composer = app.query_one("#composer")
+            status_bar = app.query_one("#status")
+            assert composer.region.bottom == status_bar.region.y
+            assert status_bar.region.bottom == app.size.height
+            await pilot.press("ctrl+w")
+            await pilot.pause()
+            assert isinstance(app.screen, WarningScreen)
+            detail = str(app.screen.query_one("#warning-box").content)
+            assert "caido" in detail
+            assert url in detail
+            await pilot.press("escape")
+            await pilot.pause()
+            assert not isinstance(app.screen, WarningScreen)
+
+    asyncio.run(drive())

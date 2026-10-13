@@ -28,10 +28,17 @@ class McpError(Exception):
 
 
 def upstream_reachable(server: McpServer, timeout: float = _PROBE_TIMEOUT) -> bool:
+    return upstream_problem(server, timeout) is None
+
+
+def upstream_problem(server: McpServer, timeout: float = _PROBE_TIMEOUT) -> str | None:
+    failed = []
     for parsed in _http_targets(server.env):
         if not _port_open(parsed, timeout):
-            return False
-    return True
+            failed.append(_public_url(parsed))
+    if not failed:
+        return None
+    return "not accepting connections: " + ", ".join(failed)
 
 
 def _http_targets(env: Mapping[str, str]):
@@ -43,6 +50,19 @@ def _http_targets(env: Mapping[str, str]):
         if parsed.scheme in {"http", "https"}:
             targets.append(parsed)
     return targets
+
+
+def _public_url(parsed) -> str:
+    host = parsed.hostname
+    if not host:
+        return "invalid URL"
+    try:
+        port = parsed.port
+    except ValueError:
+        return f"{parsed.scheme}://{host} (invalid port)"
+    if port is None:
+        return f"{parsed.scheme}://{host}"
+    return f"{parsed.scheme}://{host}:{port}"
 
 
 def _port_open(parsed, timeout: float) -> bool:

@@ -4,7 +4,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from harnh3x.config import McpServer
-from harnh3x.mcp.client import McpClient, McpError, _guide, upstream_reachable
+from harnh3x.mcp.client import McpClient, McpError, _guide, upstream_problem
 from harnh3x.prompt import project_note, yolo_note
 from harnh3x.tools import TOOLS, execute_tool
 
@@ -170,12 +170,15 @@ class SkillRegistry:
     ):
         catalog = dict(_CATALOG)
         self._clients: dict[str, McpClient] = {}
+        self.warnings: list[tuple[str, str]] = []
         for server in servers:
             if server.name in catalog or server.name in {"load_skill", "unload_skill"}:
                 raise RuntimeError(
                     f"mcp server '{server.name}' matches a built-in skill"
                 )
-            if not upstream_reachable(server):
+            problem = upstream_problem(server)
+            if problem is not None:
+                self.warnings.append((server.name, problem))
                 continue
             self._clients[server.name] = McpClient(server)
             catalog[server.name] = Skill(
@@ -204,6 +207,17 @@ class SkillRegistry:
 
     def loaded_names(self) -> list[str]:
         return sorted(self._active)
+
+    def available_counts(self) -> tuple[int, int]:
+        names: set[str] = set()
+        for name, skill in self._catalog.items():
+            current = self._active.get(name, skill)
+            for tool in current.tools:
+                function = tool.get("function") if isinstance(tool, dict) else None
+                tool_name = function.get("name") if isinstance(function, dict) else None
+                if isinstance(tool_name, str):
+                    names.add(tool_name)
+        return len(self._catalog), len(names)
 
     def get_menu(self) -> str:
         lines = [
@@ -297,7 +311,7 @@ class SkillRegistry:
             if not client.alive():
                 client.connect()
         except McpError as exc:
-            self._drop(name)
+            self._drop(name, str(exc))
             self._connect_error = f"Error: {exc} Skill '{name}' is no longer available."
             return None
         schemas = client.schemas()
@@ -307,13 +321,15 @@ class SkillRegistry:
             return None
         return replace(skill, tools=tuple(schemas), doc=client.documentation())
 
-    def _drop(self, name: str) -> None:
+    def _drop(self, name: str, reason: str) -> None:
         client = self._clients.pop(name, None)
         if client is not None:
             client.close()
         self._catalog.pop(name, None)
         self._active.pop(name, None)
         self._catalog = _ordered(self._catalog)
+        if not any(item[0] == name for item in self.warnings):
+            self.warnings.append((name, reason))
 
     def _collision(self, skill_name: str, schemas: list[dict]) -> str | None:
         names = [schema["function"]["name"] for schema in schemas]

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical, VerticalScroll
+from textual.containers import Vertical, VerticalGroup, VerticalScroll
 from textual.events import Click, Key
 from textual.screen import ModalScreen, Screen
 from textual.content import Content
@@ -26,7 +26,6 @@ from harnh3x.agent import (
 
 THINKING_ROWS = 3
 
-YOLO_TITLE = "YOLO — sandbox off"
 YOLO_PLAIN = "YOLO — sandbox off. This session can read any file and run any command, including sudo."
 
 _TUI_HELP = """\
@@ -40,6 +39,7 @@ Hotkeys
   Shift+Enter  new line
   Ctrl+N       new session
   Ctrl+H       hide or show thinking, tool calls, debug, and compaction boxes
+  Ctrl+W       open warning details
   Ctrl+Q       quit"""
 
 
@@ -781,10 +781,47 @@ class HelpScreen(ModalScreen):
         self.dismiss()
 
 
+class WarningScreen(ModalScreen):
+    BINDINGS = [
+        Binding("escape", "close", "Close", priority=True),
+    ]
+    DEFAULT_CSS = """
+    WarningScreen {
+        align: center middle;
+    }
+    #warning-box {
+        width: auto;
+        height: auto;
+        max-width: 80;
+        border: round ansi_yellow;
+        padding: 1 2;
+        background: $surface;
+    }
+    """
+
+    def __init__(self, warnings: list[tuple[str, str]]) -> None:
+        super().__init__()
+        self.warnings = warnings
+
+    def compose(self) -> ComposeResult:
+        lines = []
+        for name, reason in self.warnings:
+            lines.append(name)
+            lines.append(f"  {reason}")
+        yield Static("\n".join(lines), id="warning-box", markup=False)
+
+    def on_mount(self) -> None:
+        self.query_one("#warning-box", Static).border_title = "Unavailable"
+
+    def action_close(self) -> None:
+        self.dismiss()
+
+
 class HarnessApp(App):
     BINDINGS = [
         Binding("ctrl+q", "quit", "Quit", priority=True),
         Binding("ctrl+h", "toggle_trace", "Details", priority=True),
+        Binding("ctrl+w", "warnings", "Warnings", priority=True),
         Binding("ctrl+n", "new_session", "New session", priority=True),
     ]
     CSS = """
@@ -798,8 +835,18 @@ class HarnessApp(App):
         height: 1fr;
         padding: 1 1 0 1;
     }
-    #composer {
+    #bottom {
         dock: bottom;
+        height: auto;
+    }
+    #status {
+        height: auto;
+        padding: 0 1;
+    }
+    #status.hidden {
+        display: none;
+    }
+    #composer {
         height: 5;
     }
     .panel {
@@ -858,23 +905,90 @@ class HarnessApp(App):
             lines.append(f"Project: {project}")
         if getattr(self.session, "coding", False):
             lines.append("Coding")
-        if getattr(self.session, "debug", False):
-            lines.append("Debug")
-        lines.append(f"Model: {self.session.model}")
+        return Content("\n".join(lines))
+
+    def _available_counts(self) -> tuple[int, int] | None:
+        skills = getattr(self.session, "skills", None)
+        counts = getattr(skills, "available_counts", None)
+        if not callable(counts):
+            return None
+        found = counts()
+        if (
+            isinstance(found, tuple)
+            and len(found) == 2
+            and all(
+                isinstance(item, int) and not isinstance(item, bool) for item in found
+            )
+        ):
+            return found
+        return None
+
+    def _warnings(self) -> list[tuple[str, str]]:
+        skills = getattr(self.session, "skills", None)
+        warnings = getattr(skills, "warnings", None)
+        if not isinstance(warnings, list):
+            return []
+        found = []
+        for item in warnings:
+            if (
+                isinstance(item, tuple)
+                and len(item) == 2
+                and isinstance(item[0], str)
+                and isinstance(item[1], str)
+            ):
+                found.append(item)
+        return found
+
+    def _status(self) -> Content:
+        chunks: list[Content] = []
+
+        def add(text: str, style: str | None = None) -> None:
+            if chunks:
+                chunks.append(Content(" · "))
+            piece = Content.styled(text, style) if style else Content(text)
+            chunks.append(piece)
+
+        model = getattr(self.session, "model", None)
+        if isinstance(model, str) and model:
+            add(f"Model: {model}")
         context = context_line(
             getattr(self.session, "context_tokens", None),
             getattr(self.session, "context_limit", None),
         )
         if context is not None:
-            lines.append(context)
-        body = Content("\n".join(lines))
-        if not self._yolo():
-            return body
-        title = Content.styled(YOLO_TITLE, "bold ansi_bright_yellow")
-        return title + "\n" + body
+            add(context)
+        counts = self._available_counts()
+        if counts is not None:
+            skills, tools = counts
+            add(f"{skills} skill" if skills == 1 else f"{skills} skills")
+            add(f"{tools} tool" if tools == 1 else f"{tools} tools")
+        if self._yolo():
+            add("YOLO", "bold ansi_bright_yellow")
+        if getattr(self.session, "debug", False):
+            add("Debug")
+        warnings = self._warnings()
+        if warnings:
+            names = ", ".join(name for name, _reason in warnings)
+            add(
+                f"⚠ {names} unavailable · Ctrl+W for warning details",
+                "bold ansi_bright_red",
+            )
+        if not chunks:
+            return Content("")
+        line = chunks[0]
+        for chunk in chunks[1:]:
+            line += chunk
+        return line
 
     def _refresh_banner(self) -> None:
         self.query_one("#banner", Static).update(self._banner())
+        self._refresh_status()
+
+    def _refresh_status(self) -> None:
+        bar = self.query_one("#status", Static)
+        content = self._status()
+        bar.update(content)
+        bar.set_class(not str(content), "hidden")
 
     def _load_context_limit(self) -> None:
         if self._context_limit is None or self.review is not None:
@@ -900,13 +1014,16 @@ class HarnessApp(App):
     def compose(self) -> ComposeResult:
         yield Static(self._banner(), id="banner", markup=False)
         yield VerticalScroll(id="transcript")
-        if self.review is None and self.initial is None:
-            yield Composer()
+        with VerticalGroup(id="bottom"):
+            if self.review is None and self.initial is None:
+                yield Composer()
+            yield Static(self._status(), id="status", markup=False)
 
     def _anchor_transcript(self) -> None:
         self.query_one("#transcript").anchor()
 
     def on_mount(self) -> None:
+        self._refresh_status()
         self._load_context_limit()
         self._anchor_transcript()
         if self.review is not None:
@@ -927,6 +1044,12 @@ class HarnessApp(App):
             return
         self.query_one(Composer).focus()
 
+    def action_warnings(self) -> None:
+        warnings = self._warnings()
+        if not warnings or len(self.screen_stack) > 1:
+            return
+        self.push_screen(WarningScreen(warnings))
+
     def action_toggle_trace(self) -> None:
         transcript = self.query_one("#transcript")
         transcript.set_class(
@@ -945,7 +1068,7 @@ class HarnessApp(App):
         if composer.disabled:
             return
         self.session.reset()
-        self.query_one("#banner", Static).update(self._banner())
+        self._refresh_banner()
         self.tools = None
         self._shown_compactions = []
         self._compacting = None
@@ -1053,7 +1176,7 @@ class HarnessApp(App):
             composer.focus()
             return
         self.tools = None
-        self.query_one("#banner", Static).update(self._banner())
+        self._refresh_banner()
         await self.query_one("#transcript").remove_children()
         self._anchor_transcript()
         self._render_history()
