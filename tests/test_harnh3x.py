@@ -2739,7 +2739,12 @@ def test_banner_shows_context_and_updates_after_a_turn():
     async def drive():
         async with app.run_test(size=(80, 24)) as pilot:
             banner = str(app.query_one("#banner").content)
-            assert f"🤖 Harnh3x {__version__}" in banner
+            assert "🤖 Harnh3x" in banner
+            assert __version__ not in banner
+            version = app.query_one("#version")
+            assert str(version.content) == __version__
+            assert version.region.right == app.size.width
+            assert version.region.y == app.query_one("#status").region.y
             assert "Context:" not in banner
             assert "Model:" not in banner
             status = str(app.query_one("#status").content)

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical, VerticalGroup, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalGroup, VerticalScroll
 from textual.events import Click, Key
 from textual.screen import ModalScreen, Screen
 from textual.content import Content
@@ -839,12 +839,23 @@ class HarnessApp(App):
         dock: bottom;
         height: auto;
     }
+    #status-line {
+        height: 1;
+        width: 1fr;
+    }
     #status {
-        height: auto;
+        height: 1;
         padding: 0 1;
+        overflow: hidden;
     }
     #status.hidden {
         display: none;
+    }
+    #version {
+        dock: right;
+        width: auto;
+        height: 1;
+        padding: 0 1;
     }
     #composer {
         height: 5;
@@ -898,7 +909,7 @@ class HarnessApp(App):
     def _banner(self) -> Content:
         lines = []
         if self.review is None:
-            lines.append(f"🤖 Harnh3x {__version__}")
+            lines.append("🤖 Harnh3x")
         lines.append(f"Workspace: {self.session.workspace}")
         project = getattr(self.session, "project", None)
         if project:
@@ -1017,7 +1028,9 @@ class HarnessApp(App):
         with VerticalGroup(id="bottom"):
             if self.review is None and self.initial is None:
                 yield Composer()
-            yield Static(self._status(), id="status", markup=False)
+            with Horizontal(id="status-line"):
+                yield Static(self._status(), id="status", markup=False)
+                yield Static(__version__, id="version", markup=False)
 
     def _anchor_transcript(self) -> None:
         self.query_one("#transcript").anchor()
