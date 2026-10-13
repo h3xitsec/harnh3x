@@ -230,7 +230,7 @@ class Session:
         if coding and self.project is None:
             raise ValueError("--coding requires --project")
         self.coding = coding
-        self.skills = SkillRegistry(yolo=yolo, project=self.project)
+        self.skills = self._skills()
         self.applied_rules: set[str] = set()
         self.context_tokens: int | None = None
         self.context_limit: int | None = None
@@ -253,11 +253,17 @@ class Session:
             ),
         }
 
+    def _skills(self) -> SkillRegistry:
+        return SkillRegistry(
+            yolo=self.yolo, project=self.project, servers=config.MCP_SERVERS
+        )
+
     def reset(self) -> None:
         self.workspace = _session_workspace(_workspaces_dir() / str(uuid.uuid4()))
         if self.project is not None:
             self.project = _bind_project(self.project, self.workspace)
-        self.skills = SkillRegistry(yolo=self.yolo, project=self.project)
+        self.skills.close()
+        self.skills = self._skills()
         self.applied_rules = set()
         self.context_tokens = None
         self._debug_system = None
@@ -276,7 +282,8 @@ class Session:
         self.messages = data["messages"]
         self.context_tokens = _stored_context_tokens(data)
         self.context_limit = None
-        self.skills = SkillRegistry(yolo=self.yolo, project=self.project)
+        self.skills.close()
+        self.skills = self._skills()
         self.applied_rules = set()
         self._debug_system = None
         _replay_skills(self)

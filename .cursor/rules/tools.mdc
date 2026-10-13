@@ -1,12 +1,12 @@
 ---
 description: Workspace jail, shell deny list, and tool error strings
-globs: src/harnh3x/tools/**/*.py,src/harnh3x/sandbox.py,src/harnh3x/skills/**
+globs: src/harnh3x/tools/**/*.py,src/harnh3x/sandbox.py,src/harnh3x/skills/**,src/harnh3x/mcp/**/*.py
 alwaysApply: false
 ---
 
 # Tool sandbox
 
-Register every domain tool in both `TOOLS` and `TOOL_FNS`. `SkillRegistry` slices those schemas by the manifest in `src/harnh3x/skills/`. A manifest name missing from `TOOLS` fails at import. The loop sends `schemas()` for the loaded skills plus `load_skill` and `unload_skill`, not the full `TOOLS` list. `execute_tool` stays the raw sandbox; `SkillRegistry.execute` rejects a domain tool whose skill is not loaded.
+Register every domain tool in both `TOOLS` and `TOOL_FNS`. `SkillRegistry` slices those schemas by the manifest in `src/harnh3x/skills/`. A manifest name missing from `TOOLS` fails at import. The loop sends `schemas()` for the loaded skills plus `load_skill` and `unload_skill`, not the full `TOOLS` list. `execute_tool` stays the raw sandbox; `SkillRegistry.execute` rejects a domain tool whose skill is not loaded. MCP tools are not registered in `TOOLS`. Once their skill is loaded, `execute` sends the call to that server's stdio session. The server command comes from `mcp` in the YAML config. The child is not passed through Seatbelt. A tool result is MCP text content passed through `cap_result`, or `Error: ...` when the server reports `isError` or the process has died. The next call after a dead process starts a new one.
 
 Resolve every file path with `resolve_in_workspace` (`Path.resolve` plus `is_relative_to`). Reject empty paths and anything outside the workspace. When `execute_tool` is given a project, relative paths use that directory and absolute paths may resolve under the project or the workspace. Downloads still resolve inside the workspace only.
 

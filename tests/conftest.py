@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-# Skip ~/.config/harnh3x/harnh3x.conf so the suite uses built-in defaults.
+# Skip ~/.config/harnh3x/harnh3x.yaml so the suite uses built-in defaults.
 os.environ["HARNH3X_CONFIG"] = ""
 
 

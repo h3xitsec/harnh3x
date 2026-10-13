@@ -31,15 +31,15 @@ pipx install "git+https://github.com/h3xitsec/harnh3x.git"
 poetry install
 ```
 
-The client reads `~/.config/harnh3x/harnh3x.conf`, or `$XDG_CONFIG_HOME/harnh3x/harnh3x.conf` when that variable is set. A missing file changes nothing, and the process does not create it. [`harnh3x.conf.example`](harnh3x.conf.example) lists every settings.
+The client reads `~/.config/harnh3x/harnh3x.yaml`, or `$XDG_CONFIG_HOME/harnh3x/harnh3x.yaml` when that variable is set. A missing file changes nothing, and the process does not create it. [`harnh3x.yaml.example`](harnh3x.yaml.example) lists every setting. If an old `harnh3x.conf` is still there and the YAML file is not, startup exits and tells you to move the settings.
 
-```
-api_key = sk-...
-api_url = http://127.0.0.1:11434/v1
-model = qwen3.5-128k
+```yaml
+api_key: sk-...
+api_url: http://127.0.0.1:11434/v1
+model: qwen3.5-128k
 ```
 
-Blank lines and `#` comments are ignored. The same values can be set with environment variables, which override the file when they are non-empty:
+`#` comments are ignored. The same scalar values can be set with environment variables, which override the file when they are non-empty:
 
 ```bash
 OPENAI_API_KEY=...
@@ -53,13 +53,27 @@ Startup exits with a short error when `api_key` or `api_url` is missing from bot
 
 `provider` is `openai` by default. Set it to `anthropic` to call Claude's Messages API. The key is then `ANTHROPIC_API_KEY` when that variable is set, otherwise `api_key`. `OPENAI_API_KEY` does not override the Claude key. `api_url` is optional in that mode and defaults to `https://api.anthropic.com`. `max_tokens` (default 8192) is sent on every Messages call, including compaction. `context_limit` sets the window used for compaction; when it is unset, Claude uses 200000.
 
-```
-provider = anthropic
-api_key = sk-ant-...
-model = claude-sonnet-4-6
+```yaml
+provider: anthropic
+api_key: sk-ant-...
+model: claude-sonnet-4-6
 ```
 
 Other tunables use the same file: `max_turns`, `compact_at`, `max_tool_result`, `fetch_timeout`, `fetch_max_bytes`, `fetch_max_redirects`, `search_max_results`, `feed_max_items`, `shell_timeout`, `shell_max_timeout`, `list_files_max`, `search_files_max`, `pdf_max_pages`, `preview_rows`, `wikipedia_lang`, and `base_dir`. Each one also accepts `HARNH3X_` plus that name in uppercase, such as `HARNH3X_MAX_TURNS`. `base_dir` defaults to `~/.harnh3x`: sessions are created under `workspaces/` inside it, and `memory.md` sits next to that directory. `HARNH3X_CONFIG` points at a different file; an empty value skips the file.
+
+MCP servers live in the same file under `mcp`. Each entry needs `command` and may set `args`, `env`, `timeout`, `description`, `include`, and `exclude`. Harnh3x does not install the server binary. The child is started from that command when you load the skill, with a minimal environment plus the `env` block, and it is not wrapped in the Seatbelt sandbox. `unload_skill` drops the tools from the next turn and leaves the process running. A new session or quitting the process stops it.
+
+```yaml
+mcp:
+  caido:
+    command: caido-mcp-server
+    args: [serve]
+    env:
+      CAIDO_URL: http://127.0.0.1:8080
+      CAIDO_ACCESS_TOKEN: "..."
+```
+
+Install [caido-mcp-server](https://github.com/c0tton-fluff/caido-mcp-server) yourself and put the local Caido access token in `env`. Leave `CAIDO_ALLOW_SENSITIVE_HEADERS` unset unless you need real credential headers in tool output. Another server is another key under `mcp`. Environment variables do not override this block.
 
 The built-in model is `qwen3.5-128k` when nothing else sets it. Point `api_url` or `OPENAI_BASE_URL` at whatever server hosts it.
 

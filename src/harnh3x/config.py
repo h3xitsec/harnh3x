@@ -2,8 +2,10 @@ import math
 import os
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
+import yaml
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -19,6 +21,29 @@ TRANSCRIPT_FILE = "transcript.json"
 ANTHROPIC_API_URL = "https://api.anthropic.com"
 ANTHROPIC_CONTEXT_LIMIT = 200_000
 _PROVIDERS = {"openai", "anthropic"}
+_SERVER_NAME = re.compile(r"[a-z0-9][a-z0-9-]*\Z")
+_SERVER_FIELDS = {
+    "command",
+    "args",
+    "env",
+    "timeout",
+    "description",
+    "include",
+    "exclude",
+}
+_DEFAULT_MCP_TIMEOUT = 60
+
+
+@dataclass(frozen=True)
+class McpServer:
+    name: str
+    command: str
+    args: tuple[str, ...]
+    env: Mapping[str, str]
+    timeout: int = _DEFAULT_MCP_TIMEOUT
+    description: str = ""
+    include: tuple[str, ...] | None = None
+    exclude: tuple[str, ...] = ()
 
 
 class _Setting:
@@ -83,32 +108,36 @@ def config_location(
         return Path(override).expanduser(), True
     xdg = env.get("XDG_CONFIG_HOME")
     root = Path(xdg).expanduser() if xdg else Path.home() / ".config"
-    return root / "harnh3x" / "harnh3x.conf", False
+    return root / "harnh3x" / "harnh3x.yaml", False
 
 
-def parse_config(text: str, path: Path) -> dict[str, tuple[str, int]]:
-    values: dict[str, tuple[str, int]] = {}
-    for number, line in enumerate(text.splitlines(), start=1):
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
+def parse_config(
+    text: str, path: Path
+) -> tuple[dict[str, object], tuple[McpServer, ...]]:
+    try:
+        loaded = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise SystemExit(f"{path}: {exc}") from None
+    if loaded is None:
+        loaded = {}
+    if not isinstance(loaded, dict):
+        raise SystemExit(f"{path}: expected a mapping")
+    values: dict[str, object] = {}
+    servers: list[McpServer] = []
+    for key, raw in loaded.items():
+        if not isinstance(key, str):
+            raise SystemExit(f"{path}: expected a string key")
+        if key == "mcp":
+            servers = _parse_mcp(raw, path)
             continue
-        if "=" not in stripped:
-            raise SystemExit(f"{path}:{number}: expected key = value")
-        key, raw = stripped.split("=", 1)
-        key = key.strip()
-        raw = _unquote(raw.strip())
-        if not key:
-            raise SystemExit(f"{path}:{number}: expected key = value")
         if key not in _SETTINGS:
-            raise SystemExit(f"{path}:{number}: unknown setting {key}")
-        if raw == "":
-            raise SystemExit(f"{path}:{number}: {key} needs a value")
-        values[key] = (raw, number)
-    return values
+            raise SystemExit(f"{path}: unknown setting {key}")
+        values[key] = raw
+    return values, tuple(servers)
 
 
 def resolve_settings(
-    file_values: Mapping[str, tuple[str, int]],
+    file_values: Mapping[str, object],
     environ: Mapping[str, str],
     path: Path,
 ) -> dict[str, object]:
@@ -117,13 +146,12 @@ def resolve_settings(
     for key, spec in _SETTINGS.items():
         env_raw = _present(environ.get(spec.env))
         if env_raw is not None:
-            resolved[spec.attr] = _cast(spec.kind, env_raw, spec.env)
+            resolved[spec.attr] = _coerce(spec.kind, env_raw, spec.env)
             origins[spec.attr] = spec.env
             continue
         if key in file_values:
-            raw, line = file_values[key]
-            origin = f"{path}:{line}"
-            resolved[spec.attr] = _cast(spec.kind, raw, origin)
+            origin = f"{path}: {key}"
+            resolved[spec.attr] = _coerce(spec.kind, file_values[key], origin)
             origins[spec.attr] = origin
             continue
         resolved[spec.attr] = spec.default
@@ -134,7 +162,7 @@ def resolve_settings(
 def _apply_provider(
     resolved: dict[str, object],
     origins: dict[str, str],
-    file_values: Mapping[str, tuple[str, int]],
+    file_values: Mapping[str, object],
     environ: Mapping[str, str],
     path: Path,
 ) -> None:
@@ -151,8 +179,9 @@ def _apply_provider(
         resolved["API_KEY"] = anthropic_key
     elif origins.get("API_KEY") == "OPENAI_API_KEY":
         if "api_key" in file_values:
-            raw, line = file_values["api_key"]
-            resolved["API_KEY"] = _cast(str, raw, f"{path}:{line}")
+            resolved["API_KEY"] = _coerce(
+                str, file_values["api_key"], f"{path}: api_key"
+            )
         else:
             resolved["API_KEY"] = None
     if resolved["API_URL"] is None:
@@ -195,22 +224,96 @@ def load_settings(environ: Mapping[str, str] | None = None) -> dict[str, object]
     env = os.environ if environ is None else environ
     path, explicit = config_location(env)
     if path is None:
-        return resolve_settings({}, env, Path("harnh3x.conf"))
+        return _with_servers(resolve_settings({}, env, Path("harnh3x.yaml")), ())
     if not path.is_file():
         if explicit:
             raise SystemExit(f"{path}: config file not found")
-        return resolve_settings({}, env, path)
+        legacy = path.with_name("harnh3x.conf")
+        if legacy.is_file():
+            raise SystemExit(
+                f"{legacy} is no longer read. Move its settings into {path}."
+            )
+        return _with_servers(resolve_settings({}, env, path), ())
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
         raise SystemExit(f"{path}: {exc.strerror}") from None
-    return resolve_settings(parse_config(text, path), env, path)
+    values, servers = parse_config(text, path)
+    return _with_servers(resolve_settings(values, env, path), servers)
 
 
-def _unquote(value: str) -> str:
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-        return value[1:-1]
-    return value
+def _with_servers(
+    resolved: dict[str, object], servers: tuple[McpServer, ...]
+) -> dict[str, object]:
+    resolved["MCP_SERVERS"] = servers
+    return resolved
+
+
+def _parse_mcp(raw: object, path: Path) -> list[McpServer]:
+    if raw is None:
+        return []
+    if not isinstance(raw, dict):
+        raise SystemExit(f"{path}: mcp: expected a mapping")
+    servers = []
+    for name, block in raw.items():
+        if not isinstance(name, str) or _SERVER_NAME.fullmatch(name) is None:
+            shown = name if isinstance(name, str) else ""
+            raise SystemExit(f"{path}: mcp.{shown}: invalid server name")
+        origin = f"{path}: mcp.{name}"
+        if not isinstance(block, dict):
+            raise SystemExit(f"{origin}: expected a mapping")
+        unknown = [key for key in block if key not in _SERVER_FIELDS]
+        if unknown:
+            raise SystemExit(f"{origin}: unknown setting {unknown[0]}")
+        command = block.get("command")
+        if not isinstance(command, str) or not command.strip():
+            raise SystemExit(f"{origin}: command is required")
+        args = _string_list(block.get("args", []), origin, "args")
+        env = _string_map(block.get("env", {}), origin)
+        timeout = block.get("timeout", _DEFAULT_MCP_TIMEOUT)
+        if isinstance(timeout, bool) or not isinstance(timeout, int) or timeout <= 0:
+            raise SystemExit(f"{origin}: timeout must be a positive integer")
+        description = block.get("description", "")
+        if not isinstance(description, str):
+            raise SystemExit(f"{origin}: description must be a string")
+        include = None
+        if "include" in block:
+            include = tuple(_string_list(block.get("include"), origin, "include"))
+        exclude = tuple(_string_list(block.get("exclude", []), origin, "exclude"))
+        servers.append(
+            McpServer(
+                name=name,
+                command=command,
+                args=tuple(args),
+                env=env,
+                timeout=timeout,
+                description=description,
+                include=include,
+                exclude=exclude,
+            )
+        )
+    return servers
+
+
+def _string_list(raw: object, origin: str, label: str) -> list[str]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+        raise SystemExit(f"{origin}: {label} must be a list of strings")
+    return list(raw)
+
+
+def _string_map(raw: object, origin: str) -> dict[str, str]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise SystemExit(f"{origin}: env must be a mapping of strings")
+    env = {}
+    for key, value in raw.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise SystemExit(f"{origin}: env must be a mapping of strings")
+        env[key] = value
+    return env
 
 
 def _present(value: str | None) -> str | None:
@@ -222,20 +325,31 @@ def _present(value: str | None) -> str | None:
     return text
 
 
-def _cast(kind: type, raw: str, origin: str) -> object:
+def _coerce(kind: type, raw: object, origin: str) -> object:
+    if kind is str:
+        if not isinstance(raw, str) or raw == "":
+            raise SystemExit(f"{origin}: must be a string")
+        return raw
     if kind is int:
-        if re.fullmatch(r"[+-]?\d+", raw) is None:
+        if isinstance(raw, str) and re.fullmatch(r"[+-]?\d+", raw):
+            return int(raw)
+        if isinstance(raw, bool) or not isinstance(raw, int):
             raise SystemExit(f"{origin}: must be an integer")
-        return int(raw)
-    if kind is float:
+        return raw
+    if isinstance(raw, bool) or isinstance(raw, str) and raw.strip() == "":
+        raise SystemExit(f"{origin}: must be a number")
+    if isinstance(raw, (int, float)):
+        value = float(raw)
+    elif isinstance(raw, str):
         try:
             value = float(raw)
         except ValueError:
             value = math.nan
-        if not math.isfinite(value):
-            raise SystemExit(f"{origin}: must be a number")
-        return value
-    return raw
+    else:
+        value = math.nan
+    if not math.isfinite(value):
+        raise SystemExit(f"{origin}: must be a number")
+    return value
 
 
 _loaded = load_settings()
@@ -261,3 +375,4 @@ PDF_MAX_PAGES = _loaded["PDF_MAX_PAGES"]
 PREVIEW_ROWS = _loaded["PREVIEW_ROWS"]
 WIKIPEDIA_LANG = _loaded["WIKIPEDIA_LANG"]
 BASE_DIR = _loaded["BASE_DIR"]
+MCP_SERVERS = _loaded["MCP_SERVERS"]

@@ -10,7 +10,10 @@ authors = ["h3xit <connect@h3x.it>"]
 readme = "README.md"
 package-mode = true
 packages = [{include = "harnh3x", from = "src"}]
-include = [{path = "src/harnh3x/skills/**/SKILL.md", format = ["sdist", "wheel"]}]
+include = [
+    {path = "src/harnh3x/skills/**/SKILL.md", format = ["sdist", "wheel"]},
+    {path = "src/harnh3x/mcp/guides/*.md", format = ["sdist", "wheel"]},
+]
 
 [tool.poetry.dependencies]
 python = "^3.14"
@@ -20,6 +23,7 @@ textual = "^8.2.0"
 trafilatura = "^2.3.0"
 pypdf = "^6.0"
 anthropic = "^1.13.0"
+pyyaml = "^6.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.0"

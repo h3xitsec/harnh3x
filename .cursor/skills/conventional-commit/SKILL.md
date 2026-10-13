@@ -101,7 +101,7 @@ Output a clear summary:
    - Full proposed message (subject + blank line + body).
    - Bulleted list of paths to `git add` for this commit.
 3. **Commit 2, …** — same structure.
-4. **Skipped / not staged:** `.env`, `src/.env`, `harnh3x.conf` with keys, `*.pem`, and other secrets. Call these out explicitly.
+4. **Skipped / not staged:** `.env`, `src/.env`, `harnh3x.yaml` with keys, `*.pem`, and other secrets. Call these out explicitly.
 5. Ask the user to confirm, adjust the split, or edit wording.
 
 ### 5. Execute only after approval

@@ -1,6 +1,10 @@
-from dataclasses import dataclass
+import atexit
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 
+from harnh3x.config import McpServer
+from harnh3x.mcp.client import McpClient, McpError, _guide
 from harnh3x.prompt import project_note, yolo_note
 from harnh3x.tools import TOOLS, execute_tool
 
@@ -41,6 +45,23 @@ class Skill:
     doc: str
     tools: tuple
     category: str = ""
+
+
+def _ordered(found: dict[str, Skill]) -> dict[str, Skill]:
+    ordered = sorted(
+        found.values(),
+        key=lambda skill: (bool(skill.category), skill.category, skill.name),
+    )
+    return {skill.name: skill for skill in ordered}
+
+
+def _mcp_description(server: McpServer) -> str:
+    if server.description:
+        return server.description
+    guide = _guide(server.name).strip()
+    if guide:
+        return _blurb(guide)
+    return "MCP server"
 
 
 def _blurb(doc: str) -> str:
@@ -107,11 +128,7 @@ def _load_catalog(
     if missing:
         joined = ", ".join(sorted(missing))
         raise RuntimeError(f"skill manifest has no SKILL.md for: {joined}")
-    ordered = sorted(
-        found.values(),
-        key=lambda skill: (bool(skill.category), skill.category, skill.name),
-    )
-    return {skill.name: skill for skill in ordered}
+    return _ordered(found)
 
 
 _CATALOG = _load_catalog()
@@ -144,17 +161,44 @@ _META_TOOLS = (
 
 
 class SkillRegistry:
-    def __init__(self, *, yolo: bool = False, project: Path | None = None):
-        self._catalog = _CATALOG
+    def __init__(
+        self,
+        *,
+        yolo: bool = False,
+        project: Path | None = None,
+        servers: Sequence[McpServer] = (),
+    ):
+        catalog = dict(_CATALOG)
+        self._clients: dict[str, McpClient] = {}
+        for server in servers:
+            if server.name in catalog or server.name in {"load_skill", "unload_skill"}:
+                raise RuntimeError(
+                    f"mcp server '{server.name}' matches a built-in skill"
+                )
+            self._clients[server.name] = McpClient(server)
+            catalog[server.name] = Skill(
+                name=server.name,
+                description=_mcp_description(server),
+                doc="",
+                tools=(),
+                category="mcp",
+            )
+        self._catalog = _ordered(catalog)
         self._active: dict[str, Skill] = {}
         self._yolo = yolo
         self._project = project
+        if self._clients:
+            atexit.register(self.close)
 
     def skill_tools(self, name: str) -> tuple[str, ...] | None:
-        skill = self._catalog.get(name)
+        skill = self._active.get(name) or self._catalog.get(name)
         if skill is None:
             return None
         return tuple(tool["function"]["name"] for tool in skill.tools)
+
+    def close(self) -> None:
+        for client in self._clients.values():
+            client.close()
 
     def loaded_names(self) -> list[str]:
         return sorted(self._active)
@@ -185,6 +229,11 @@ class SkillRegistry:
             tools = ", ".join(self.skill_tools(name) or ())
             return f"Skill '{name}' is already loaded. Call one of: {tools}."
         skill = self._catalog[name]
+        if name in self._clients:
+            loaded = self._connect(name, skill)
+            if loaded is None:
+                return self._connect_error
+            skill = loaded
         self._active[name] = skill
         tool_names = [tool["function"]["name"] for tool in skill.tools]
         text = (
@@ -234,12 +283,63 @@ class SkillRegistry:
         }
         if name not in loaded:
             return self._unknown_tool(name, args)
+        client = self._client_for(name)
+        if client is not None:
+            return client.call(name, args)
         return execute_tool(name, args, workspace, yolo=yolo, project=project)
+
+    def _connect(self, name: str, skill: Skill) -> Skill | None:
+        client = self._clients[name]
+        self._connect_error = ""
+        try:
+            if not client.alive():
+                client.connect()
+        except McpError as exc:
+            self._connect_error = f"Error: {exc}"
+            return None
+        schemas = client.schemas()
+        collision = self._collision(name, schemas)
+        if collision is not None:
+            self._connect_error = collision
+            return None
+        return replace(skill, tools=tuple(schemas), doc=client.documentation())
+
+    def _collision(self, skill_name: str, schemas: list[dict]) -> str | None:
+        names = [schema["function"]["name"] for schema in schemas]
+        if len(names) != len(set(names)):
+            return f"Error: tool from '{skill_name}' is listed more than once"
+        taken = {tool["function"]["name"] for tool in TOOLS}
+        taken.update(("load_skill", "unload_skill"))
+        for other, skill in self._active.items():
+            if other == skill_name:
+                continue
+            taken.update(tool["function"]["name"] for tool in skill.tools)
+        for name in names:
+            if name in taken:
+                return (
+                    f"Error: tool '{name}' from '{skill_name}' "
+                    "collides with an existing tool"
+                )
+        return None
+
+    def _client_for(self, tool: str) -> McpClient | None:
+        for name, skill in self._active.items():
+            if name not in self._clients:
+                continue
+            names = {schema["function"]["name"] for schema in skill.tools}
+            if tool in names:
+                return self._clients[name]
+        return None
 
     def _unknown_tool(self, name: str, args: dict) -> str:
         tools = self.skill_tools(name)
         if tools is None:
             return f"Error: Tool '{name}' not found. Is the skill loaded?"
+        if not tools:
+            return (
+                f"Error: '{name}' is a skill, not a tool. "
+                f"Call load_skill with name '{name}'."
+            )
         listed = ", ".join(tools)
         hinted = ""
         if isinstance(args, dict):

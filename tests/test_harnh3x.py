@@ -5399,16 +5399,17 @@ def test_config_file_skips_comments_and_reads_quotes():
     text = """
 # comment
 
-api_key = "sk-quoted"
-api_url = 'http://127.0.0.1:11434/v1'
-model = from-file
-max_turns = 12
+api_key: "sk-quoted"
+api_url: "http://127.0.0.1:11434/v1"
+model: from-file
+max_turns: 12
 """
-    path = Path("harnh3x.conf")
-    values = config.parse_config(text, path)
+    path = Path("harnh3x.yaml")
+    values, servers = config.parse_config(text, path)
     resolved = config.resolve_settings(values, {}, path)
 
-    assert values["api_key"] == ("sk-quoted", 4)
+    assert servers == ()
+    assert values["api_key"] == "sk-quoted"
     assert resolved["API_KEY"] == "sk-quoted"
     assert resolved["API_URL"] == "http://127.0.0.1:11434/v1"
     assert resolved["MODEL"] == "from-file"
@@ -5417,23 +5418,21 @@ max_turns = 12
 
 
 def test_config_file_rejects_unknown_keys_and_bad_numbers():
-    path = Path("demo.conf")
-    with pytest.raises(SystemExit, match=r"demo.conf:2: unknown setting nope"):
-        config.parse_config("#\nnope = 1\n", path)
-    with pytest.raises(SystemExit, match=r"demo.conf:1: must be an integer"):
-        config.resolve_settings(
-            config.parse_config("max_turns = lots\n", path), {}, path
-        )
-    with pytest.raises(SystemExit, match=r"demo.conf:1: must be a number"):
-        config.resolve_settings(
-            config.parse_config("compact_at = no\n", path), {}, path
-        )
+    path = Path("demo.yaml")
+    with pytest.raises(SystemExit, match=r"demo.yaml: unknown setting nope"):
+        config.parse_config("#\nnope: 1\n", path)
+    with pytest.raises(SystemExit, match=r"demo.yaml: max_turns: must be an integer"):
+        values, _servers = config.parse_config("max_turns: lots\n", path)
+        config.resolve_settings(values, {}, path)
+    with pytest.raises(SystemExit, match=r"demo.yaml: compact_at: must be a number"):
+        values, _servers = config.parse_config("compact_at: nope\n", path)
+        config.resolve_settings(values, {}, path)
 
 
 def test_environment_overrides_the_config_file():
-    path = Path("harnh3x.conf")
-    values = config.parse_config(
-        "api_key = file-key\nmodel = file-model\napi_url = http://file/v1\nmax_turns = 3\n",
+    path = Path("harnh3x.yaml")
+    values, _servers = config.parse_config(
+        "api_key: file-key\nmodel: file-model\napi_url: http://file/v1\nmax_turns: 3\n",
         path,
     )
     resolved = config.resolve_settings(
@@ -5449,8 +5448,8 @@ def test_environment_overrides_the_config_file():
 
 
 def test_config_file_fills_settings_the_environment_omits(tmp_path):
-    conf = tmp_path / "harnh3x.conf"
-    conf.write_text("api_url = http://file/v1\nmax_turns = 9\n")
+    conf = tmp_path / "harnh3x.yaml"
+    conf.write_text("api_url: http://file/v1\nmax_turns: 9\n")
     resolved = config.load_settings(
         {"HARNH3X_CONFIG": str(conf), "OPENAI_API_KEY": "   "}
     )
@@ -5467,6 +5466,7 @@ def test_missing_default_config_keeps_defaults(tmp_path):
     assert resolved["MODEL"] == "qwen3.5-128k"
     assert resolved["API_KEY"] is None
     assert resolved["MAX_TURNS"] == 45
+    assert resolved["MCP_SERVERS"] == ()
 
 
 def test_startup_requires_api_key_and_url(monkeypatch):
@@ -5488,7 +5488,7 @@ def test_startup_requires_api_key_and_url(monkeypatch):
 
 
 def test_startup_names_only_the_missing_setting(monkeypatch, tmp_path):
-    conf = tmp_path / "harnh3x.conf"
+    conf = tmp_path / "harnh3x.yaml"
     monkeypatch.setenv("HARNH3X_CONFIG", str(conf))
     monkeypatch.setattr(config, "API_KEY", None)
     monkeypatch.setattr(config, "API_URL", "http://127.0.0.1:11434/v1")
@@ -5509,8 +5509,8 @@ def test_explicit_config_path_must_exist(tmp_path):
 
 
 def test_import_applies_the_config_file(tmp_path):
-    conf = tmp_path / "harnh3x.conf"
-    conf.write_text("model = from-file\napi_key = file-key\n")
+    conf = tmp_path / "harnh3x.yaml"
+    conf.write_text("model: from-file\napi_key: file-key\n")
     env = os.environ.copy()
     env["HARNH3X_CONFIG"] = str(conf)
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
@@ -5964,8 +5964,10 @@ def test_compact_session_uses_the_messages_api(tmp_path, monkeypatch):
 
 
 def test_anthropic_provider_prefers_its_own_key():
-    path = Path("harnh3x.conf")
-    values = config.parse_config("provider = anthropic\napi_key = file-key\n", path)
+    path = Path("harnh3x.yaml")
+    values, _servers = config.parse_config(
+        "provider: anthropic\napi_key: file-key\n", path
+    )
 
     preferred = config.resolve_settings(
         values,
@@ -5983,15 +5985,14 @@ def test_anthropic_provider_prefers_its_own_key():
 
 
 def test_provider_must_be_openai_or_anthropic():
-    path = Path("demo.conf")
+    path = Path("demo.yaml")
     with pytest.raises(SystemExit, match="expected openai or anthropic"):
-        config.resolve_settings(
-            config.parse_config("provider = claude\n", path), {}, path
-        )
+        values, _servers = config.parse_config("provider: claude\n", path)
+        config.resolve_settings(values, {}, path)
 
 
 def test_startup_names_the_anthropic_key(monkeypatch, tmp_path):
-    conf = tmp_path / "harnh3x.conf"
+    conf = tmp_path / "harnh3x.yaml"
     monkeypatch.setenv("HARNH3X_CONFIG", str(conf))
     monkeypatch.setattr(config, "PROVIDER", "anthropic")
     monkeypatch.setattr(config, "API_KEY", None)
@@ -6033,3 +6034,205 @@ def test_every_tool_belongs_to_exactly_one_skill():
     assert sorted(assigned) == sorted(set(assigned))
     assert set(assigned) == set(tools.TOOL_FNS)
     assert set(assigned) == {tool["function"]["name"] for tool in tools.TOOLS}
+
+
+_FAKE_MCP = str(Path(__file__).resolve().parent / "fake_mcp.py")
+
+
+def _mcp_server(name="caido", **kwargs):
+    env = dict(kwargs.pop("env", ()))
+    return config.McpServer(
+        name=name,
+        command=kwargs.pop("command", sys.executable),
+        args=kwargs.pop("args", (_FAKE_MCP,)),
+        env=env,
+        **kwargs,
+    )
+
+
+def test_yaml_without_mcp_leaves_the_menu_unchanged(tmp_path):
+    path = tmp_path / "harnh3x.yaml"
+    path.write_text("model: from-file\n")
+    resolved = config.load_settings({"HARNH3X_CONFIG": str(path)})
+
+    assert resolved["MODEL"] == "from-file"
+    assert resolved["MCP_SERVERS"] == ()
+    assert "mcp:" not in SkillRegistry().get_menu()
+
+
+def test_leftover_conf_without_yaml_fails_startup(tmp_path):
+    root = tmp_path / "xdg"
+    folder = root / "harnh3x"
+    folder.mkdir(parents=True)
+    (folder / "harnh3x.conf").write_text("model = old\n")
+
+    with pytest.raises(SystemExit, match="no longer read") as missing:
+        config.load_settings({"XDG_CONFIG_HOME": str(root)})
+
+    message = str(missing.value)
+    assert str(folder / "harnh3x.conf") in message
+    assert str(folder / "harnh3x.yaml") in message
+
+
+def test_environment_overrides_scalars_and_keeps_mcp(tmp_path):
+    path = tmp_path / "harnh3x.yaml"
+    path.write_text(
+        "model: file-model\n"
+        "mcp:\n"
+        "  caido:\n"
+        "    command: caido-mcp-server\n"
+        "    args: [serve]\n"
+        "    env:\n"
+        '      CAIDO_ACCESS_TOKEN: "sekret"\n'
+    )
+    resolved = config.load_settings(
+        {"HARNH3X_CONFIG": str(path), "HARNH3X_MODEL": "env-model"}
+    )
+
+    assert resolved["MODEL"] == "env-model"
+    servers = resolved["MCP_SERVERS"]
+    assert servers[0].command == "caido-mcp-server"
+    assert servers[0].args == ("serve",)
+    assert servers[0].env["CAIDO_ACCESS_TOKEN"] == "sekret"
+
+
+def test_mcp_server_block_names_the_file_and_key():
+    path = Path("demo.yaml")
+    text = "mcp:\n  caido:\n    args: [serve]\n"
+    with pytest.raises(SystemExit, match=r"demo.yaml: mcp.caido: command is required"):
+        config.parse_config(text, path)
+
+
+def test_mcp_server_name_cannot_match_a_built_in_skill():
+    with pytest.raises(RuntimeError, match="matches a built-in skill"):
+        SkillRegistry(servers=(_mcp_server("file_ops"),))
+
+
+def test_configured_mcp_server_stays_out_of_schemas_until_load(tmp_path):
+    registry = SkillRegistry(servers=(_mcp_server(),))
+    try:
+        menu = registry.get_menu()
+        assert "mcp:\n- caido: Browse and replay HTTP traffic" in menu
+        assert menu.index("mcp:") < menu.index("web-testing:")
+        assert _tool_names(registry.schemas()) == ["load_skill", "unload_skill"]
+
+        loaded = registry.load_skill("caido")
+
+        names = _tool_names(registry.schemas())
+        assert names[0:2] == ["load_skill", "unload_skill"]
+        assert "caido_list_requests" in names
+        assert "caido_send_request" in names
+        assert "caido_read_resource" in names
+        assert "local Caido proxy" in loaded
+        assert "Use HTTPQL." in loaded
+        assert "caido://project: Current project" in loaded
+        assert "[loaded: caido_list_requests" in registry.get_menu()
+    finally:
+        registry.close()
+
+
+def test_mcp_tool_call_joins_text_and_reports_errors(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "parent-secret")
+    registry = SkillRegistry(
+        servers=(_mcp_server(env={"CAIDO_ACCESS_TOKEN": "sekret", "FAKE_MCP": ""}),)
+    )
+    try:
+        registry.load_skill("caido")
+        client = registry._clients["caido"]
+        assert client.argv == (sys.executable, _FAKE_MCP)
+        assert "sekret" not in client.argv
+
+        assert registry.execute("caido_list_requests", {}, tmp_path) == "alpha\nbeta"
+        assert registry.execute("boom", {}, tmp_path) == "Error: nope"
+        picture = registry.execute("picture", {}, tmp_path)
+        assert picture == "Unsupported content type: image"
+        wide = registry.execute("wide", {}, tmp_path)
+        assert "truncated" in wide
+        assert "bodyLimit" in wide
+        assert (
+            registry.execute(
+                "caido_read_resource", {"uri": "caido://project"}, tmp_path
+            )
+            == "project-body"
+        )
+        echo = json.loads(registry.execute("echo_env", {}, tmp_path))
+        assert echo["token"] == "sekret"
+        assert echo["openai"] is None
+        assert "sekret" not in echo["argv"]
+
+        dead = registry.execute("die", {}, tmp_path)
+        assert dead.startswith("Error:")
+        assert registry.execute("caido_list_requests", {}, tmp_path) == "alpha\nbeta"
+    finally:
+        registry.close()
+
+
+def test_mcp_include_filters_schemas_and_collision_fails_the_load(tmp_path):
+    included = SkillRegistry(servers=(_mcp_server(include=("caido_list_requests",)),))
+    try:
+        included.load_skill("caido")
+        names = _tool_names(included.schemas())
+        assert "caido_list_requests" in names
+        assert "caido_send_request" not in names
+        assert "caido_read_resource" in names
+    finally:
+        included.close()
+
+    colliding = SkillRegistry(servers=(_mcp_server(env={"FAKE_MCP": "collide"}),))
+    try:
+        failed = colliding.load_skill("caido")
+        assert failed == (
+            "Error: tool 'read_file' from 'caido' collides with an existing tool"
+        )
+        assert "caido" not in colliding.loaded_names()
+    finally:
+        colliding.close()
+
+
+def test_other_mcp_servers_skip_the_caido_guide(tmp_path):
+    registry = SkillRegistry(
+        servers=(
+            _mcp_server(
+                "widgets",
+                description="Widgets from the bench.",
+                env={"FAKE_MCP": "no-resources"},
+            ),
+        )
+    )
+    try:
+        loaded = registry.load_skill("widgets")
+        assert "Widgets from the bench." in loaded
+        assert "local Caido proxy" not in loaded
+        assert "widgets_read_resource" not in _tool_names(registry.schemas())
+        assert "caido_list_requests" in _tool_names(registry.schemas())
+    finally:
+        registry.close()
+
+
+def test_unload_keeps_the_mcp_process_and_reset_stops_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "MCP_SERVERS", (_mcp_server(),))
+    session = agent.Session(workspace=tmp_path)
+    registry = session.skills
+    try:
+        registry.load_skill("caido")
+        client = registry._clients["caido"]
+        assert client.alive()
+        assert registry.unload_skill("caido") == "Unloaded skill 'caido'."
+        assert client.alive()
+        assert "caido_list_requests" not in _tool_names(registry.schemas())
+        session.reset()
+        assert not client.alive()
+    finally:
+        session.skills.close()
+
+
+def test_missing_mcp_command_is_an_error(tmp_path):
+    registry = SkillRegistry(
+        servers=(_mcp_server(command="harnh3x-missing-mcp", args=()),)
+    )
+    try:
+        failed = registry.load_skill("caido")
+        assert failed == "Error: command not found: harnh3x-missing-mcp"
+        assert "caido" not in registry.loaded_names()
+    finally:
+        registry.close()
