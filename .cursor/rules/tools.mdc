@@ -1,6 +1,6 @@
 ---
 description: Workspace jail, shell deny list, and tool error strings
-globs: src/harnh3x/tools.py,src/harnh3x/sandbox.py,src/harnh3x/skills/**
+globs: src/harnh3x/tools/**/*.py,src/harnh3x/sandbox.py,src/harnh3x/skills/**
 alwaysApply: false
 ---
 

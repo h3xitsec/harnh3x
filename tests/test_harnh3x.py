@@ -571,7 +571,7 @@ def test_fetch_url_rejects_blocked_targets(tmp_path):
 
 
 def test_fetch_redirect_to_private_host_is_blocked():
-    handler = tools._CheckedRedirectHandler()
+    handler = tools.http._CheckedRedirectHandler()
     try:
         handler.redirect_request(
             None, None, 302, "Found", None, "http://127.0.0.1/secret"
@@ -588,7 +588,7 @@ def test_fetch_url_saves_html_in_workspace(tmp_path, monkeypatch):
     def fake_get(url):
         return 200, "text/html", body
 
-    monkeypatch.setattr(tools, "_http_get", fake_get)
+    monkeypatch.setattr(tools.http, "_http_get", fake_get)
     result = execute_tool(
         "fetch_url",
         {"url": "https://1.1.1.1/news", "path": "pages/story.html"},
@@ -610,7 +610,7 @@ def test_fetch_url_saves_html_in_workspace(tmp_path, monkeypatch):
 
 def test_fetch_url_rejects_unsupported_types(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        tools,
+        tools.http,
         "_http_get",
         lambda url: (200, "image/png", b"\x89PNG"),
     )
@@ -624,7 +624,7 @@ def test_fetch_url_rejects_unsupported_types(tmp_path, monkeypatch):
 
 def test_fetch_url_saves_json_and_pdf_with_matching_extensions(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        tools, "_http_get", lambda url: (200, "application/json", b'{"a": 1}')
+        tools.http, "_http_get", lambda url: (200, "application/json", b'{"a": 1}')
     )
     as_json = execute_tool("fetch_url", {"url": "https://1.1.1.1/data"}, tmp_path)
     assert "content_type: application/json" in as_json
@@ -632,7 +632,7 @@ def test_fetch_url_saves_json_and_pdf_with_matching_extensions(tmp_path, monkeyp
     assert as_json.rstrip().endswith(".json")
 
     monkeypatch.setattr(
-        tools, "_http_get", lambda url: (200, "application/pdf", b"%PDF-1.4")
+        tools.http, "_http_get", lambda url: (200, "application/pdf", b"%PDF-1.4")
     )
     as_pdf = execute_tool("fetch_url", {"url": "https://1.1.1.1/paper"}, tmp_path)
     assert as_pdf.rstrip().endswith(".pdf")
@@ -645,7 +645,7 @@ def test_parse_html_reads_saved_html_and_does_not_download(tmp_path, monkeypatch
         calls["n"] += 1
         return 200, "text/html", ARTICLE_HTML.encode()
 
-    monkeypatch.setattr(tools, "_http_get", fake_get)
+    monkeypatch.setattr(tools.http, "_http_get", fake_get)
     saved = execute_tool("fetch_url", {"url": "https://1.1.1.1/news"}, tmp_path)
     path_line = next(line for line in saved.splitlines() if line.startswith("path: "))
     relative = path_line.removeprefix("path: ")
@@ -726,7 +726,7 @@ def test_web_search_returns_unwrapped_results(tmp_path, monkeypatch):
             ("Gamma Title", "https://9.9.9.9/gamma", "Gamma snippet"),
         ]
     )
-    monkeypatch.setattr(tools, "_search_html", lambda query, recency=None: page)
+    monkeypatch.setattr(tools.search, "_search_html", lambda query, recency=None: page)
 
     result = execute_tool(
         "web_search",
@@ -741,7 +741,7 @@ def test_web_search_returns_unwrapped_results(tmp_path, monkeypatch):
         "2. Beta Title\n"
         "   url: https://8.8.8.8/beta\n"
         "   snippet: Beta snippet\n"
-        "\n" + tools.SEARCH_HINT
+        "\n" + tools.search.SEARCH_HINT
     )
     assert "127.0.0.1" not in result
     assert "javascript" not in result
@@ -754,7 +754,7 @@ def test_web_search_caps_results_and_rejects_bad_input(tmp_path, monkeypatch):
         for index in range(1, 11)
     ]
     monkeypatch.setattr(
-        tools, "_search_html", lambda query, recency=None: _search_page(rows)
+        tools.search, "_search_html", lambda query, recency=None: _search_page(rows)
     )
 
     capped = execute_tool(
@@ -772,7 +772,7 @@ def test_web_search_caps_results_and_rejects_bad_input(tmp_path, monkeypatch):
         calls["n"] += 1
         raise AssertionError("search should not run")
 
-    monkeypatch.setattr(tools, "_search_html", fail)
+    monkeypatch.setattr(tools.search, "_search_html", fail)
     assert execute_tool("web_search", {}, tmp_path) == "Error: query is required"
     assert execute_tool("web_search", {"query": "  "}, tmp_path) == (
         "Error: query is required"
@@ -790,7 +790,7 @@ def test_web_search_caps_results_and_rejects_bad_input(tmp_path, monkeypatch):
 
 def test_web_search_errors_when_nothing_parseable(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        tools,
+        tools.search,
         "_search_html",
         lambda query, recency=None: _search_page(
             [("Secret", _ddg_href("http://127.0.0.1/secret"), "hidden")]
@@ -800,7 +800,7 @@ def test_web_search_errors_when_nothing_parseable(tmp_path, monkeypatch):
     assert private_only == "Error: no results"
 
     monkeypatch.setattr(
-        tools, "_search_html", lambda query, recency=None: "<html><body></body></html>"
+        tools.search, "_search_html", lambda query, recency=None: "<html><body></body></html>"
     )
     empty = execute_tool("web_search", {"query": "transit"}, tmp_path)
     assert empty == "Error: no results"
@@ -813,7 +813,7 @@ def test_web_search_site_and_time_filters(tmp_path, monkeypatch):
         seen.append((query, recency))
         return _search_page([("Alpha", "https://1.1.1.1/alpha", "snippet")])
 
-    monkeypatch.setattr(tools, "_search_html", fake_search)
+    monkeypatch.setattr(tools.search, "_search_html", fake_search)
 
     result = execute_tool(
         "web_search",
@@ -834,7 +834,7 @@ def test_web_search_site_and_time_filters(tmp_path, monkeypatch):
 
 def test_research_skill_gates_web_search(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        tools,
+        tools.search,
         "_search_html",
         lambda query, recency=None: _search_page(
             [("Alpha Title", "https://1.1.1.1/alpha", "Alpha snippet")]
@@ -3577,13 +3577,13 @@ def test_shell_timeout_is_capped(tmp_path, monkeypatch):
         seen["timeout"] = kwargs["timeout"]
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(tools.subprocess, "run", fake_run)
+    monkeypatch.setattr(tools.process.subprocess, "run", fake_run)
 
     execute_tool("run_shell", {"command": "true", "timeout": 10_000}, tmp_path)
-    assert seen["timeout"] == tools.SHELL_MAX_TIMEOUT
+    assert seen["timeout"] == tools.process.SHELL_MAX_TIMEOUT
 
     execute_tool("run_shell", {"command": "true"}, tmp_path)
-    assert seen["timeout"] == tools.SHELL_TIMEOUT
+    assert seen["timeout"] == tools.process.SHELL_TIMEOUT
 
 
 def test_run_python_executes_code_in_the_workspace(tmp_path):
@@ -3813,7 +3813,7 @@ def test_yolo_runs_sudo_without_the_seatbelt(tmp_path, monkeypatch):
         seen["shell"] = kwargs["shell"]
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(tools.subprocess, "run", fake_run)
+    monkeypatch.setattr(tools.process.subprocess, "run", fake_run)
 
     result = execute_tool("run_shell", {"command": "sudo true"}, tmp_path, yolo=True)
 
@@ -4333,7 +4333,7 @@ def test_sandbox_refuses_to_run_off_macos(tmp_path, monkeypatch):
     def fail_run(*args, **kwargs):
         raise AssertionError("command ran without a sandbox")
 
-    monkeypatch.setattr(tools.subprocess, "run", fail_run)
+    monkeypatch.setattr(tools.process.subprocess, "run", fail_run)
 
     result = execute_tool("run_shell", {"command": "true"}, tmp_path)
 
@@ -4345,7 +4345,7 @@ def test_sandbox_refuses_to_run_off_macos(tmp_path, monkeypatch):
 
 def test_read_url_fetches_extracts_and_saves_text(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        tools,
+        tools.http,
         "_http_get",
         lambda url: (200, "text/html; charset=utf-8", ARTICLE_HTML.encode()),
     )
@@ -4377,7 +4377,7 @@ def test_read_url_handles_plain_text_and_truncates_with_a_pointer(
     tmp_path, monkeypatch
 ):
     body = ("word " * 3000).encode()
-    monkeypatch.setattr(tools, "_http_get", lambda url: (200, "text/plain", body))
+    monkeypatch.setattr(tools.http, "_http_get", lambda url: (200, "text/plain", body))
 
     result = execute_tool("read_url", {"url": "https://1.1.1.1/notes"}, tmp_path)
 
@@ -4391,7 +4391,7 @@ def test_read_url_handles_plain_text_and_truncates_with_a_pointer(
 
 def test_read_url_reads_a_pdf(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        tools,
+        tools.http,
         "_http_get",
         lambda url: (200, "application/pdf", _pdf_bytes(["Hello PDF"])),
     )
@@ -4444,7 +4444,7 @@ ATOM_FEED = b"""<?xml version="1.0"?>
 
 def test_read_feed_parses_rss_and_atom(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        tools, "_http_get", lambda url: (200, "application/rss+xml", RSS_FEED)
+        tools.http, "_http_get", lambda url: (200, "application/rss+xml", RSS_FEED)
     )
     rss = execute_tool(
         "read_feed", {"url": "https://1.1.1.1/feed", "max_items": 1}, tmp_path
@@ -4458,7 +4458,7 @@ def test_read_feed_parses_rss_and_atom(tmp_path, monkeypatch):
     assert "Call read_url on an entry link" in rss
 
     monkeypatch.setattr(
-        tools, "_http_get", lambda url: (200, "application/atom+xml", ATOM_FEED)
+        tools.http, "_http_get", lambda url: (200, "application/atom+xml", ATOM_FEED)
     )
     atom = execute_tool("read_feed", {"url": "https://1.1.1.1/atom"}, tmp_path)
     assert "feed: Atom Blog" in atom
@@ -4469,7 +4469,7 @@ def test_read_feed_parses_rss_and_atom(tmp_path, monkeypatch):
 
 def test_read_feed_rejects_bad_xml_and_entities(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        tools,
+        tools.http,
         "_http_get",
         lambda url: (200, "text/xml", b"<rss><channel></channel></rss>"),
     )
@@ -4478,14 +4478,14 @@ def test_read_feed_rejects_bad_xml_and_entities(tmp_path, monkeypatch):
     )
 
     monkeypatch.setattr(
-        tools, "_http_get", lambda url: (200, "text/xml", b"<rss><item>")
+        tools.http, "_http_get", lambda url: (200, "text/xml", b"<rss><item>")
     )
     assert execute_tool(
         "read_feed", {"url": "https://1.1.1.1/feed"}, tmp_path
     ).startswith("Error: invalid XML")
 
     bomb = b'<?xml version="1.0"?><!DOCTYPE a [<!ENTITY x "y">]><rss><channel><item><title>&x;</title></item></channel></rss>'
-    monkeypatch.setattr(tools, "_http_get", lambda url: (200, "text/xml", bomb))
+    monkeypatch.setattr(tools.http, "_http_get", lambda url: (200, "text/xml", bomb))
     assert "DOCTYPE" in execute_tool(
         "read_feed", {"url": "https://1.1.1.1/feed"}, tmp_path
     )
@@ -4528,7 +4528,7 @@ def test_wikipedia_search_lists_titles_with_urls(tmp_path, monkeypatch):
         }
     }
     fake_get, seen = _json_get([("https://en.wikipedia.org/w/api.php", payload)])
-    monkeypatch.setattr(tools, "_http_get", fake_get)
+    monkeypatch.setattr(tools.http, "_http_get", fake_get)
 
     result = execute_tool("wikipedia_search", {"query": "ada lovelace"}, tmp_path)
 
@@ -4559,7 +4559,7 @@ def test_wikipedia_summary_returns_extract_and_flags_missing(tmp_path, monkeypat
     fake_get, seen = _json_get(
         [("https://en.wikipedia.org/api/rest_v1/page/summary/Ada_Lovelace", payload)]
     )
-    monkeypatch.setattr(tools, "_http_get", fake_get)
+    monkeypatch.setattr(tools.http, "_http_get", fake_get)
 
     result = execute_tool("wikipedia_summary", {"title": "Ada Lovelace"}, tmp_path)
     assert result == (
@@ -4572,7 +4572,7 @@ def test_wikipedia_summary_returns_extract_and_flags_missing(tmp_path, monkeypat
     def missing(url):
         raise ValueError("http status 404")
 
-    monkeypatch.setattr(tools, "_http_get", missing)
+    monkeypatch.setattr(tools.http, "_http_get", missing)
     assert execute_tool("wikipedia_summary", {"title": "Nope Nope"}, tmp_path) == (
         "Error: no Wikipedia article named 'Nope Nope'"
     )
@@ -4581,7 +4581,7 @@ def test_wikipedia_summary_returns_extract_and_flags_missing(tmp_path, monkeypat
 
 def test_http_get_json_adds_params_and_rejects_non_json(tmp_path, monkeypatch):
     fake_get, seen = _json_get([("https://1.1.1.1/api", {"temp": 21.5, "ok": True})])
-    monkeypatch.setattr(tools, "_http_get", fake_get)
+    monkeypatch.setattr(tools.http, "_http_get", fake_get)
 
     result = execute_tool(
         "http_get_json",
@@ -4601,13 +4601,13 @@ def test_http_get_json_adds_params_and_rejects_non_json(tmp_path, monkeypatch):
     }
 
     monkeypatch.setattr(
-        tools, "_http_get", lambda url: (200, "text/html", b"<html></html>")
+        tools.http, "_http_get", lambda url: (200, "text/html", b"<html></html>")
     )
     html = execute_tool("http_get_json", {"url": "https://1.1.1.1/page"}, tmp_path)
     assert html.startswith("Error: unsupported content type")
 
     monkeypatch.setattr(
-        tools, "_http_get", lambda url: (200, "application/json", b"{nope")
+        tools.http, "_http_get", lambda url: (200, "application/json", b"{nope")
     )
     assert execute_tool(
         "http_get_json", {"url": "https://1.1.1.1/api"}, tmp_path
