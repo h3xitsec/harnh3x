@@ -1,10 +1,12 @@
 import json
 import os
 import select
+import socket
 import subprocess
 import threading
 import time
 from collections.abc import Mapping
+from urllib.parse import urlparse
 
 from harnh3x.config import McpServer
 from harnh3x.tools.paths import cap_result
@@ -15,6 +17,7 @@ _RESULT_HINT = (
     "narrow the request (limit, bodyLimit, or HTTPQL) and call the tool again"
 )
 _PAGE_LIMIT = 20
+_PROBE_TIMEOUT = 1.0
 GUIDES = {"caido": "caido.md"}
 
 
@@ -22,6 +25,41 @@ class McpError(Exception):
     def __init__(self, message: str, code: int | None = None):
         super().__init__(message)
         self.code = code
+
+
+def upstream_reachable(server: McpServer, timeout: float = _PROBE_TIMEOUT) -> bool:
+    for parsed in _http_targets(server.env):
+        if not _port_open(parsed, timeout):
+            return False
+    return True
+
+
+def _http_targets(env: Mapping[str, str]):
+    targets = []
+    for value in env.values():
+        if not isinstance(value, str):
+            continue
+        parsed = urlparse(value.strip())
+        if parsed.scheme in {"http", "https"}:
+            targets.append(parsed)
+    return targets
+
+
+def _port_open(parsed, timeout: float) -> bool:
+    host = parsed.hostname
+    if not host:
+        return False
+    try:
+        port = parsed.port
+    except ValueError:
+        return False
+    if port is None:
+        port = 443 if parsed.scheme == "https" else 80
+    try:
+        with socket.create_connection((host, port), timeout):
+            return True
+    except OSError:
+        return False
 
 
 def child_env(extra: Mapping[str, str]) -> dict[str, str]:

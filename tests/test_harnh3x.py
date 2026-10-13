@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shlex
+import socket
 import subprocess
 import sys
 import urllib.parse
@@ -6232,7 +6233,35 @@ def test_missing_mcp_command_is_an_error(tmp_path):
     )
     try:
         failed = registry.load_skill("caido")
-        assert failed == "Error: command not found: harnh3x-missing-mcp"
+        assert failed == (
+            "Error: command not found: harnh3x-missing-mcp "
+            "Skill 'caido' is no longer available."
+        )
         assert "caido" not in registry.loaded_names()
+        assert "caido" not in registry.get_menu()
+        again = registry.load_skill("caido")
+        assert again == "Error: Unknown skill 'caido'. Check the skill menu."
     finally:
         registry.close()
+
+
+def test_unreachable_mcp_url_is_omitted_and_a_server_without_one_stays(tmp_path):
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    closed = SkillRegistry(
+        servers=(_mcp_server(env={"CAIDO_URL": f"http://127.0.0.1:{port}"}),)
+    )
+    try:
+        menu = closed.get_menu()
+        assert "mcp:" not in menu
+        assert "caido" not in menu
+        assert "caido_list_requests" not in _tool_names(closed.schemas())
+    finally:
+        closed.close()
+
+    plain = SkillRegistry(servers=(_mcp_server(description="Widgets."),))
+    try:
+        assert "- caido: Widgets." in plain.get_menu()
+    finally:
+        plain.close()

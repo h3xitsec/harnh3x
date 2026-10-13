@@ -4,7 +4,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from harnh3x.config import McpServer
-from harnh3x.mcp.client import McpClient, McpError, _guide
+from harnh3x.mcp.client import McpClient, McpError, _guide, upstream_reachable
 from harnh3x.prompt import project_note, yolo_note
 from harnh3x.tools import TOOLS, execute_tool
 
@@ -175,6 +175,8 @@ class SkillRegistry:
                 raise RuntimeError(
                     f"mcp server '{server.name}' matches a built-in skill"
                 )
+            if not upstream_reachable(server):
+                continue
             self._clients[server.name] = McpClient(server)
             catalog[server.name] = Skill(
                 name=server.name,
@@ -295,7 +297,8 @@ class SkillRegistry:
             if not client.alive():
                 client.connect()
         except McpError as exc:
-            self._connect_error = f"Error: {exc}"
+            self._drop(name)
+            self._connect_error = f"Error: {exc} Skill '{name}' is no longer available."
             return None
         schemas = client.schemas()
         collision = self._collision(name, schemas)
@@ -303,6 +306,14 @@ class SkillRegistry:
             self._connect_error = collision
             return None
         return replace(skill, tools=tuple(schemas), doc=client.documentation())
+
+    def _drop(self, name: str) -> None:
+        client = self._clients.pop(name, None)
+        if client is not None:
+            client.close()
+        self._catalog.pop(name, None)
+        self._active.pop(name, None)
+        self._catalog = _ordered(self._catalog)
 
     def _collision(self, skill_name: str, schemas: list[dict]) -> str | None:
         names = [schema["function"]["name"] for schema in schemas]
