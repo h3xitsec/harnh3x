@@ -4,11 +4,17 @@ from pathlib import Path
 
 from harnh3x.tools import memory_keys, workspace_listing
 
+_HTTP_YOLO = (
+    "HTTP tools may use any host, including localhost and private addresses. "
+    "The public-host limit in a skill doc does not apply."
+)
+
 YOLO_NOTE = (
     "Yolo mode is on. The seatbelt sandbox is off. "
     "read_file and the other read tools may use any filesystem path. "
     "run_shell and run_python may run any program, including sudo, and may read or write any path. "
-    "write_file, edit_file, append_file, delete_file, move_file, and run_script stay inside the workspace."
+    "write_file, edit_file, append_file, delete_file, move_file, and run_script stay inside the workspace. "
+    + _HTTP_YOLO
 )
 
 
@@ -29,7 +35,7 @@ def yolo_note(project: Path | None = None) -> str:
         "read_file and the other read tools may use any filesystem path. "
         "run_shell and run_python may run any program, including sudo, and may read or write any path. "
         "write_file, edit_file, append_file, delete_file, move_file, and run_script "
-        f"stay inside the workspace or the project at {project}."
+        f"stay inside the workspace or the project at {project}. " + _HTTP_YOLO
     )
 
 
