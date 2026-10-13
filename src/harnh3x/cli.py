@@ -56,8 +56,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--yolo",
         action="store_true",
         help=(
-            "Disable the seatbelt sandbox. The agent can read any file "
-            "and run any command, including sudo."
+            "Disable the seatbelt sandbox. The agent can read any file, "
+            "run any command, including sudo, and send HTTP to any host, "
+            "including localhost."
         ),
     )
     parser.add_argument(

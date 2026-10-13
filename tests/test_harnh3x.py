@@ -4623,6 +4623,36 @@ def test_http_get_json_adds_params_and_rejects_non_json(tmp_path, monkeypatch):
     )
 
 
+def test_yolo_http_allows_localhost_and_private_hosts(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        tools.http,
+        "_http_get",
+        lambda url: (200, "application/json", b'{"ok": true}'),
+    )
+    for url in (
+        "http://localhost/local",
+        "http://127.0.0.1/local",
+        "http://10.0.0.1/local",
+    ):
+        fetched = execute_tool("fetch_url", {"url": url}, tmp_path, yolo=True)
+        assert "status: success" in fetched
+    got = execute_tool(
+        "http_get_json", {"url": "http://127.0.0.1/api"}, tmp_path, yolo=True
+    )
+    assert json.loads(got) == {"ok": True}
+    assert "blocked" in execute_tool(
+        "fetch_url", {"url": "http://127.0.0.1/local"}, tmp_path
+    )
+    assert "blocked" in execute_tool(
+        "http_get_json", {"url": "http://10.0.0.1/api"}, tmp_path
+    )
+    scheme = execute_tool(
+        "fetch_url", {"url": "file:///etc/passwd"}, tmp_path, yolo=True
+    )
+    assert scheme.startswith("Error:")
+    assert "blocked" in scheme
+
+
 # --- documents ------------------------------------------------------------
 
 
@@ -4921,11 +4951,15 @@ def test_system_prompt_mentions_yolo_only_when_enabled(tmp_path):
 
     assert "Yolo mode" not in plain
     assert YOLO_NOTE in yolo
+    assert "localhost" in yolo
     assert yolo.endswith("MENU")
     loaded = SkillRegistry(yolo=True).load_skill("shell")
     assert loaded.endswith(YOLO_NOTE)
     assert YOLO_NOTE not in SkillRegistry(yolo=True).load_skill("memory")
     assert YOLO_NOTE not in SkillRegistry().load_skill("shell")
+    for name in ("api", "research", "reference"):
+        assert SkillRegistry(yolo=True).load_skill(name).endswith(YOLO_NOTE)
+        assert "localhost" not in SkillRegistry().load_skill(name)
 
     project = tmp_path / "proj"
     granted = system_prompt(tmp_path, "MENU", now=now, project=project)

@@ -4,7 +4,7 @@ from pathlib import Path
 from harnh3x.prompt import project_note, yolo_note
 from harnh3x.tools import TOOLS, execute_tool
 
-_YOLO_SKILLS = {"file_ops", "shell", "python"}
+_YOLO_SKILLS = {"file_ops", "shell", "python", "api", "research", "reference"}
 _PROJECT_SKILLS = {"file_ops", "shell", "python", "coding"}
 
 SKILLS_DIR = Path(__file__).resolve().parent

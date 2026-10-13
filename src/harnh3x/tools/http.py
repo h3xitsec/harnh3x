@@ -9,7 +9,7 @@ import urllib.request
 from pathlib import Path
 
 from harnh3x.config import FETCH_MAX_BYTES, FETCH_MAX_REDIRECTS, FETCH_TIMEOUT
-from harnh3x.tools.paths import _path_param, cap_result, resolve_in_workspace
+from harnh3x.tools.paths import _path_param, _yolo, cap_result, resolve_in_workspace
 
 SCHEMAS = [
     {
@@ -104,6 +104,8 @@ def validate_url(url: str):
 
 
 def _assert_public_host(host: str) -> None:
+    if _yolo.get():
+        return
     try:
         addresses = [ipaddress.ip_address(host)]
     except ValueError:
