@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.4.0](https://github.com/h3xitsec/harnh3x/compare/harnh3x-v0.3.0...harnh3x-v0.4.0) (2026-10-13)
+
+
+### Features
+
+* load MCP servers from the YAML config as skills ([51f63aa](https://github.com/h3xitsec/harnh3x/commit/51f63aa0514a95cd93a5780255f48d929062b0c7))
+* **skills:** load skills that live in category folders ([c25f9c7](https://github.com/h3xitsec/harnh3x/commit/c25f9c71103304bc9e68a89b99e9afa40ba278b5))
+* **skills:** omit an MCP skill when its server is not accepting connections ([0a567bc](https://github.com/h3xitsec/harnh3x/commit/0a567bc3111cb3ef6d435f9b7e9de5fa8a60eea0))
+* **tools:** reach localhost and private hosts in yolo mode ([a5a77b4](https://github.com/h3xitsec/harnh3x/commit/a5a77b4c0df4fc4b7008480014dfd1dadc4872ae))
+* **tools:** send HTTP requests and return status, headers, and body ([d45159c](https://github.com/h3xitsec/harnh3x/commit/d45159cf4058daf4a182b5a17715f94a6ddba1be))
+* **tui:** show model, context, and MCP warnings on a status bar ([c588fa9](https://github.com/h3xitsec/harnh3x/commit/c588fa97b8e2b913cc52497d8ffc1edba972bafb))
+* **tui:** show the package version at the right of the status bar ([3a6f3d0](https://github.com/h3xitsec/harnh3x/commit/3a6f3d091ff58cde2525bd9d6a19827bde080e60))
+
+
+### Bug Fixes
+
+* **skills:** name the real tools when a skill is called as a tool ([c8a9a22](https://github.com/h3xitsec/harnh3x/commit/c8a9a22d53da22ff5e95d78693301bf4eb472829))
+
 ## [0.3.0](https://github.com/h3xitsec/harnh3x/compare/harnh3x-v0.2.0...harnh3x-v0.3.0) (2026-10-12)
 
 
