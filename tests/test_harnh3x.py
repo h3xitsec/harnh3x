@@ -800,7 +800,9 @@ def test_web_search_errors_when_nothing_parseable(tmp_path, monkeypatch):
     assert private_only == "Error: no results"
 
     monkeypatch.setattr(
-        tools.search, "_search_html", lambda query, recency=None: "<html><body></body></html>"
+        tools.search,
+        "_search_html",
+        lambda query, recency=None: "<html><body></body></html>",
     )
     empty = execute_tool("web_search", {"query": "transit"}, tmp_path)
     assert empty == "Error: no results"
@@ -1847,7 +1849,10 @@ def test_skill_load_unload_and_gated_execute(tmp_path):
     assert "read_file" in loaded
     assert "Documentation:" in loaded
     assert "give the user the content of the file" in loaded
-    assert registry.load_skill("file_ops") == "Skill 'file_ops' is already loaded."
+    assert registry.load_skill("file_ops") == (
+        "Skill 'file_ops' is already loaded. Call one of: read_file, write_file, "
+        "edit_file, append_file, delete_file, move_file, list_files, search_files."
+    )
     assert FILE_OPS_LOADED in registry.get_menu()
 
     (tmp_path / "a.txt").write_text("hi")
@@ -1856,6 +1861,20 @@ def test_skill_load_unload_and_gated_execute(tmp_path):
     assert registry.unload_skill("file_ops") == "Unloaded skill 'file_ops'."
     assert registry.unload_skill("file_ops") == "Skill 'file_ops' is not loaded."
     assert "[loaded]" not in registry.get_menu()
+
+    registry.load_skill("api")
+    mistook = registry.execute(
+        "api",
+        {"http_get_json": "https://1.1.1.1/api"},
+        tmp_path,
+    )
+    assert mistook.startswith(
+        "Error: 'api' is a skill, not a tool. It is already loaded."
+    )
+    assert "Call one of: http_get_json." in mistook
+    assert "Call http_get_json directly, with its own parameters." in mistook
+    unloaded = SkillRegistry().execute("api", {}, tmp_path)
+    assert "Call load_skill with name 'api'" in unloaded
 
 
 def test_skill_manifest_requires_tools_entries():

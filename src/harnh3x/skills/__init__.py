@@ -158,7 +158,8 @@ class SkillRegistry:
             shown = name if isinstance(name, str) else ""
             return f"Error: Unknown skill '{shown}'. Check the skill menu."
         if name in self._active:
-            return f"Skill '{name}' is already loaded."
+            tools = ", ".join(self.skill_tools(name) or ())
+            return f"Skill '{name}' is already loaded. Call one of: {tools}."
         skill = self._catalog[name]
         self._active[name] = skill
         tool_names = [tool["function"]["name"] for tool in skill.tools]
@@ -208,5 +209,25 @@ class SkillRegistry:
             for tool in skill.tools
         }
         if name not in loaded:
-            return f"Error: Tool '{name}' not found. Is the skill loaded?"
+            return self._unknown_tool(name, args)
         return execute_tool(name, args, workspace, yolo=yolo, project=project)
+
+    def _unknown_tool(self, name: str, args: dict) -> str:
+        tools = self.skill_tools(name)
+        if tools is None:
+            return f"Error: Tool '{name}' not found. Is the skill loaded?"
+        listed = ", ".join(tools)
+        hinted = ""
+        if isinstance(args, dict):
+            keys = [key for key in args if isinstance(key, str) and key in tools]
+            if len(keys) == 1:
+                hinted = f" Call {keys[0]} directly, with its own parameters."
+        if name in self._active:
+            return (
+                f"Error: '{name}' is a skill, not a tool. It is already loaded. "
+                f"Call one of: {listed}.{hinted}"
+            )
+        return (
+            f"Error: '{name}' is a skill, not a tool. "
+            f"Call load_skill with name '{name}', then call one of: {listed}.{hinted}"
+        )
