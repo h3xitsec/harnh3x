@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.5.0](https://github.com/h3xitsec/harnh3x/compare/harnh3x-v0.4.0...harnh3x-v0.5.0) (2026-10-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* **skills:** load_skill name file_ops is now file-ops.
+
+### Features
+
+* **skills:** read skills from Agent Skills frontmatter ([42c5c77](https://github.com/h3xitsec/harnh3x/commit/42c5c7712e62ea9b8ca54972658e7221f9d6de03))
+
+
+### Bug Fixes
+
+* quit while a request is still running ([fbc5ea0](https://github.com/h3xitsec/harnh3x/commit/fbc5ea085bb4177b33606c15da84b9c153a6010c))
+* **tui:** keep selected text in an expanded panel ([43ab027](https://github.com/h3xitsec/harnh3x/commit/43ab0275c9e18e78c919a723f8509abbebc99a56))
+
+
+### Miscellaneous Chores
+
+* release 0.5.0 ([78e5e89](https://github.com/h3xitsec/harnh3x/commit/78e5e8965e7a19011ef1f71b86b1198e140d941e))
+
 ## [0.4.0](https://github.com/h3xitsec/harnh3x/compare/harnh3x-v0.3.0...harnh3x-v0.4.0) (2026-10-13)
 
 
