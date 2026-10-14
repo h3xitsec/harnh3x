@@ -142,7 +142,7 @@ with the same tools and files.
 **Files to stage**
 
 - `src/harnh3x/cli.py`
-- `src/harnh3x/agent.py`
+- `src/harnh3x/agent/`
 - `tests/test_harnh3x.py`
 
 **Skipped**

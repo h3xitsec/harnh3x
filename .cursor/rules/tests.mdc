@@ -6,7 +6,7 @@ alwaysApply: false
 
 # Harness tests
 
-Use pytest. Workspaces are `tmp_path`. Patch limits with `monkeypatch` on `harnh3x.agent`.
+Use pytest. Workspaces are `tmp_path`. Patch a limit on the module that reads it: `harnh3x.agent.client` for the context limit, `harnh3x.agent.loop` for `MAX_TURNS`.
 
 Do not call the real API. Pass a `SimpleNamespace` client into `run`.
 

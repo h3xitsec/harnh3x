@@ -21,6 +21,9 @@ from types import SimpleNamespace
 import pytest
 
 import harnh3x.agent as agent
+import harnh3x.agent.client as agent_client
+import harnh3x.agent.loop as agent_loop
+import harnh3x.agent.transcript as agent_transcript
 import harnh3x.rules as rules
 import harnh3x.anthropic_api as anthropic_api
 import harnh3x.config as config
@@ -235,7 +238,7 @@ def _usage_chunk(total: int):
 
 
 def test_run_streams_deltas_into_one_message(tmp_path, monkeypatch):
-    monkeypatch.setattr(agent, "model_context_limit", lambda model, client=None: None)
+    monkeypatch.setattr(agent_client, "model_context_limit", lambda model, client=None: None)
     seen = []
     (tmp_path / "a.txt").write_text("body")
 
@@ -317,7 +320,7 @@ def test_run_streams_deltas_into_one_message(tmp_path, monkeypatch):
 
 
 def test_run_emits_a_whole_message_once(tmp_path, monkeypatch):
-    monkeypatch.setattr(agent, "model_context_limit", lambda model, client=None: None)
+    monkeypatch.setattr(agent_client, "model_context_limit", lambda model, client=None: None)
     deltas = []
 
     def create(**kwargs):
@@ -340,7 +343,7 @@ def test_run_emits_a_whole_message_once(tmp_path, monkeypatch):
 
 
 def test_run_retries_when_stream_options_are_rejected(tmp_path, monkeypatch):
-    monkeypatch.setattr(agent, "model_context_limit", lambda model, client=None: None)
+    monkeypatch.setattr(agent_client, "model_context_limit", lambda model, client=None: None)
     calls = []
 
     def create(**kwargs):
@@ -604,7 +607,7 @@ def test_invalid_tool_arguments_become_a_tool_error(tmp_path):
 
 
 def test_max_turns_closes_with_an_assistant_message(tmp_path, monkeypatch):
-    monkeypatch.setattr(agent, "MAX_TURNS", 1)
+    monkeypatch.setattr(agent_loop, "MAX_TURNS", 1)
 
     def create(**kwargs):
         message = SimpleNamespace(
@@ -1170,17 +1173,17 @@ def test_context_limit_from_show_prefers_num_ctx():
         "parameters": "temperature 0.8\nnum_ctx 8192\n",
         "model_info": {"qwen35.context_length": 131072},
     }
-    assert agent._context_limit_from_show(payload) == 8192
+    assert agent_client._context_limit_from_show(payload) == 8192
     assert (
-        agent._context_limit_from_show(
+        agent_client._context_limit_from_show(
             {"model_info": {"qwen35.context_length": 131072, "other": 1}}
         )
         == 131072
     )
-    assert agent._context_limit_from_show({"parameters": "temperature 0.8"}) is None
-    assert agent._context_limit_from_show([]) is None
+    assert agent_client._context_limit_from_show({"parameters": "temperature 0.8"}) is None
+    assert agent_client._context_limit_from_show([]) is None
     assert (
-        agent._context_limit_from_show({"model_info": {"qwen35.context_length": True}})
+        agent_client._context_limit_from_show({"model_info": {"qwen35.context_length": True}})
         is None
     )
 
@@ -1204,20 +1207,20 @@ def test_model_context_limit_reads_ollama_show(monkeypatch):
         captured["timeout"] = timeout
         return Response()
 
-    monkeypatch.setattr(agent.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(agent_client.urllib.request, "urlopen", urlopen)
     client = SimpleNamespace(base_url="http://host:11434/v1/")
 
     assert agent.model_context_limit("qwen3.5-128k", client) == 8192
     assert captured["url"] == "http://host:11434/api/show"
     assert json.loads(captured["body"]) == {"model": "qwen3.5-128k"}
-    assert captured["timeout"] == agent._SHOW_TIMEOUT
+    assert captured["timeout"] == agent_client._SHOW_TIMEOUT
 
 
 def test_model_context_limit_returns_none_when_show_fails(monkeypatch):
     def urlopen(request, timeout=0):
         raise OSError("down")
 
-    monkeypatch.setattr(agent.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(agent_client.urllib.request, "urlopen", urlopen)
     client = SimpleNamespace(base_url="http://host:11434/v1")
 
     assert agent.model_context_limit("m", client) is None
@@ -2585,7 +2588,7 @@ def test_plain_stdout_streams_tokens_before_the_turn_returns(
 ):
     cli = _load_cli()
     monkeypatch.setattr(cli, "_tty", lambda: False)
-    monkeypatch.setattr(agent, "model_context_limit", lambda model, client=None: None)
+    monkeypatch.setattr(agent_client, "model_context_limit", lambda model, client=None: None)
     monkeypatch.setattr(
         cli,
         "Session",
@@ -2604,7 +2607,7 @@ def test_plain_stdout_streams_tokens_before_the_turn_returns(
     client = SimpleNamespace(
         chat=SimpleNamespace(completions=SimpleNamespace(create=create))
     )
-    monkeypatch.setattr(agent, "get_client", lambda: client)
+    monkeypatch.setattr(agent_client, "get_client", lambda: client)
 
     cli.main(["fix the notes"])
 
@@ -4443,7 +4446,7 @@ def test_project_is_stored_restored_and_kept_across_reset(tmp_path):
     other.mkdir()
     session = agent.Session(workspace=tmp_path / "ws", project=project)
     session.messages.append({"role": "user", "content": "work"})
-    agent._save_transcript(session)
+    agent_transcript._save_transcript(session)
     saved = json.loads((session.workspace / TRANSCRIPT_FILE).read_text())
     assert saved["project"] == str(project.resolve())
 
@@ -4455,7 +4458,7 @@ def test_project_is_stored_restored_and_kept_across_reset(tmp_path):
 
     plain = agent.Session(workspace=tmp_path / "plain")
     plain.messages.append({"role": "user", "content": "notes"})
-    agent._save_transcript(plain)
+    agent_transcript._save_transcript(plain)
     launched = agent.Session(workspace=tmp_path / "launch", project=other)
     launched.resume(plain.workspace)
     assert launched.project is None
@@ -4479,7 +4482,7 @@ def test_coding_is_stored_restored_and_kept_across_reset(tmp_path):
         "You are a coding agent working in a granted project."
     )
     session.messages.append({"role": "user", "content": "work"})
-    agent._save_transcript(session)
+    agent_transcript._save_transcript(session)
     saved = json.loads((session.workspace / TRANSCRIPT_FILE).read_text())
     assert saved["coding"] is True
     assert saved["project"] == str(project.resolve())
@@ -4504,7 +4507,7 @@ def test_coding_is_stored_restored_and_kept_across_reset(tmp_path):
 
     plain = agent.Session(workspace=tmp_path / "plain", project=project)
     plain.messages.append({"role": "user", "content": "notes"})
-    agent._save_transcript(plain)
+    agent_transcript._save_transcript(plain)
     assert "coding" not in json.loads((plain.workspace / TRANSCRIPT_FILE).read_text())
     launched = agent.Session(
         workspace=tmp_path / "launch", project=project, coding=True
@@ -4517,7 +4520,7 @@ def test_coding_is_stored_restored_and_kept_across_reset(tmp_path):
 
     bad = agent.Session(workspace=tmp_path / "bad", project=project)
     bad.messages.append({"role": "user", "content": "work"})
-    agent._save_transcript(bad)
+    agent_transcript._save_transcript(bad)
     payload = json.loads((bad.workspace / TRANSCRIPT_FILE).read_text())
     payload["coding"] = "yes"
     (bad.workspace / TRANSCRIPT_FILE).write_text(json.dumps(payload))
@@ -4541,7 +4544,7 @@ def test_project_must_be_a_separate_existing_directory(tmp_path):
     gone = tmp_path / "gone"
     stored = agent.Session(workspace=tmp_path / "stored")
     stored.messages.append({"role": "user", "content": "work"})
-    agent._save_transcript(stored)
+    agent_transcript._save_transcript(stored)
     payload = json.loads((stored.workspace / TRANSCRIPT_FILE).read_text())
     payload["project"] = str(gone)
     (stored.workspace / TRANSCRIPT_FILE).write_text(json.dumps(payload))
@@ -5912,14 +5915,14 @@ def test_import_applies_the_config_file(tmp_path):
 def test_get_client_passes_resolved_credentials(monkeypatch):
     monkeypatch.setattr(config, "API_KEY", "file-key")
     monkeypatch.setattr(config, "API_URL", "http://127.0.0.1:11434/v1")
-    monkeypatch.setattr(agent, "_client", None)
+    monkeypatch.setattr(agent_client, "_client", None)
     seen = {}
 
     def fake_openai(**kwargs):
         seen.update(kwargs)
         return SimpleNamespace()
 
-    monkeypatch.setattr(agent, "OpenAI", fake_openai)
+    monkeypatch.setattr(agent_client, "OpenAI", fake_openai)
 
     client = agent.get_client()
 
@@ -5933,14 +5936,14 @@ def test_get_client_passes_resolved_credentials(monkeypatch):
 def test_get_client_omits_unset_credentials(monkeypatch):
     monkeypatch.setattr(config, "API_KEY", None)
     monkeypatch.setattr(config, "API_URL", None)
-    monkeypatch.setattr(agent, "_client", None)
+    monkeypatch.setattr(agent_client, "_client", None)
     seen = {}
 
     def fake_openai(**kwargs):
         seen["kwargs"] = kwargs
         return SimpleNamespace()
 
-    monkeypatch.setattr(agent, "OpenAI", fake_openai)
+    monkeypatch.setattr(agent_client, "OpenAI", fake_openai)
 
     agent.get_client()
 
@@ -6387,7 +6390,7 @@ def test_get_client_builds_an_anthropic_client(monkeypatch):
     monkeypatch.setattr(config, "PROVIDER", "anthropic")
     monkeypatch.setattr(config, "API_KEY", "sk-ant")
     monkeypatch.setattr(config, "API_URL", "https://api.anthropic.com")
-    monkeypatch.setattr(agent, "_client", None)
+    monkeypatch.setattr(agent_client, "_client", None)
     seen = {}
 
     def fake(**kwargs):
