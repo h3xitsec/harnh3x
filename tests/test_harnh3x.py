@@ -2128,6 +2128,22 @@ def test_catalog_rejects_an_unknown_allowed_tool(tmp_path):
         skills._load_catalog(root, tools=tools.TOOLS)
 
 
+def test_shipped_skills_fit_the_token_budget():
+    over = []
+    for path in skills._skill_files(skills.SKILLS_DIR):
+        location = path.parent.relative_to(skills.SKILLS_DIR).as_posix()
+        text = path.read_text(encoding="utf-8")
+        raw, body = skills._skill_sections(text, location)
+        front_tokens = skills._token_count(raw)
+        body_tokens = skills._token_count(body)
+        if (
+            front_tokens > skills._METADATA_TOKEN_LIMIT
+            or body_tokens >= skills._BODY_TOKEN_LIMIT
+        ):
+            over.append(f"{location}: frontmatter {front_tokens}, body {body_tokens}")
+    assert over == []
+
+
 def test_load_skill_returns_a_freeform_body(tmp_path):
     root = tmp_path / "skills"
     _write_skill(root, "http", description="Send requests.", body="Just do the work.\n")

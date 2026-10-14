@@ -16,6 +16,8 @@ _PROJECT_SKILLS = {"file-ops", "shell", "python", "coding"}
 
 SKILLS_DIR = Path(__file__).resolve().parent
 
+_METADATA_TOKEN_LIMIT = 100
+_BODY_TOKEN_LIMIT = 5000
 _NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _FRONT_KEYS = {
     "name",
@@ -82,7 +84,13 @@ def _skill_files(skills_dir: Path) -> list[Path]:
     return sorted(files, key=lambda path: path.relative_to(skills_dir).as_posix())
 
 
-def _frontmatter(text: str, location: str) -> tuple[dict, str]:
+def _token_count(text: str) -> int:
+    if not text:
+        return 0
+    return (len(text) + 3) // 4
+
+
+def _skill_sections(text: str, location: str) -> tuple[str, str]:
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
         raise RuntimeError(f"skill '{location}' has no frontmatter")
@@ -94,6 +102,14 @@ def _frontmatter(text: str, location: str) -> tuple[dict, str]:
     if end is None:
         raise RuntimeError(f"skill '{location}' frontmatter is not closed")
     raw = "\n".join(lines[1:end])
+    body = "\n".join(lines[end + 1 :])
+    if body.startswith("\n"):
+        body = body[1:]
+    return raw, body.rstrip("\n")
+
+
+def _frontmatter(text: str, location: str) -> tuple[dict, str]:
+    raw, body = _skill_sections(text, location)
     try:
         loaded = yaml.safe_load(raw)
     except yaml.YAMLError as exc:
@@ -104,10 +120,7 @@ def _frontmatter(text: str, location: str) -> tuple[dict, str]:
     if unknown:
         joined = ", ".join(unknown)
         raise RuntimeError(f"skill '{location}' has unknown frontmatter key: {joined}")
-    body = "\n".join(lines[end + 1 :])
-    if body.startswith("\n"):
-        body = body[1:]
-    return loaded, body.rstrip("\n")
+    return loaded, body
 
 
 def _required_name(fields: dict, directory: str, location: str) -> str:
