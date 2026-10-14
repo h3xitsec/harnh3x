@@ -5,5 +5,5 @@ workspaces/
 .vendor/
 *.egg-info/
 build/
-harnh3x.conf.dev
+harnh3x.yaml.dev
 .harnh3x/
