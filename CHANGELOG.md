@@ -3,10 +3,6 @@
 ## [0.5.0](https://github.com/h3xitsec/harnh3x/compare/harnh3x-v0.4.0...harnh3x-v0.5.0) (2026-10-14)
 
 
-### ⚠ BREAKING CHANGES
-
-* **skills:** load_skill name file_ops is now file-ops.
-
 ### Features
 
 * **skills:** read skills from Agent Skills frontmatter ([42c5c77](https://github.com/h3xitsec/harnh3x/commit/42c5c7712e62ea9b8ca54972658e7221f9d6de03))
