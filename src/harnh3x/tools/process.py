@@ -1,7 +1,9 @@
 import os
 import shlex
+import signal
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 from harnh3x.config import SHELL_MAX_TIMEOUT, SHELL_TIMEOUT
@@ -253,6 +255,41 @@ def _stdin_arg(raw) -> str | None:
     return raw
 
 
+_children: set[subprocess.Popen] = set()
+_children_lock = threading.Lock()
+
+
+def _track(proc: subprocess.Popen) -> None:
+    with _children_lock:
+        _children.add(proc)
+
+
+def _untrack(proc: subprocess.Popen) -> None:
+    with _children_lock:
+        _children.discard(proc)
+
+
+def _kill_group(proc: subprocess.Popen) -> None:
+    if proc.poll() is not None:
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    except OSError:
+        try:
+            proc.kill()
+        except OSError:
+            return
+
+
+def kill_children() -> None:
+    with _children_lock:
+        procs = list(_children)
+    for proc in procs:
+        _kill_group(proc)
+
+
 def _run_process(
     argv: list[str], workspace: Path, timeout: int, stdin: str | None
 ) -> str:
@@ -266,26 +303,30 @@ def _run_process(
             command, env = sandboxed_argv(argv, workspace, project)
         except ValueError as exc:
             return f"Error: {exc}"
+    proc = subprocess.Popen(
+        command,
+        shell=False,
+        cwd=cwd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        stdin=subprocess.PIPE if stdin is not None else None,
+        text=True,
+        start_new_session=True,
+    )
+    _track(proc)
     try:
-        completed = subprocess.run(
-            command,
-            shell=False,
-            cwd=cwd,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            input=stdin,
-        )
-    except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout or ""
-        stderr = exc.stderr or ""
-        if isinstance(stdout, bytes):
-            stdout = stdout.decode("utf-8", errors="replace")
-        if isinstance(stderr, bytes):
-            stderr = stderr.decode("utf-8", errors="replace")
-        return _format_shell(124, stdout, stderr or f"timed out after {timeout}s")
-    return _format_shell(completed.returncode, completed.stdout, completed.stderr)
+        try:
+            stdout, stderr = proc.communicate(input=stdin, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_group(proc)
+            stdout, stderr = proc.communicate()
+            return _format_shell(
+                124, stdout or "", stderr or f"timed out after {timeout}s"
+            )
+        return _format_shell(proc.returncode or 0, stdout or "", stderr or "")
+    finally:
+        _untrack(proc)
 
 
 def run_shell(workspace: Path, args: dict) -> str:

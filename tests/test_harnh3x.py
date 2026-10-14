@@ -9,6 +9,7 @@ import shlex
 import socket
 import subprocess
 import sys
+import threading
 import urllib.parse
 import urllib.request
 import uuid
@@ -356,6 +357,76 @@ def test_run_retries_when_stream_options_are_rejected(tmp_path, monkeypatch):
 
     assert agent.run("hi", session, client=client) == "ok"
     assert calls == [True, False]
+
+
+def test_abort_during_a_stream_skips_the_rest_of_the_turn(tmp_path):
+    calls = []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+
+        def chunks():
+            yield _delta(content="partial")
+            session.abort.set()
+            yield _delta(content=" more")
+            yield _delta(
+                tool_calls=[
+                    SimpleNamespace(
+                        index=0,
+                        id="call_1",
+                        function=SimpleNamespace(
+                            name="load_skill", arguments='{"name": "shell"}'
+                        ),
+                    )
+                ]
+            )
+
+        return chunks()
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    session = agent.Session(workspace=tmp_path)
+
+    text = agent.run("hello", session, client=client)
+
+    assert text == ""
+    assert len(calls) == 1
+    assert [message["role"] for message in session.messages] == ["system", "user"]
+
+
+def test_abort_skips_the_next_completion(tmp_path):
+    calls = []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        message = SimpleNamespace(
+            content=None,
+            tool_calls=[
+                SimpleNamespace(
+                    id="call_1",
+                    type="function",
+                    function=SimpleNamespace(
+                        name="load_skill", arguments='{"name": "shell"}'
+                    ),
+                )
+            ],
+        )
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    session = agent.Session(workspace=tmp_path)
+
+    def on_tool(name, args):
+        session.abort.set()
+
+    text = agent.run("hello", session, client=client, on_tool=on_tool)
+
+    assert text == ""
+    assert len(calls) == 1
+    assert session.messages[-1]["role"] == "tool"
 
 
 def test_run_drops_a_partial_stream_when_the_api_drops(tmp_path):
@@ -2978,6 +3049,38 @@ def test_ctrl_q_quits_the_app():
     asyncio.run(drive())
 
 
+def test_ctrl_q_aborts_a_running_request():
+    started = threading.Event()
+    released = threading.Event()
+    session = SimpleNamespace(
+        workspace="ws", model="m", messages=[], abort=threading.Event()
+    )
+
+    def fake_run(message, active, show_tools=True, on_tool=None):
+        started.set()
+        assert active.abort.wait(timeout=2)
+        released.set()
+        return "should not show"
+
+    app = HarnessApp(session, fake_run, show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press(*"hi", "enter")
+            for _ in range(40):
+                if started.is_set():
+                    break
+                await pilot.pause(0.05)
+            else:
+                raise AssertionError("request did not start")
+            await pilot.press("ctrl+q")
+            assert app._exit
+            assert session.abort.is_set()
+            assert released.wait(timeout=2)
+
+    asyncio.run(drive())
+
+
 def test_debug_panels_collapse_and_hide():
     system = "\n".join(f"system-{index}" for index in range(6))
     request = "\n".join(f"request-{index}" for index in range(6))
@@ -3872,14 +3975,51 @@ def test_shell_accepts_stdin_and_timeout(tmp_path):
     )
 
 
+def test_abort_kills_a_running_shell_child(tmp_path):
+    finished = threading.Event()
+    holder = {}
+
+    def work():
+        holder["result"] = tools.process._run_process(
+            ["sleep", "30"], tmp_path, 30, None
+        )
+        finished.set()
+
+    thread = threading.Thread(target=work)
+    thread.start()
+    try:
+        for _ in range(100):
+            if tools.process._children:
+                break
+            threading.Event().wait(0.05)
+        else:
+            raise AssertionError("shell child did not start")
+        tools.process.kill_children()
+        assert finished.wait(timeout=2)
+        assert "exit_code: 0" not in holder["result"]
+        assert "exit_code:" in holder["result"]
+    finally:
+        tools.process.kill_children()
+        thread.join(timeout=2)
+
+
 def test_shell_timeout_is_capped(tmp_path, monkeypatch):
     seen = {}
 
-    def fake_run(argv, **kwargs):
-        seen["timeout"] = kwargs["timeout"]
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
+    class Finished:
+        pid = 0
+        returncode = 0
 
-    monkeypatch.setattr(tools.process.subprocess, "run", fake_run)
+        def poll(self):
+            return 0
+
+        def communicate(self, input=None, timeout=None):
+            seen["timeout"] = timeout
+            return "", ""
+
+    monkeypatch.setattr(
+        tools.process.subprocess, "Popen", lambda argv, **kwargs: Finished()
+    )
 
     execute_tool("run_shell", {"command": "true", "timeout": 10_000}, tmp_path)
     assert seen["timeout"] == tools.process.SHELL_MAX_TIMEOUT
@@ -4109,13 +4249,23 @@ def test_yolo_reads_outside_the_workspace_and_keeps_writes_inside(tmp_path):
 def test_yolo_runs_sudo_without_the_seatbelt(tmp_path, monkeypatch):
     seen = {}
 
-    def fake_run(argv, **kwargs):
+    class Finished:
+        pid = 0
+        returncode = 0
+
+        def poll(self):
+            return 0
+
+        def communicate(self, input=None, timeout=None):
+            return "", ""
+
+    def fake_popen(argv, **kwargs):
         seen["argv"] = argv
         seen["env"] = kwargs["env"]
         seen["shell"] = kwargs["shell"]
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return Finished()
 
-    monkeypatch.setattr(tools.process.subprocess, "run", fake_run)
+    monkeypatch.setattr(tools.process.subprocess, "Popen", fake_popen)
 
     result = execute_tool("run_shell", {"command": "sudo true"}, tmp_path, yolo=True)
 
@@ -4632,10 +4782,10 @@ def test_rule_globs_accept_a_yaml_list(tmp_path):
 def test_sandbox_refuses_to_run_off_macos(tmp_path, monkeypatch):
     monkeypatch.setattr(sandbox.sys, "platform", "linux")
 
-    def fail_run(*args, **kwargs):
+    def fail_popen(*args, **kwargs):
         raise AssertionError("command ran without a sandbox")
 
-    monkeypatch.setattr(tools.process.subprocess, "run", fail_run)
+    monkeypatch.setattr(tools.process.subprocess, "Popen", fail_popen)
 
     result = execute_tool("run_shell", {"command": "true"}, tmp_path)
 

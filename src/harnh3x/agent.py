@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import threading
 import urllib.error
 import urllib.request
 import uuid
@@ -235,6 +236,7 @@ class Session:
         self.context_tokens: int | None = None
         self.context_limit: int | None = None
         self.on_compact: Callable[[str], None] | None = None
+        self.abort = threading.Event()
         self.messages: list[dict] = [self._system_message()]
 
     def _system_message(self) -> dict:
@@ -267,6 +269,7 @@ class Session:
         self.applied_rules = set()
         self.context_tokens = None
         self._debug_system = None
+        self.abort.clear()
         self.messages = [self._system_message()]
 
     def sync_prompt(self) -> None:
@@ -286,6 +289,7 @@ class Session:
         self.skills = self._skills()
         self.applied_rules = set()
         self._debug_system = None
+        self.abort.clear()
         _replay_skills(self)
         _load_saved_skills(self, data)
         self.sync_prompt()
@@ -810,13 +814,18 @@ def _emit_debug(session: Session) -> None:
 
 
 def _completion(session: Session, api):
+    if session.abort.is_set():
+        return None
     if isinstance(api, AnthropicClient):
-        return api.stream_turn(
+        message, usage = api.stream_turn(
             session,
             model=session.model,
             messages=session.messages,
             tools=session.skills.schemas(),
         )
+        if message is None:
+            return None
+        return message, usage
     response = _request_completion(
         api,
         model=session.model,
@@ -922,8 +931,14 @@ def _consume_stream(session: Session, response):
         return message, response
     draft = _Draft()
 
+    stopped = False
+
     def absorb(stream) -> None:
+        nonlocal stopped
         for chunk in stream:
+            if session.abort.is_set():
+                stopped = True
+                break
             _absorb_chunk(session, draft, chunk)
 
     if hasattr(response, "__enter__") and hasattr(response, "__exit__"):
@@ -931,10 +946,14 @@ def _consume_stream(session: Session, response):
             absorb(stream)
     else:
         absorb(response)
+    if stopped or session.abort.is_set():
+        return None
     return _draft_message(draft), SimpleNamespace(usage=draft.usage)
 
 
 def _compact(session: Session, api, *, force: bool = False) -> bool:
+    if session.abort.is_set():
+        return False
     if session.context_limit is None:
         limit = model_context_limit(session.model, api)
         if limit is not None:
@@ -956,8 +975,12 @@ def _compact(session: Session, api, *, force: bool = False) -> bool:
     _notify_compact(session, "start")
     try:
         try:
+            if session.abort.is_set():
+                return False
             response = _summary_response(session, api, body)
         except Exception:
+            return False
+        if session.abort.is_set():
             return False
         summary = _summary_text(response)
         if not summary:
@@ -1019,6 +1042,8 @@ def run(
 ) -> str:
     session.messages.append({"role": "user", "content": user_message})
     try:
+        if session.abort.is_set():
+            return ""
         return _complete(session, client, show_tools, on_tool)
     finally:
         _save_transcript(session)
@@ -1033,17 +1058,24 @@ def _complete(
     api = client or get_client()
 
     for turn in range(MAX_TURNS):
+        if session.abort.is_set():
+            return ""
         write_log({"event": "turn", "turn": turn}, session.workspace)
         _compact(session, api)
+        if session.abort.is_set():
+            return ""
         _emit_debug(session)
         try:
-            msg, usage = _completion(session, api)
+            completed = _completion(session, api)
         except APIConnectionError as exc:
             return _close_with(session, _api_failure(exc))
         except APIStatusError as exc:
             return _close_with(session, status_message(exc))
         except CompletionError as exc:
             return _close_with(session, str(exc))
+        if completed is None or session.abort.is_set():
+            return ""
+        msg, usage = completed
         stored = assistant_message(msg)
         session.messages.append(stored)
         _remember_context(session, usage, api)
@@ -1056,6 +1088,8 @@ def _complete(
             return _visible_answer(stored)
 
         for tc in msg.tool_calls:
+            if session.abort.is_set():
+                return ""
             args, result = _tool_result(
                 tc.function.name,
                 tc.function.arguments,

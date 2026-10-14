@@ -22,7 +22,10 @@ class AnthropicClient:
         def run():
             return _assemble(_iter_events(self.sdk.messages.stream(**payload)), session)
 
-        message, usage = _call(run)
+        assembled = _call(run)
+        if assembled is None:
+            return None, None
+        message, usage = assembled
         return message, SimpleNamespace(usage=usage)
 
     def complete_text(
@@ -246,11 +249,14 @@ class _Slot:
         self.saw_json = False
 
 
-def _assemble(events, session) -> tuple[SimpleNamespace, SimpleNamespace | None]:
+def _assemble(events, session) -> tuple[SimpleNamespace, SimpleNamespace | None] | None:
     slots: dict[int, _Slot] = {}
     input_tokens = None
     output_tokens = None
     for event in events:
+        abort = getattr(session, "abort", None)
+        if abort is not None and abort.is_set():
+            return None
         kind = _field(event, "type")
         if kind == "message_start":
             usage = _field(_field(event, "message"), "usage")

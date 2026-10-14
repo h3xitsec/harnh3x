@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -23,6 +24,7 @@ from harnh3x.agent import (
     parse_command,
     session_label,
 )
+from harnh3x.tools.process import kill_children
 
 THINKING_ROWS = 3
 
@@ -40,7 +42,7 @@ Hotkeys
   Ctrl+N       new session
   Ctrl+H       hide or show thinking, tool calls, debug, and compaction boxes
   Ctrl+W       open warning details
-  Ctrl+Q       quit"""
+  Ctrl+Q       quit and stop the running request"""
 
 
 def line_limit(width: int) -> int:
@@ -900,6 +902,7 @@ class HarnessApp(App):
         self._rendering = False
         self.tools: ToolBox | None = None
         self._hold_close = False
+        self._quitting = False
         self._reset_live()
 
     def _yolo(self) -> bool:
@@ -1007,9 +1010,9 @@ class HarnessApp(App):
 
         def fetch() -> None:
             limit = self._context_limit(model)
-            self.call_from_thread(self._apply_limit, model, limit)
+            self._from_thread(self._apply_limit, model, limit)
 
-        self.run_worker(fetch, thread=True, group="context-limit", exclusive=True)
+        self._spawn(fetch)
 
     def _apply_limit(self, model: str, limit: int | None) -> None:
         if (
@@ -1050,9 +1053,7 @@ class HarnessApp(App):
         self.session.on_debug = self._queue_debug
         if self.initial:
             self._append_user(self.initial)
-            self.run_worker(
-                lambda: self._turn(self.initial), thread=True, exclusive=True
-            )
+            self._spawn(lambda: self._turn(self.initial))
             return
         self.query_one(Composer).focus()
 
@@ -1106,7 +1107,7 @@ class HarnessApp(App):
         composer.load_text("")
         composer.disabled = True
         self._append_user(text)
-        self.run_worker(lambda: self._turn(text), thread=True, exclusive=True)
+        self._spawn(lambda: self._turn(text))
 
     def _command(self, name: str, rest: str) -> None:
         if name == "help" and rest == "":
@@ -1124,13 +1125,13 @@ class HarnessApp(App):
         if name == "compact" and rest == "":
             composer = self.query_one(Composer)
             composer.disabled = True
-            self.run_worker(self._compact_now, thread=True, exclusive=True)
+            self._spawn(self._compact_now)
             return
         if name == "compact":
             self._note("Usage: /compact")
             return
         if name == "exit" and rest == "":
-            self.exit()
+            self.action_quit()
             return
         if name == "exit":
             self._note("Usage: /exit")
@@ -1138,11 +1139,52 @@ class HarnessApp(App):
         shown = f"/{name}" if name else "/"
         self._note(f"Unknown command: {shown}")
 
+    def _stopping(self) -> bool:
+        if self._quitting:
+            return True
+        abort = getattr(self.session, "abort", None)
+        return abort is not None and abort.is_set()
+
+    def action_quit(self) -> None:
+        if not self._quitting:
+            self._quitting = True
+            abort = getattr(self.session, "abort", None)
+            if abort is not None:
+                abort.set()
+            kill_children()
+            skills = getattr(self.session, "skills", None)
+            kill = getattr(skills, "kill", None)
+            if callable(kill):
+                kill()
+        self.exit()
+
+    def _spawn(self, work: Callable[[], None]) -> None:
+        def target() -> None:
+            try:
+                work()
+            except Exception as exc:
+                self._from_thread(self._worker_error, exc)
+
+        threading.Thread(target=target, daemon=True).start()
+
+    def _worker_error(self, exc: Exception) -> None:
+        if self._stopping():
+            return
+        self._handle_exception(exc)
+
+    def _from_thread(self, callback: Callable, *args) -> None:
+        if self._stopping() or self._loop is None or not self._running:
+            return
+        try:
+            self.call_from_thread(callback, *args)
+        except RuntimeError:
+            return
+
     def _on_compact(self, phase: str) -> None:
         if phase == "start":
-            self.call_from_thread(self._show_compacting)
+            self._from_thread(self._show_compacting)
         else:
-            self.call_from_thread(self._hide_compacting)
+            self._from_thread(self._hide_compacting)
 
     def _show_compacting(self) -> None:
         if self._compacting is not None:
@@ -1160,7 +1202,7 @@ class HarnessApp(App):
 
     def _compact_now(self) -> None:
         status = compact_session(self.session)
-        self.call_from_thread(self._after_compact, status)
+        self._from_thread(self._after_compact, status)
 
     def _after_compact(self, status: str) -> None:
         self._mount_new_compactions()
@@ -1258,7 +1300,7 @@ class HarnessApp(App):
         self._live_answer: AgentAnswer | None = None
 
     def _queue_debug(self, system: str | None, request: str) -> None:
-        self.call_from_thread(self._show_debug, system, request)
+        self._from_thread(self._show_debug, system, request)
 
     def _show_debug(self, system: str | None, request: str) -> None:
         transcript = self.query_one("#transcript")
@@ -1267,7 +1309,7 @@ class HarnessApp(App):
         transcript.mount(DebugBox("Request", request))
 
     def _queue_delta(self, kind: str, text: str) -> None:
-        self.call_from_thread(self._apply_delta, kind, text)
+        self._from_thread(self._apply_delta, kind, text)
 
     def _apply_delta(self, kind: str, text: str) -> None:
         if not text:
@@ -1315,7 +1357,7 @@ class HarnessApp(App):
         self._reset_live()
 
         def on_tool(name: str, args: object) -> None:
-            self.call_from_thread(self._append_tool, name, args)
+            self._from_thread(self._append_tool, name, args)
 
         assert self._run is not None
         answer = self._run(
@@ -1324,7 +1366,9 @@ class HarnessApp(App):
             show_tools=self.show_tools,
             on_tool=on_tool if self.show_tools else None,
         )
-        self.call_from_thread(self._after_turn, answer, start)
+        if self._stopping():
+            return
+        self._from_thread(self._after_turn, answer, start)
 
     def _append_user(self, text: str) -> None:
         self.tools = None

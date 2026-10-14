@@ -289,6 +289,10 @@ class SkillRegistry:
         for client in self._clients.values():
             client.close()
 
+    def kill(self) -> None:
+        for client in self._clients.values():
+            client.kill()
+
     def loaded_names(self) -> list[str]:
         return sorted(self._active)
 
