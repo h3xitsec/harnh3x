@@ -1,6 +1,8 @@
-# Reference
-
-Look up encyclopedic facts on Wikipedia.
+---
+name: reference
+description: Look up encyclopedic facts on Wikipedia.
+allowed-tools: wikipedia_search wikipedia_summary
+---
 
 ## When to Use
 

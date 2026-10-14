@@ -1,6 +1,8 @@
-# Memory
-
-Keep facts across sessions in memory.md in the harnh3x base directory (default ~/.harnh3x). That file is shared by every session and is not inside the workspace.
+---
+name: memory
+description: Keep facts across sessions in memory.md in the harnh3x base directory (default ~/.harnh3x). That file is shared by every session and is not inside the workspace.
+allowed-tools: remember recall
+---
 
 ## When to Use
 

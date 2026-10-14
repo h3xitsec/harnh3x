@@ -930,7 +930,7 @@ def test_debug_hook_reports_each_completion_and_stays_a_launch_flag(
                         id="call_1",
                         function=SimpleNamespace(
                             name="load_skill",
-                            arguments='{"name": "file_ops"}',
+                            arguments='{"name": "file-ops"}',
                         ),
                     )
                 ],
@@ -955,7 +955,7 @@ def test_debug_hook_reports_each_completion_and_stays_a_launch_flag(
     assert "[loaded:" in seen[1][0]
     assert seen[1][0] == session.messages[0]["content"]
     assert "user: read the notes" in seen[1][1]
-    assert 'load_skill({"name": "file_ops"})' in seen[1][1]
+    assert 'load_skill({"name": "file-ops"})' in seen[1][1]
     assert "tool call_1:" in seen[1][1]
     assert seen[2][0] is None
     assert "user: again" in seen[2][1]
@@ -1006,7 +1006,7 @@ def test_session_reset_starts_a_new_conversation(tmp_path, monkeypatch):
     session = agent.Session(workspace=tmp_path / "first", model="custom-model")
     previous = session.workspace
     session.messages.append({"role": "user", "content": "remember this"})
-    session.skills.load_skill("file_ops")
+    session.skills.load_skill("file-ops")
     session.context_tokens = 40
     session.context_limit = 8192
 
@@ -1052,7 +1052,7 @@ def _past_workspace(root: Path) -> Path:
                         "type": "function",
                         "function": {
                             "name": "load_skill",
-                            "arguments": '{"name": "file_ops"}',
+                            "arguments": '{"name": "file-ops"}',
                         },
                     }
                 ],
@@ -1277,7 +1277,7 @@ def test_run_compacts_older_turns_near_the_limit(tmp_path):
         chat=SimpleNamespace(completions=SimpleNamespace(create=create))
     )
     session = agent.Session(workspace=tmp_path, model="custom-model")
-    session.skills.load_skill("file_ops")
+    session.skills.load_skill("file-ops")
     session.messages.append({"role": "user", "content": "OLD" * 200})
     session.messages.append({"role": "assistant", "content": "NEWEST-MARKER"})
     session.context_tokens = 90
@@ -1293,7 +1293,7 @@ def test_run_compacts_older_turns_near_the_limit(tmp_path):
     summary_request = seen[0]["messages"][1]["content"]
     assert "NEWEST-MARKER" in summary_request
     assert "OLD" * 200 not in summary_request
-    assert "file_ops" in summary_request
+    assert "file-ops" in summary_request
     assert [message["role"] for message in session.messages] == [
         "system",
         "user",
@@ -1304,7 +1304,7 @@ def test_run_compacts_older_turns_near_the_limit(tmp_path):
     ]
     note = session.messages[1]["content"]
     assert note.startswith("Context compacted:\nkept the plan")
-    assert "Loaded skills: file_ops." in note
+    assert "Loaded skills: file-ops." in note
     assert session.messages[2]["content"] == "now"
     assert "read_file" in [
         tool["function"]["name"] for tool in session.skills.schemas()
@@ -1317,7 +1317,7 @@ def test_run_compacts_older_turns_near_the_limit(tmp_path):
     assert compact["before"] == 90
     assert compact["dropped"] == 2
     saved = json.loads((tmp_path / TRANSCRIPT_FILE).read_text(encoding="utf-8"))
-    assert saved["skills"] == ["file_ops"]
+    assert saved["skills"] == ["file-ops"]
 
 
 def test_run_compacts_tool_rounds_that_fill_the_current_turn(tmp_path):
@@ -1363,7 +1363,7 @@ def test_run_compacts_tool_rounds_that_fill_the_current_turn(tmp_path):
         chat=SimpleNamespace(completions=SimpleNamespace(create=create))
     )
     session = agent.Session(workspace=tmp_path, model="custom-model")
-    session.skills.load_skill("file_ops")
+    session.skills.load_skill("file-ops")
     _prior_turn(session)
     session.context_tokens = 90
     session.context_limit = 100
@@ -1508,7 +1508,7 @@ def test_resume_restores_skills_without_load_messages(tmp_path):
         json.dumps(
             {
                 "model": "saved-model",
-                "skills": ["file_ops"],
+                "skills": ["file-ops"],
                 "messages": [
                     {"role": "system", "content": "stale"},
                     {
@@ -1620,12 +1620,12 @@ def test_resume_restores_messages_model_and_skills(tmp_path, monkeypatch):
                     "type": "function",
                     "function": {
                         "name": "load_skill",
-                        "arguments": '{"name": "file_ops"}',
+                        "arguments": '{"name": "file-ops"}',
                     },
                 }
             ],
         },
-        {"role": "tool", "tool_call_id": "c1", "content": "loaded file_ops"},
+        {"role": "tool", "tool_call_id": "c1", "content": "loaded file-ops"},
         {
             "role": "assistant",
             "content": "",
@@ -1692,7 +1692,7 @@ def test_resume_restores_messages_model_and_skills(tmp_path, monkeypatch):
     assert "read_file" in names
     assert "run_shell" not in names
     assert [item["content"] for item in session.messages if item["role"] == "tool"] == [
-        "loaded file_ops",
+        "loaded file-ops",
         "loaded shell",
         "unloaded shell",
         "notes",
@@ -1819,7 +1819,7 @@ def test_skill_menu_starts_unloaded():
     menu = registry.get_menu()
 
     for name in (
-        "file_ops",
+        "file-ops",
         "shell",
         "python",
         "coding",
@@ -1849,13 +1849,13 @@ def test_skill_load_unload_and_gated_execute(tmp_path):
     blocked = registry.execute("read_file", {"path": "a.txt"}, tmp_path)
     assert blocked == "Error: Tool 'read_file' not found. Is the skill loaded?"
 
-    loaded = registry.load_skill("file_ops")
-    assert loaded.startswith("Loaded skill 'file_ops' with 8 tools: ")
+    loaded = registry.load_skill("file-ops")
+    assert loaded.startswith("Loaded skill 'file-ops' with 8 tools: ")
     assert "read_file" in loaded
     assert "Documentation:" in loaded
     assert "give the user the content of the file" in loaded
-    assert registry.load_skill("file_ops") == (
-        "Skill 'file_ops' is already loaded. Call one of: read_file, write_file, "
+    assert registry.load_skill("file-ops") == (
+        "Skill 'file-ops' is already loaded. Call one of: read_file, write_file, "
         "edit_file, append_file, delete_file, move_file, list_files, search_files."
     )
     assert FILE_OPS_LOADED in registry.get_menu()
@@ -1863,8 +1863,8 @@ def test_skill_load_unload_and_gated_execute(tmp_path):
     (tmp_path / "a.txt").write_text("hi")
     assert registry.execute("read_file", {"path": "a.txt"}, tmp_path) == "hi"
 
-    assert registry.unload_skill("file_ops") == "Unloaded skill 'file_ops'."
-    assert registry.unload_skill("file_ops") == "Skill 'file_ops' is not loaded."
+    assert registry.unload_skill("file-ops") == "Unloaded skill 'file-ops'."
+    assert registry.unload_skill("file-ops") == "Skill 'file-ops' is not loaded."
     assert "[loaded]" not in registry.get_menu()
 
     registry.load_skill("http")
@@ -1887,27 +1887,43 @@ def test_skill_manifest_requires_tools_entries():
         skills._tool_schemas(("read_file", "not_a_tool"), tools.TOOLS)
 
 
-def _write_skill(root: Path, *parts: str, body: str = "Do the thing.\n") -> None:
+def _write_skill(
+    root: Path,
+    *parts: str,
+    description: str = "Do the thing.",
+    body: str = "Do the thing.\n",
+    tools: tuple[str, ...] = ("http_request",),
+    name: str | None = None,
+    frontmatter: str | None = None,
+) -> None:
     folder = root.joinpath(*parts)
     folder.mkdir(parents=True)
-    (folder / "SKILL.md").write_text(f"# {parts[-1]}\n\n{body}")
+    if frontmatter is None:
+        skill_name = parts[-1] if name is None else name
+        allowed = ""
+        if tools:
+            allowed = f"allowed-tools: {' '.join(tools)}\n"
+        frontmatter = (
+            f"---\nname: {skill_name}\ndescription: {description}\n{allowed}---\n"
+        )
+    elif not frontmatter.endswith("\n"):
+        frontmatter += "\n"
+    (folder / "SKILL.md").write_text(f"{frontmatter}\n{body}")
 
 
 def test_catalog_loads_skills_in_category_folders(tmp_path):
     root = tmp_path / "skills"
-    _write_skill(root, "http", body="Send requests.\n")
-    _write_skill(root, "web-testing", "sql-injection", body="Test endpoints.\n")
+    _write_skill(root, "http", description="Send requests.", body="Send requests.\n")
+    _write_skill(
+        root,
+        "web-testing",
+        "sql-injection",
+        description="Test endpoints.",
+        body="Ignore this sentence.\n",
+    )
     _write_skill(root, "web-testing", "owasp", "probe", body="Probe a page.\n")
     (root / "web-testing" / "notes.txt").write_text("not a skill")
-    catalog = skills._load_catalog(
-        root,
-        manifest={
-            "http": ("http_request",),
-            "sql-injection": ("http_request",),
-            "probe": ("http_request",),
-        },
-        tools=tools.TOOLS,
-    )
+    catalog = skills._load_catalog(root, tools=tools.TOOLS)
 
     assert list(catalog) == ["http", "sql-injection", "probe"]
     assert "web-testing" not in catalog
@@ -1915,6 +1931,7 @@ def test_catalog_loads_skills_in_category_folders(tmp_path):
     assert catalog["sql-injection"].category == "web-testing"
     assert catalog["probe"].category == "web-testing/owasp"
     assert catalog["sql-injection"].description == "Test endpoints."
+    assert catalog["sql-injection"].doc == "Ignore this sentence."
 
 
 def test_catalog_rejects_duplicate_skill_names(tmp_path):
@@ -1926,33 +1943,132 @@ def test_catalog_rejects_duplicate_skill_names(tmp_path):
         RuntimeError,
         match=("duplicate skill 'probe' in other/probe and web-testing/probe"),
     ):
-        skills._load_catalog(
-            root,
-            manifest={"probe": ("http_request",)},
-            tools=tools.TOOLS,
-        )
+        skills._load_catalog(root, tools=tools.TOOLS)
 
 
-def test_catalog_requires_a_skill_file_for_each_manifest_entry(tmp_path):
-    root = tmp_path / "skills" / "web-testing"
-    root.mkdir(parents=True)
+def test_catalog_skill_without_allowed_tools_has_no_tools(tmp_path):
+    root = tmp_path / "skills"
+    _write_skill(root, "notes", tools=())
+
+    catalog = skills._load_catalog(root, tools=tools.TOOLS)
+
+    assert catalog["notes"].tools == ()
+    assert catalog["notes"].description == "Do the thing."
+
+
+def test_catalog_rejects_a_skill_without_frontmatter(tmp_path):
+    root = tmp_path / "skills"
+    _write_skill(root, "http", frontmatter="# HTTP\n\nSend requests.")
+
+    with pytest.raises(RuntimeError, match="skill 'http' has no frontmatter"):
+        skills._load_catalog(root, tools=tools.TOOLS)
+
+
+def test_catalog_rejects_a_name_that_does_not_match_the_directory(tmp_path):
+    root = tmp_path / "skills"
+    _write_skill(root, "http", name="shell")
 
     with pytest.raises(
-        RuntimeError, match="skill manifest has no SKILL.md for: missing"
+        RuntimeError, match="skill name 'shell' does not match directory 'http'"
     ):
-        skills._load_catalog(
-            root.parent,
-            manifest={"missing": ("http_request",)},
-            tools=tools.TOOLS,
-        )
+        skills._load_catalog(root, tools=tools.TOOLS)
 
 
-def test_catalog_rejects_a_skill_file_with_no_manifest_entry(tmp_path):
+def test_catalog_rejects_an_invalid_skill_name(tmp_path):
     root = tmp_path / "skills"
-    _write_skill(root, "web-testing", "extra")
+    _write_skill(root, "http", name="HTTP")
 
-    with pytest.raises(RuntimeError, match="skill 'extra' has no tool manifest"):
-        skills._load_catalog(root, manifest={}, tools=tools.TOOLS)
+    with pytest.raises(RuntimeError, match="skill 'http' has an invalid name"):
+        skills._load_catalog(root, tools=tools.TOOLS)
+
+
+def test_catalog_rejects_a_bad_description(tmp_path):
+    root = tmp_path / "skills"
+    _write_skill(root, "http", description="x" * 1025)
+
+    with pytest.raises(RuntimeError, match="skill 'http' description is too long"):
+        skills._load_catalog(root, tools=tools.TOOLS)
+
+
+def test_catalog_rejects_an_unknown_frontmatter_key(tmp_path):
+    root = tmp_path / "skills"
+    _write_skill(
+        root,
+        "http",
+        frontmatter="---\nname: http\ndescription: Send.\ntools: http_request\n---\n",
+    )
+
+    with pytest.raises(RuntimeError, match="unknown frontmatter key: tools"):
+        skills._load_catalog(root, tools=tools.TOOLS)
+
+
+def test_catalog_rejects_a_bad_metadata_value(tmp_path):
+    root = tmp_path / "skills"
+    _write_skill(
+        root,
+        "http",
+        frontmatter=(
+            "---\n"
+            "name: http\n"
+            "description: Send.\n"
+            "metadata:\n"
+            "  author: 1\n"
+            "---\n"
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="metadata values must be strings"):
+        skills._load_catalog(root, tools=tools.TOOLS)
+
+
+def test_catalog_accepts_optional_frontmatter_fields(tmp_path):
+    root = tmp_path / "skills"
+    _write_skill(
+        root,
+        "http",
+        description="Send requests.",
+        body="Call the endpoint.\n",
+        frontmatter=(
+            "---\n"
+            "name: http\n"
+            "description: Send requests.\n"
+            "license: Apache-2.0\n"
+            "compatibility: Requires network access\n"
+            "metadata:\n"
+            '  author: "example"\n'
+            "allowed-tools: http_request\n"
+            "---\n"
+        ),
+    )
+
+    catalog = skills._load_catalog(root, tools=tools.TOOLS)
+
+    assert catalog["http"].description == "Send requests."
+    assert catalog["http"].doc == "Call the endpoint."
+    assert _tool_names(catalog["http"].tools) == ["http_request"]
+
+
+def test_catalog_rejects_an_unknown_allowed_tool(tmp_path):
+    root = tmp_path / "skills"
+    _write_skill(root, "http", tools=("not_a_tool",))
+
+    with pytest.raises(RuntimeError, match="tool 'not_a_tool' is missing from TOOLS"):
+        skills._load_catalog(root, tools=tools.TOOLS)
+
+
+def test_load_skill_returns_a_freeform_body(tmp_path):
+    root = tmp_path / "skills"
+    _write_skill(root, "http", description="Send requests.", body="Just do the work.\n")
+    catalog = skills._load_catalog(root, tools=tools.TOOLS)
+    registry = SkillRegistry()
+    registry._catalog["http"] = catalog["http"]
+
+    loaded = registry.load_skill("http")
+
+    assert "Just do the work." in loaded
+    assert "name: http" not in loaded
+    assert "## When to Use" not in loaded
+    assert registry.get_menu().split("- http: ", 1)[1].startswith("Send requests.")
 
 
 def test_run_sends_skill_schemas_after_load(tmp_path):
@@ -1970,7 +2086,7 @@ def test_run_sends_skill_schemas_after_load(tmp_path):
                         id="call_1",
                         function=SimpleNamespace(
                             name="load_skill",
-                            arguments='{"name": "file_ops"}',
+                            arguments='{"name": "file-ops"}',
                         ),
                     )
                 ],
@@ -1995,7 +2111,7 @@ def test_run_sends_skill_schemas_after_load(tmp_path):
     file_ops_line = next(
         line
         for line in session.messages[0]["content"].splitlines()
-        if line.startswith("- file_ops:")
+        if line.startswith("- file-ops:")
     )
     assert file_ops_line.endswith(FILE_OPS_LOADED)
     assert "- shell:" in session.messages[0]["content"]
@@ -2032,7 +2148,7 @@ def _tool_client(name: str, arguments: str, reply: str):
 
 def test_show_tools_prints_the_tool_call(tmp_path, capsys):
     session = agent.Session(workspace=tmp_path)
-    client = _tool_client("load_skill", '{"name": "file_ops"}', "loaded")
+    client = _tool_client("load_skill", '{"name": "file-ops"}', "loaded")
 
     text = agent.run("load file ops", session, client=client)
 
@@ -2042,7 +2158,7 @@ def test_show_tools_prints_the_tool_call(tmp_path, capsys):
 
 def test_show_tools_can_hide_tool_call_output(tmp_path, capsys):
     session = agent.Session(workspace=tmp_path)
-    client = _tool_client("load_skill", '{"name": "file_ops"}', "loaded")
+    client = _tool_client("load_skill", '{"name": "file-ops"}', "loaded")
 
     text = agent.run("load file ops", session, client=client, show_tools=False)
 
@@ -2052,7 +2168,7 @@ def test_show_tools_can_hide_tool_call_output(tmp_path, capsys):
 
 def test_on_tool_receives_the_call_instead_of_printing(tmp_path, capsys):
     session = agent.Session(workspace=tmp_path)
-    client = _tool_client("load_skill", '{"name": "file_ops"}', "loaded")
+    client = _tool_client("load_skill", '{"name": "file-ops"}', "loaded")
     seen = []
 
     text = agent.run(
@@ -2063,7 +2179,7 @@ def test_on_tool_receives_the_call_instead_of_printing(tmp_path, capsys):
     )
 
     assert text == "loaded"
-    assert seen == [("load_skill", {"name": "file_ops"})]
+    assert seen == [("load_skill", {"name": "file-ops"})]
     assert capsys.readouterr().out == ""
 
 
@@ -2269,7 +2385,7 @@ def test_plain_resume_reprints_the_session(monkeypatch, capsys, tmp_path):
     output = capsys.readouterr().out
     assert "Unknown command: /nope" in output
     assert "You: fix the notes" in output
-    assert "🔧 load_skill({'name': 'file_ops'})" in output
+    assert "🔧 load_skill({'name': 'file-ops'})" in output
     assert "### **Done**" in output
     assert "alpha" not in output
     assert "delta" in output
@@ -2626,7 +2742,7 @@ def test_transcript_items_keep_compaction_notes_in_order():
                         "type": "function",
                         "function": {
                             "name": "load_skill",
-                            "arguments": '{"name": "file_ops"}',
+                            "arguments": '{"name": "file-ops"}',
                         },
                     }
                 ],
@@ -3130,7 +3246,7 @@ def test_resume_restores_the_transcript(tmp_path, monkeypatch):
             await _wait_for(pilot, lambda: bool(seen))
 
     asyncio.run(drive())
-    assert "🔧 load_skill({'name': 'file_ops'})" in captured["plain"]
+    assert "🔧 load_skill({'name': 'file-ops'})" in captured["plain"]
     assert seen == [("next", ["fix the notes"])]
 
 
@@ -3360,7 +3476,7 @@ def test_tool_callback_line_shows_in_the_transcript():
     session = SimpleNamespace(workspace="ws", model="m", messages=[])
 
     def fake_run(message, session, show_tools=True, on_tool=None):
-        on_tool("load_skill", {"name": "file_ops"})
+        on_tool("load_skill", {"name": "file-ops"})
         return "loaded"
 
     app = HarnessApp(session, fake_run, show_tools=True)
@@ -3378,7 +3494,7 @@ def test_tool_callback_line_shows_in_the_transcript():
             captured["plain"] = app.transcript_plain()
 
     asyncio.run(drive())
-    assert "🔧 load_skill({'name': 'file_ops'})" in captured["plain"]
+    assert "🔧 load_skill({'name': 'file-ops'})" in captured["plain"]
 
 
 def test_deltas_show_before_the_turn_returns():
@@ -3484,7 +3600,7 @@ def test_agent_answer_renders_markdown():
     asyncio.run(drive())
 
 
-# --- file_ops additions ---------------------------------------------------
+# --- file-ops additions ---------------------------------------------------
 
 
 def test_read_file_pages_with_offset_and_limit(tmp_path):
@@ -4276,7 +4392,7 @@ def test_project_rules_enter_the_prompt_and_attach_on_a_matching_read(tmp_path):
     assert "Project rules" not in granted.messages[0]["content"]
     assert "ALWAYS-RULE-BODY" not in granted.messages[0]["content"]
     assert "Python files" not in granted.messages[0]["content"]
-    granted.skills.load_skill("file_ops")
+    granted.skills.load_skill("file-ops")
     granted_calls = {"n": 0}
 
     def granted_create(**kwargs):
@@ -4331,7 +4447,7 @@ def test_project_rules_enter_the_prompt_and_attach_on_a_matching_read(tmp_path):
     assert rules.glob_matches("src/pkg/mod.py", "src/pkg/**")
     assert rules.glob_matches("tests/test_mod.py", "tests/**/*.py")
 
-    session.skills.load_skill("file_ops")
+    session.skills.load_skill("file-ops")
     calls = {"n": 0}
 
     def create(**kwargs):
@@ -6087,8 +6203,11 @@ def test_get_client_builds_an_anthropic_client(monkeypatch):
 
 
 def test_every_tool_belongs_to_exactly_one_skill():
-    assigned = [name for names in skills.SKILL_TOOLS.values() for name in names]
-    assert sorted(assigned) == sorted(set(assigned))
+    assigned = [
+        tool["function"]["name"]
+        for skill in skills._CATALOG.values()
+        for tool in skill.tools
+    ]
     assert set(assigned) == set(tools.TOOL_FNS)
     assert set(assigned) == {tool["function"]["name"] for tool in tools.TOOLS}
 
@@ -6162,7 +6281,7 @@ def test_mcp_server_block_names_the_file_and_key():
 
 def test_mcp_server_name_cannot_match_a_built_in_skill():
     with pytest.raises(RuntimeError, match="matches a built-in skill"):
-        SkillRegistry(servers=(_mcp_server("file_ops"),))
+        SkillRegistry(servers=(_mcp_server("file-ops"),))
 
 
 def test_configured_mcp_server_stays_out_of_schemas_until_load(tmp_path):

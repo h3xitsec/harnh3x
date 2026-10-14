@@ -1,6 +1,8 @@
-# Documents
-
-Read PDF and Word documents in the workspace.
+---
+name: documents
+description: Read PDF and Word documents in the workspace.
+allowed-tools: read_pdf read_docx
+---
 
 ## When to Use
 
@@ -16,6 +18,6 @@ Read PDF and Word documents in the workspace.
 
 - Read the whole document before summarizing it. When `read_pdf` reports remaining pages, call it again with the next `first_page`.
 - A scanned PDF has no text layer and returns empty pages. Tell the user instead of guessing the content.
-- A truncated `read_docx` result names a `.txt` copy; use `read_file` from `file_ops` with `offset` to read the rest.
+- A truncated `read_docx` result names a `.txt` copy; use `read_file` from `file-ops` with `offset` to read the rest.
 - Quote page numbers when you cite a PDF.
 - If a tool returns an error, tell the user the error. Do not guess.

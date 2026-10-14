@@ -1,6 +1,8 @@
-# SQL Injection
-
-Test a endpoint for SQL Injection vulnerabilities
+---
+name: sql-injection
+description: Test a endpoint for SQL Injection vulnerabilities
+allowed-tools: http_request
+---
 
 ## When to Use
 

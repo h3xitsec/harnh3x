@@ -1,6 +1,8 @@
-# Python
-
-Run a short Python snippet to compute a value. It does not save a file.
+---
+name: python
+description: Run a short Python snippet to compute a value. It does not save a file.
+allowed-tools: run_python
+---
 
 ## When to Use
 

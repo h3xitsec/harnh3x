@@ -1,6 +1,8 @@
-# Data
-
-Inspect CSV and JSON files before working with them.
+---
+name: data
+description: Inspect CSV and JSON files before working with them.
+allowed-tools: inspect_csv inspect_json
+---
 
 ## When to Use
 

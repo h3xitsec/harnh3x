@@ -1,6 +1,8 @@
-# Tasks
-
-Keep a checklist in plan.md for work that takes several steps.
+---
+name: tasks
+description: Keep a checklist in plan.md for work that takes several steps.
+allowed-tools: write_plan update_plan show_plan
+---
 
 ## When to Use
 

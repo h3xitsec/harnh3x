@@ -1,6 +1,8 @@
-# Coding
-
-Write a program to a workspace file, edit it, and run it.
+---
+name: coding
+description: Write a program to a workspace file, edit it, and run it.
+allowed-tools: read_source write_source edit_source run_script
+---
 
 ## When to Use
 
@@ -23,4 +25,4 @@ Write a program to a workspace file, edit it, and run it.
 - The script runs in the workspace, so relative paths point at workspace files. The kernel confines the process to that directory: it cannot read or write other paths, and it cannot open network connections. Only the standard library is available.
 - `args` are command-line strings. There is no shell.
 - The final answer names the path, what the program does, and the run result. Do not paste the full source unless the user asked to see it.
-- Load `file_ops` to list or search the workspace. A one-off calculation that should not leave a file stays on the `python` skill.
+- Load `file-ops` to list or search the workspace. A one-off calculation that should not leave a file stays on the `python` skill.

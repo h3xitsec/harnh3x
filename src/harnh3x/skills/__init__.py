@@ -1,40 +1,29 @@
 import atexit
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
+
+import yaml
 
 from harnh3x.config import McpServer
 from harnh3x.mcp.client import McpClient, McpError, _guide, upstream_problem
 from harnh3x.prompt import project_note, yolo_note
 from harnh3x.tools import TOOLS, execute_tool
 
-_YOLO_SKILLS = {"file_ops", "shell", "python", "http", "research", "reference"}
-_PROJECT_SKILLS = {"file_ops", "shell", "python", "coding"}
+_YOLO_SKILLS = {"file-ops", "shell", "python", "http", "research", "reference"}
+_PROJECT_SKILLS = {"file-ops", "shell", "python", "coding"}
 
 SKILLS_DIR = Path(__file__).resolve().parent
 
-SKILL_TOOLS = {
-    "file_ops": (
-        "read_file",
-        "write_file",
-        "edit_file",
-        "append_file",
-        "delete_file",
-        "move_file",
-        "list_files",
-        "search_files",
-    ),
-    "shell": ("run_shell",),
-    "python": ("run_python",),
-    "coding": ("read_source", "write_source", "edit_source", "run_script"),
-    "research": ("web_search", "read_url", "fetch_url", "parse_html", "read_feed"),
-    "reference": ("wikipedia_search", "wikipedia_summary"),
-    "http": ("http_get_json", "http_request"),
-    "documents": ("read_pdf", "read_docx"),
-    "data": ("inspect_csv", "inspect_json"),
-    "memory": ("remember", "recall"),
-    "tasks": ("write_plan", "update_plan", "show_plan"),
-    "sql-injection": ("http_request",),
+_NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+_FRONT_KEYS = {
+    "name",
+    "description",
+    "license",
+    "compatibility",
+    "metadata",
+    "allowed-tools",
 }
 
 
@@ -93,41 +82,136 @@ def _skill_files(skills_dir: Path) -> list[Path]:
     return sorted(files, key=lambda path: path.relative_to(skills_dir).as_posix())
 
 
+def _frontmatter(text: str, location: str) -> tuple[dict, str]:
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        raise RuntimeError(f"skill '{location}' has no frontmatter")
+    end = None
+    for index, line in enumerate(lines[1:], start=1):
+        if line.strip() == "---":
+            end = index
+            break
+    if end is None:
+        raise RuntimeError(f"skill '{location}' frontmatter is not closed")
+    raw = "\n".join(lines[1:end])
+    try:
+        loaded = yaml.safe_load(raw)
+    except yaml.YAMLError as exc:
+        raise RuntimeError(f"skill '{location}' frontmatter is invalid") from exc
+    if not isinstance(loaded, dict):
+        raise RuntimeError(f"skill '{location}' frontmatter must be a mapping")
+    unknown = sorted(set(loaded) - _FRONT_KEYS)
+    if unknown:
+        joined = ", ".join(unknown)
+        raise RuntimeError(f"skill '{location}' has unknown frontmatter key: {joined}")
+    body = "\n".join(lines[end + 1 :])
+    if body.startswith("\n"):
+        body = body[1:]
+    return loaded, body.rstrip("\n")
+
+
+def _required_name(fields: dict, directory: str, location: str) -> str:
+    name = fields.get("name")
+    if (
+        not isinstance(name, str)
+        or not 1 <= len(name) <= 64
+        or _NAME.fullmatch(name) is None
+    ):
+        raise RuntimeError(f"skill '{location}' has an invalid name")
+    if name != directory:
+        raise RuntimeError(
+            f"skill name '{name}' does not match directory '{directory}'"
+        )
+    return name
+
+
+def _required_description(fields: dict, location: str) -> str:
+    description = fields.get("description")
+    if not isinstance(description, str):
+        raise RuntimeError(f"skill '{location}' description must be a string")
+    if not description.strip():
+        raise RuntimeError(f"skill '{location}' description is empty")
+    if len(description) > 1024:
+        raise RuntimeError(f"skill '{location}' description is too long")
+    return description
+
+
+def _optional_text(fields: dict, key: str, location: str, limit: int | None) -> None:
+    if key not in fields:
+        return
+    value = fields[key]
+    if not isinstance(value, str) or not value:
+        raise RuntimeError(f"skill '{location}' {key} must be a string")
+    if limit is not None and len(value) > limit:
+        raise RuntimeError(f"skill '{location}' {key} is too long")
+
+
+def _optional_metadata(fields: dict, location: str) -> None:
+    if "metadata" not in fields:
+        return
+    metadata = fields["metadata"]
+    if not isinstance(metadata, dict):
+        raise RuntimeError(f"skill '{location}' metadata must be a mapping")
+    for key, value in metadata.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise RuntimeError(f"skill '{location}' metadata values must be strings")
+
+
+def _allowed_tools(fields: dict, location: str) -> tuple[str, ...]:
+    if "allowed-tools" not in fields or fields["allowed-tools"] is None:
+        return ()
+    raw = fields["allowed-tools"]
+    if not isinstance(raw, str):
+        raise RuntimeError(f"skill '{location}' allowed-tools must be a string")
+    names = tuple(raw.split())
+    if len(names) != len(set(names)):
+        raise RuntimeError(f"skill '{location}' lists a tool more than once")
+    return names
+
+
+def _read_skill(
+    skill_md: Path, directory: str, location: str
+) -> tuple[str, str, str, tuple[str, ...]]:
+    try:
+        text = skill_md.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise RuntimeError(f"skill '{location}' could not be read") from exc
+    fields, body = _frontmatter(text, location)
+    name = _required_name(fields, directory, location)
+    description = _required_description(fields, location)
+    _optional_text(fields, "license", location, None)
+    _optional_text(fields, "compatibility", location, 500)
+    _optional_metadata(fields, location)
+    return name, description, body, _allowed_tools(fields, location)
+
+
 def _load_catalog(
     skills_dir: Path = SKILLS_DIR,
-    manifest: dict | None = None,
     tools: list | None = None,
 ) -> dict[str, Skill]:
-    manifest = SKILL_TOOLS if manifest is None else manifest
     tools = TOOLS if tools is None else tools
     found: dict[str, Skill] = {}
     paths: dict[str, str] = {}
     for skill_md in _skill_files(skills_dir):
         skill_dir = skill_md.parent
         relative = skill_dir.relative_to(skills_dir)
-        name = skill_dir.name
         location = relative.as_posix()
+        name, description, body, tool_names = _read_skill(
+            skill_md, skill_dir.name, location
+        )
         if name in paths:
             raise RuntimeError(
                 f"duplicate skill '{name}' in {paths[name]} and {location}"
             )
         paths[name] = location
-        tool_names = manifest.get(name)
-        if tool_names is None:
-            raise RuntimeError(f"skill '{name}' has no tool manifest")
         category = "" if relative.parent == Path(".") else relative.parent.as_posix()
-        doc = skill_md.read_text(encoding="utf-8")
         found[name] = Skill(
             name=name,
-            description=_blurb(doc),
-            doc=doc,
-            tools=_tool_schemas(tuple(tool_names), tools),
+            description=description,
+            doc=body,
+            tools=_tool_schemas(tool_names, tools),
             category=category,
         )
-    missing = set(manifest) - set(found)
-    if missing:
-        joined = ", ".join(sorted(missing))
-        raise RuntimeError(f"skill manifest has no SKILL.md for: {joined}")
     return _ordered(found)
 
 

@@ -83,7 +83,7 @@ If a tool returns an error, tell the user the error. Do not guess."""
 {header}
 Read the project before you change it, and match the code already there.
 {skills}
-Load the coding skill before you read or change source. Load file_ops to list or search, and shell to run a command in the project. Use the python skill only to compute an answer.
+Load the coding skill before you read or change source. Load file-ops to list or search, and shell to run a command in the project. Use the python skill only to compute an answer.
 When a job takes several steps, load the tasks skill, write a plan, and work through it.
 Follow the project rules in this prompt. When a listed rule has no globs, read that .mdc file if its description matches the task.
 Make the smallest change that does the job. Prefer editing an existing file over rewriting it.

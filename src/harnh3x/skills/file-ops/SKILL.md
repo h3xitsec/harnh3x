@@ -1,6 +1,8 @@
-# File Operations
-
-Read, write, edit, move, list, and search files in the workspace.
+---
+name: file-ops
+description: Read, write, edit, move, list, and search files in the workspace.
+allowed-tools: read_file write_file edit_file append_file delete_file move_file list_files search_files
+---
 
 ## When to Use
 

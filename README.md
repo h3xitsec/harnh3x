@@ -165,7 +165,7 @@ Each session directory holds:
 
 | Skill | What it covers |
 | --- | --- |
-| `file_ops` | Read, write, edit, append, delete, move, list, and search files |
+| `file-ops` | Read, write, edit, append, delete, move, list, and search files |
 | `shell` | One allowlisted command in the workspace |
 | `python` | A short snippet to compute an answer, without saving a file |
 | `coding` | Write or edit a source file and run a `.py` script |
@@ -177,7 +177,7 @@ Each session directory holds:
 | `memory` | Remember and recall facts in the shared `memory.md` |
 | `tasks` | Write, update, and show a plan in `plan.md` |
 
-Per-skill conventions live in `src/harnh3x/skills/<name>/SKILL.md` or `src/harnh3x/skills/<category>/<name>/SKILL.md` and are returned when that skill is loaded. The skill name is the folder that contains `SKILL.md`.
+Each skill's `SKILL.md` has YAML frontmatter (`name`, `description`, and optional `allowed-tools`) and freeform instructions that are returned when that skill is loaded. The skill name is the folder that contains `SKILL.md`, under `src/harnh3x/skills/<name>/` or `src/harnh3x/skills/<category>/<name>/`.
 
 ## Development
 

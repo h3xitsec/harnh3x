@@ -1,6 +1,8 @@
-# HTTP
-
-Send HTTP requests and call JSON endpoints.
+---
+name: http
+description: Send HTTP requests and call JSON endpoints.
+allowed-tools: http_get_json http_request
+---
 
 ## When to Use
 
