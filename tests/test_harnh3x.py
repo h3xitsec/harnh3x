@@ -49,6 +49,7 @@ from harnh3x.tui import (
     ResumeOptions,
     ResumeScreen,
     ReviewApp,
+    DebugBox,
     Thinking,
     ToolBox,
     context_line,
@@ -3341,6 +3342,43 @@ def test_click_toggles_the_thinking_box_that_was_hit():
             await pilot.click(first)
             assert "alpha" not in first.plain
             assert second.expanded
+
+    asyncio.run(drive())
+
+
+def test_drag_selection_keeps_the_panel_expanded():
+    from textual.events import MouseDown, MouseMove, MouseUp
+
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+    app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+    thinking = Thinking("alpha\nbeta\ngamma\ndelta", hold=False)
+    debug = DebugBox("System", "alpha\nbeta\ngamma\ndelta")
+    tools = ToolBox()
+    for name in ("one", "two", "three", "four"):
+        tools.add(name, {})
+
+    async def drive():
+        async with app.run_test(size=(80, 40)) as pilot:
+            app.query_one("#transcript").mount(thinking, debug, tools)
+            await pilot.pause()
+            for widget in (thinking, debug, tools):
+                await pilot.click(widget)
+                assert widget.expanded
+                region = widget.content_region
+                start_x = region.x + 1
+                end_x = region.x + 6
+                y = region.y
+                for event in (
+                    MouseDown(widget, start_x, y, 0, 0, 1, False, False, False),
+                    MouseMove(
+                        widget, end_x, y, end_x - start_x, 0, 1, False, False, False
+                    ),
+                    MouseUp(widget, end_x, y, 0, 0, 1, False, False, False),
+                ):
+                    await app.on_event(event)
+                await pilot.pause()
+                assert widget.expanded
+                assert widget.text_selection is not None
 
     asyncio.run(drive())
 

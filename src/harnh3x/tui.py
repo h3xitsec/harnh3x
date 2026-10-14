@@ -351,7 +351,18 @@ def reply_reasoning(session, start: int, answer: str) -> str:
     return "\n\n".join(parts)
 
 
-class Thinking(Static):
+class _Expandable(Static):
+    def on_click(self, event: Click) -> None:
+        event.stop()
+        if self.text_selection is not None:
+            return
+        self.toggle()
+
+    def toggle(self) -> None:
+        raise NotImplementedError
+
+
+class Thinking(_Expandable):
     def __init__(self, reasoning: str, *, hold: bool) -> None:
         super().__init__("", markup=False, classes="panel trace")
         self.reasoning = reasoning
@@ -365,10 +376,6 @@ class Thinking(Static):
 
     def on_resize(self, event) -> None:
         self._sync(event.size.width or 80)
-
-    def on_click(self, event: Click) -> None:
-        event.stop()
-        self.toggle()
 
     def toggle(self) -> None:
         if not self._expandable:
@@ -426,7 +433,7 @@ class AgentAnswer(Vertical):
             found.first().update(self.source)
 
 
-class DebugBox(Static):
+class DebugBox(_Expandable):
     def __init__(self, title: str, body: str) -> None:
         super().__init__("", markup=False, classes="panel trace debug")
         self.title = title
@@ -439,10 +446,6 @@ class DebugBox(Static):
 
     def on_resize(self, event) -> None:
         self._sync(event.size.width or 80)
-
-    def on_click(self, event: Click) -> None:
-        event.stop()
-        self.toggle()
 
     def toggle(self) -> None:
         if not self._expandable:
@@ -467,7 +470,7 @@ class DebugBox(Static):
         )
 
 
-class ToolBox(Static):
+class ToolBox(_Expandable):
     def __init__(self) -> None:
         super().__init__("", markup=False, classes="panel trace")
         self.lines: list[str] = []
@@ -479,10 +482,6 @@ class ToolBox(Static):
 
     def on_resize(self, event) -> None:
         self._sync(event.size.width or 80)
-
-    def on_click(self, event: Click) -> None:
-        event.stop()
-        self.toggle()
 
     def toggle(self) -> None:
         if not self._expandable:
