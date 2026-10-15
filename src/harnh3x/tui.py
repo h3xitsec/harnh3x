@@ -9,9 +9,9 @@ from types import SimpleNamespace
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalGroup, VerticalScroll
+from textual.content import Content
 from textual.events import Click, Key
 from textual.screen import ModalScreen, Screen
-from textual.content import Content
 from textual.widgets import Markdown, OptionList, Static, TextArea
 
 from harnh3x import __version__

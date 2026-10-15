@@ -1,7 +1,7 @@
 import json
 from types import SimpleNamespace
 
-from anthropic import APIConnectionError, APIStatusError, APITimeoutError, Anthropic
+from anthropic import Anthropic, APIConnectionError, APIStatusError, APITimeoutError
 
 from harnh3x import config
 

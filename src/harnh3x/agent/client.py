@@ -5,8 +5,7 @@ import urllib.request
 
 from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI
 
-from harnh3x import anthropic_api
-from harnh3x import config
+from harnh3x import anthropic_api, config
 from harnh3x.anthropic_api import AnthropicClient, status_message
 
 _client = None
