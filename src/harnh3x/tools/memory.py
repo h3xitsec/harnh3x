@@ -1,6 +1,6 @@
 from pathlib import Path
 
-import harnh3x.config as config
+from harnh3x import config
 from harnh3x.config import MEMORY_FILE
 from harnh3x.tools.paths import cap_result
 

@@ -4,7 +4,7 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
-import harnh3x.config as config
+from harnh3x import config
 from harnh3x.agent.client import _stored_context_tokens
 from harnh3x.agent.transcript import (
     _bind_project,

@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import harnh3x.config as config
+from harnh3x import config
 from harnh3x.agent.client import _count
 from harnh3x.config import TRANSCRIPT_FILE
 

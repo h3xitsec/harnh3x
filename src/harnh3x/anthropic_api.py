@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 from anthropic import APIConnectionError, APIStatusError, APITimeoutError, Anthropic
 
-import harnh3x.config as config
+from harnh3x import config
 
 _THINKING = {"thinking", "redacted_thinking"}
 
