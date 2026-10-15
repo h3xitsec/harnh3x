@@ -14,7 +14,7 @@ import urllib.parse
 import urllib.request
 import uuid
 import zipfile
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -5670,7 +5670,7 @@ def test_plan_tools_write_update_and_show(tmp_path):
 
 
 def test_system_prompt_mentions_yolo_only_when_enabled(tmp_path):
-    now = datetime(2026, 10, 6, 16, 30, tzinfo=datetime.UTC)
+    now = datetime(2026, 10, 6, 16, 30, tzinfo=UTC)
 
     plain = system_prompt(tmp_path, "MENU", now=now)
     yolo = system_prompt(tmp_path, "MENU", now=now, yolo=True)
@@ -5718,7 +5718,7 @@ def test_system_prompt_mentions_yolo_only_when_enabled(tmp_path):
 
 
 def test_system_prompt_includes_date_listing_and_memory_index(tmp_path):
-    now = datetime(2026, 10, 6, 16, 30, tzinfo=datetime.UTC)
+    now = datetime(2026, 10, 6, 16, 30, tzinfo=UTC)
 
     empty = system_prompt(tmp_path, "MENU", now=now)
     assert "Today is Tuesday, October 06, 2026, 16:30 UTC." in empty
