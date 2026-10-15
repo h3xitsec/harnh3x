@@ -98,7 +98,7 @@ _SETTINGS = {
 
 
 def config_location(
-    environ: Mapping[str, str] | None = None
+    environ: Mapping[str, str] | None = None,
 ) -> tuple[Path | None, bool]:
     env = os.environ if environ is None else environ
     override = env.get("HARNH3X_CONFIG")

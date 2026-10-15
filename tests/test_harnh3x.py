@@ -240,7 +240,9 @@ def _usage_chunk(total: int):
 
 
 def test_run_streams_deltas_into_one_message(tmp_path, monkeypatch):
-    monkeypatch.setattr(agent_client, "model_context_limit", lambda model, client=None: None)
+    monkeypatch.setattr(
+        agent_client, "model_context_limit", lambda model, client=None: None
+    )
     seen = []
     (tmp_path / "a.txt").write_text("body")
 
@@ -322,7 +324,9 @@ def test_run_streams_deltas_into_one_message(tmp_path, monkeypatch):
 
 
 def test_run_emits_a_whole_message_once(tmp_path, monkeypatch):
-    monkeypatch.setattr(agent_client, "model_context_limit", lambda model, client=None: None)
+    monkeypatch.setattr(
+        agent_client, "model_context_limit", lambda model, client=None: None
+    )
     deltas = []
 
     def create(**kwargs):
@@ -345,7 +349,9 @@ def test_run_emits_a_whole_message_once(tmp_path, monkeypatch):
 
 
 def test_run_retries_when_stream_options_are_rejected(tmp_path, monkeypatch):
-    monkeypatch.setattr(agent_client, "model_context_limit", lambda model, client=None: None)
+    monkeypatch.setattr(
+        agent_client, "model_context_limit", lambda model, client=None: None
+    )
     calls = []
 
     def create(**kwargs):
@@ -1182,10 +1188,14 @@ def test_context_limit_from_show_prefers_num_ctx():
         )
         == 131072
     )
-    assert agent_client._context_limit_from_show({"parameters": "temperature 0.8"}) is None
+    assert (
+        agent_client._context_limit_from_show({"parameters": "temperature 0.8"}) is None
+    )
     assert agent_client._context_limit_from_show([]) is None
     assert (
-        agent_client._context_limit_from_show({"model_info": {"qwen35.context_length": True}})
+        agent_client._context_limit_from_show(
+            {"model_info": {"qwen35.context_length": True}}
+        )
         is None
     )
 
@@ -2085,12 +2095,7 @@ def test_catalog_rejects_a_bad_metadata_value(tmp_path):
         root,
         "http",
         frontmatter=(
-            "---\n"
-            "name: http\n"
-            "description: Send.\n"
-            "metadata:\n"
-            "  author: 1\n"
-            "---\n"
+            "---\nname: http\ndescription: Send.\nmetadata:\n  author: 1\n---\n"
         ),
     )
 
@@ -2326,8 +2331,9 @@ def test_yolo_option_prints_the_warning_and_selects_the_session(
     monkeypatch.setattr(
         cli,
         "Session",
-        lambda **kwargs: seen.update(kwargs)
-        or SimpleNamespace(workspace=tmp_path, **kwargs),
+        lambda **kwargs: (
+            seen.update(kwargs) or SimpleNamespace(workspace=tmp_path, **kwargs)
+        ),
     )
     monkeypatch.setattr(cli, "run", lambda *args, **kwargs: "final answer")
 
@@ -2394,8 +2400,10 @@ def test_debug_option_prints_the_request_and_hides_it_for_answer_only(
     monkeypatch.setattr(
         cli,
         "Session",
-        lambda **kwargs: seen.update(kwargs)
-        or SimpleNamespace(workspace=tmp_path, messages=[], **kwargs),
+        lambda **kwargs: (
+            seen.update(kwargs)
+            or SimpleNamespace(workspace=tmp_path, messages=[], **kwargs)
+        ),
     )
 
     def fake_run(message, session, show_tools=True):
@@ -2590,7 +2598,9 @@ def test_plain_stdout_streams_tokens_before_the_turn_returns(
 ):
     cli = _load_cli()
     monkeypatch.setattr(cli, "_tty", lambda: False)
-    monkeypatch.setattr(agent_client, "model_context_limit", lambda model, client=None: None)
+    monkeypatch.setattr(
+        agent_client, "model_context_limit", lambda model, client=None: None
+    )
     monkeypatch.setattr(
         cli,
         "Session",
@@ -2721,8 +2731,9 @@ def test_model_option_selects_that_model(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(
         cli,
         "Session",
-        lambda **kwargs: seen.update(kwargs)
-        or SimpleNamespace(workspace=tmp_path, **kwargs),
+        lambda **kwargs: (
+            seen.update(kwargs) or SimpleNamespace(workspace=tmp_path, **kwargs)
+        ),
     )
     monkeypatch.setattr(cli, "run", lambda *args, **kwargs: "final answer")
 
@@ -2743,8 +2754,9 @@ def test_model_flag_without_a_name_prompts(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(
         cli,
         "Session",
-        lambda **kwargs: seen.update(kwargs)
-        or SimpleNamespace(workspace=tmp_path, **kwargs),
+        lambda **kwargs: (
+            seen.update(kwargs) or SimpleNamespace(workspace=tmp_path, **kwargs)
+        ),
     )
     monkeypatch.setattr(cli, "run", lambda *args, **kwargs: "final answer")
 
@@ -3355,8 +3367,10 @@ def test_resume_restores_the_transcript(tmp_path, monkeypatch):
             await pilot.press("enter")
             await _wait_for(
                 pilot,
-                lambda: "### **Done**" in app.transcript_plain()
-                and "fix the notes" in app.transcript_plain(),
+                lambda: (
+                    "### **Done**" in app.transcript_plain()
+                    and "fix the notes" in app.transcript_plain()
+                ),
             )
             thinking = app.query_one("Thinking")
             assert "alpha" not in thinking.plain
@@ -5634,8 +5648,9 @@ def test_plan_tools_write_update_and_show(tmp_path):
         == "# Plan\n\n1. [ ] search the web\n2. [ ] read two pages\n3. [ ] answer\n\n0/3 done, 0 skipped"
     )
     assert (
-        tmp_path / "plan.md"
-    ).read_text() == "# Plan\n\n1. [ ] search the web\n2. [ ] read two pages\n3. [ ] answer\n"
+        (tmp_path / "plan.md").read_text()
+        == "# Plan\n\n1. [ ] search the web\n2. [ ] read two pages\n3. [ ] answer\n"
+    )
 
     done = execute_tool("update_plan", {"step": 1, "status": "done"}, tmp_path)
     assert "1. [x] search the web" in done
