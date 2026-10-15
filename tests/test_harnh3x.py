@@ -46,9 +46,15 @@ from harnh3x.prompt import YOLO_NOTE, project_note, system_prompt
 from harnh3x.skills import SkillRegistry
 from harnh3x.tools import _tool_result, execute_tool
 from harnh3x.tui import (
+    EXPORT_USAGE,
+    NO_EXPORT,
     YOLO_PLAIN,
     AgentAnswer,
+    CopyAnswer,
     DebugBox,
+    ExportAnswer,
+    ExportPathScreen,
+    ExportScreen,
     HarnessApp,
     HarnessScreen,
     HelpScreen,
@@ -61,7 +67,11 @@ from harnh3x.tui import (
     WarningScreen,
     context_line,
     conversation_turns,
+    export_base,
+    exportable_answers,
+    render_export,
     transcript_items,
+    write_export,
 )
 
 ARTICLE_HTML = """<!DOCTYPE html>
@@ -2514,6 +2524,7 @@ def test_plain_help_lists_commands(monkeypatch, capsys, tmp_path):
     assert "Ctrl+Q" not in output
     assert "/resume" in output
     assert "/compact" in output
+    assert "/export" in output
     assert "/exit" in output
     assert "Usage: /help" in output
     assert "Usage: /exit" in output
@@ -2860,6 +2871,83 @@ def test_transcript_items_keep_compaction_notes_in_order():
     assert [step[0] for step in past[0][1].steps] == ["thinking", "tools", "answer"]
 
 
+def _export_messages() -> list[dict]:
+    return [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "first question"},
+        {
+            "role": "assistant",
+            "content": "draft",
+            "reasoning": "hidden thought",
+            "tool_calls": [
+                {
+                    "id": "1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "1", "content": "tool body"},
+        {
+            "role": "assistant",
+            "content": "final alpha",
+            "reasoning": "more thought",
+        },
+        {"role": "user", "content": "second question"},
+        {
+            "role": "assistant",
+            "content": "beta answer",
+            "reasoning": "secret thinking",
+        },
+    ]
+
+
+def test_exportable_answers_keep_final_replies_only():
+    messages = _export_messages()
+    assert exportable_answers(messages) == ["final alpha", "beta answer"]
+    text = render_export(exportable_answers(messages))
+    assert text == "final alpha\n\n---\n\nbeta answer\n"
+    assert "draft" not in text
+    assert "hidden thought" not in text
+    assert "tool body" not in text
+    assert "first question" not in text
+    assert "secret thinking" not in text
+    reasoning_only = [
+        {"role": "user", "content": "think"},
+        {"role": "assistant", "content": "", "reasoning": "the reply"},
+    ]
+    assert exportable_answers(reasoning_only) == ["the reply"]
+    assert render_export(["already\n"]) == "already\n"
+    assert exportable_answers([]) == []
+
+
+def test_write_export_resolves_and_overwrites(tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    project.mkdir()
+    monkeypatch.chdir(tmp_path)
+    path = write_export("notes/out.md", "alpha\n", base=project)
+    assert path == (project / "notes" / "out.md").resolve()
+    assert path.read_text(encoding="utf-8") == "alpha\n"
+    write_export("notes/out.md", "beta\n", base=project)
+    assert path.read_text(encoding="utf-8") == "beta\n"
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    tilde = write_export("~/saved.md", "home\n", base=project)
+    assert tilde == (home / "saved.md").resolve()
+    assert tilde.read_text(encoding="utf-8") == "home\n"
+    assert export_base(SimpleNamespace(project=project)) == project
+    assert export_base(SimpleNamespace(project=None)) == Path.cwd()
+    with pytest.raises(ValueError, match="is a directory"):
+        write_export(str(project), "nope\n", base=project)
+    with pytest.raises(ValueError, match="Usage"):
+        write_export("  ", "nope\n", base=project)
+    blocked = project / "file"
+    blocked.write_text("x", encoding="utf-8")
+    with pytest.raises(ValueError, match="Could not write"):
+        write_export("file/nested.md", "nope\n", base=project)
+
+
 def test_compacting_indicator_shows_and_hides():
     session = SimpleNamespace(
         workspace="ws",
@@ -2995,6 +3083,7 @@ def test_help_command_lists_commands_and_hotkeys():
             shown = str(app.screen.query_one("#help-box").content)
             assert "/resume" in shown
             assert "/compact" in shown
+            assert "/export" in shown
             assert "/exit" in shown
             assert "Shift+Enter" in shown
             assert "Ctrl+N" in shown
@@ -3009,6 +3098,211 @@ def test_help_command_lists_commands_and_hotkeys():
             assert app.transcript_plain() == ""
             await pilot.press(*"/help extra", "enter")
             assert "Usage: /help" in app.transcript_plain()
+
+    asyncio.run(drive())
+
+
+def _plain_export_session(tmp_path, messages):
+    return SimpleNamespace(
+        workspace=tmp_path,
+        model="m",
+        messages=messages,
+        project=None,
+    )
+
+
+def test_plain_export_writes_the_only_answer(monkeypatch, capsys, tmp_path):
+    cli = _load_cli()
+    monkeypatch.setattr(cli, "_tty", lambda: False)
+    monkeypatch.chdir(tmp_path)
+    session = _plain_export_session(
+        tmp_path,
+        [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": "only answer",
+                "reasoning": "think",
+                "tool_calls": [],
+            },
+        ],
+    )
+    monkeypatch.setattr(cli, "Session", lambda **kwargs: session)
+    answers = iter(["/export out.md", "/exit"])
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
+
+    cli.main([])
+
+    output = capsys.readouterr().out
+    assert f"Exported to {(tmp_path / 'out.md').resolve()}" in output
+    assert (tmp_path / "out.md").read_text(encoding="utf-8") == "only answer\n"
+    assert "think" not in (tmp_path / "out.md").read_text(encoding="utf-8")
+
+
+def test_plain_export_can_pick_one_or_all(monkeypatch, capsys, tmp_path):
+    cli = _load_cli()
+    monkeypatch.setattr(cli, "_tty", lambda: False)
+    monkeypatch.chdir(tmp_path)
+    session = _plain_export_session(tmp_path, _export_messages())
+    monkeypatch.setattr(cli, "Session", lambda **kwargs: session)
+    answers = iter(["/export picked.md", "2", "/export all.md", "all", "/exit"])
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
+
+    cli.main([])
+
+    picked = (tmp_path / "picked.md").read_text(encoding="utf-8")
+    assert picked == "beta answer\n"
+    assert "final alpha" not in picked
+    assert "secret thinking" not in picked
+    assert "draft" not in picked
+    everything = (tmp_path / "all.md").read_text(encoding="utf-8")
+    assert everything == "final alpha\n\n---\n\nbeta answer\n"
+    assert "tool body" not in everything
+    assert capsys.readouterr().out.count("Exported to") == 2
+
+
+def test_plain_export_cancel_and_usage(monkeypatch, capsys, tmp_path):
+    cli = _load_cli()
+    monkeypatch.setattr(cli, "_tty", lambda: False)
+    monkeypatch.chdir(tmp_path)
+    session = _plain_export_session(tmp_path, _export_messages())
+    monkeypatch.setattr(cli, "Session", lambda **kwargs: session)
+    steps = iter(["/export", "/export missing.md", "", "/exit"])
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(steps))
+
+    cli.main([])
+
+    output = capsys.readouterr().out
+    assert EXPORT_USAGE in output
+    assert not (tmp_path / "missing.md").exists()
+
+    empty = _plain_export_session(tmp_path, [])
+    monkeypatch.setattr(cli, "Session", lambda **kwargs: empty)
+    empty_steps = iter(["/export nowhere.md", "/exit"])
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(empty_steps))
+
+    cli.main([])
+
+    output = capsys.readouterr().out
+    assert NO_EXPORT in output
+    assert not (tmp_path / "nowhere.md").exists()
+
+
+def test_export_command_writes_the_chosen_response(tmp_path):
+    session = SimpleNamespace(
+        workspace=tmp_path,
+        model="m",
+        messages=_export_messages(),
+        project=None,
+    )
+    app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+    dest = tmp_path / "chosen.md"
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press(*f"/export {dest}", "enter")
+            await pilot.pause()
+            assert isinstance(app.screen, ExportScreen)
+            assert app.screen.answers == ["final alpha", "beta answer"]
+            await pilot.press("down", "enter")
+            await pilot.pause()
+            assert dest.read_text(encoding="utf-8") == "beta answer\n"
+            assert "Exported to" in app.transcript_plain()
+            assert "secret thinking" not in dest.read_text(encoding="utf-8")
+            await pilot.press(*f"/export {dest}", "enter")
+            await pilot.pause()
+            assert isinstance(app.screen, ExportScreen)
+            await pilot.press("down", "down", "enter")
+            await pilot.pause()
+            assert dest.read_text(encoding="utf-8") == (
+                "final alpha\n\n---\n\nbeta answer\n"
+            )
+            await pilot.press(*f"/export {dest}", "enter")
+            await pilot.pause()
+            assert isinstance(app.screen, ExportScreen)
+            await pilot.press("escape")
+            await pilot.pause()
+            assert not isinstance(app.screen, ExportScreen)
+            await pilot.press(*"/export", "enter")
+            assert EXPORT_USAGE in app.transcript_plain()
+
+    asyncio.run(drive())
+
+
+def test_export_icon_writes_the_clicked_response(tmp_path):
+    session = SimpleNamespace(
+        workspace="ws",
+        model="m",
+        messages=_export_messages(),
+        project=None,
+    )
+    app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+    dest = tmp_path / "clicked.md"
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            app.query_one("#transcript").anchor(False)
+            app._render_history()
+            await pilot.pause()
+            answers = list(app.query(AgentAnswer))
+            assert [block.source for block in answers] == [
+                "draft",
+                "final alpha",
+                "beta answer",
+            ]
+            button = answers[0].query_one(ExportAnswer)
+            copy = answers[0].query_one(CopyAnswer)
+            assert str(button.content) == "⤓"
+            assert str(copy.content) == "⧉"
+            assert copy.region.x < button.region.x
+            assert button.region.x > answers[0].region.x
+            copy.scroll_visible()
+            await pilot.pause()
+            await pilot.click(copy)
+            await pilot.pause()
+            assert app.clipboard == "draft"
+            button.scroll_visible()
+            await pilot.pause()
+            await pilot.click(button)
+            await pilot.pause()
+            assert isinstance(app.screen, ExportPathScreen)
+            await pilot.press("escape")
+            await pilot.pause()
+            assert not isinstance(app.screen, ExportPathScreen)
+            assert not dest.exists()
+            await pilot.click(button)
+            await pilot.pause()
+            assert isinstance(app.screen, ExportPathScreen)
+            await pilot.press(*str(dest), "enter")
+            await pilot.pause()
+            assert dest.read_text(encoding="utf-8") == "draft\n"
+            assert "final alpha" not in dest.read_text(encoding="utf-8")
+            assert "hidden thought" not in dest.read_text(encoding="utf-8")
+
+    asyncio.run(drive())
+
+
+def test_export_icon_stays_above_the_composer():
+    body = "\n".join(f"answer line {index}" for index in range(30))
+    session = SimpleNamespace(
+        workspace="ws",
+        model="m",
+        messages=[
+            {"role": "user", "content": "question"},
+            {"role": "assistant", "content": body},
+        ],
+        project=None,
+    )
+    app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            app._render_history()
+            await pilot.pause()
+            await pilot.pause()
+            composer = app.query_one("#composer")
+            icon = app.query_one(ExportAnswer)
+            assert icon.region.bottom <= composer.region.y
 
     asyncio.run(drive())
 
