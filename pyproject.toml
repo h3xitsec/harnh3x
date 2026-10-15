@@ -37,7 +37,7 @@ pythonpath = ["src"]
 harnh3x = "harnh3x.cli:main"
 
 [tool.ruff]
-include = ["pyproject.toml", "src/**/*.py"]
+include = ["pyproject.toml", "src/**/*.py", "tests/**/*.py"]
 
 [tool.ruff.format]
 quote-style = "double"
