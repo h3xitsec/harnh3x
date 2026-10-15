@@ -103,8 +103,7 @@ def _skill_sections(text: str, location: str) -> tuple[str, str]:
         raise RuntimeError(f"skill '{location}' frontmatter is not closed")
     raw = "\n".join(lines[1:end])
     body = "\n".join(lines[end + 1 :])
-    if body.startswith("\n"):
-        body = body[1:]
+    body = body.removeprefix("\n")
     return raw, body.rstrip("\n")
 
 

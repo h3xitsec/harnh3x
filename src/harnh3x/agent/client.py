@@ -56,8 +56,7 @@ def _show_url(client) -> str | None:
     text = str(base).strip().rstrip("/")
     if not text:
         return None
-    if text.endswith("/v1"):
-        text = text[: -len("/v1")]
+    text = text.removesuffix("/v1")
     return f"{text}/api/show"
 
 
