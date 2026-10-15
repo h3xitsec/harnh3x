@@ -52,7 +52,6 @@ from harnh3x.tools import (
 __version__ = "0.5.0"
 
 __all__ = [
-    "__version__",
     "API_KEY",
     "API_URL",
     "BASE_DIR",
@@ -76,12 +75,13 @@ __all__ = [
     "SEARCH_MAX_RESULTS",
     "SHELL_MAX_TIMEOUT",
     "SHELL_TIMEOUT",
+    "TOOLS",
     "TRANSCRIPT_FILE",
     "WIKIPEDIA_LANG",
     "Session",
     "SessionInfo",
     "SkillRegistry",
-    "TOOLS",
+    "__version__",
     "assistant_message",
     "compact_session",
     "execute_tool",
@@ -89,8 +89,8 @@ __all__ = [
     "get_json",
     "list_models",
     "list_sessions",
-    "model_context_limit",
     "memory_keys",
+    "model_context_limit",
     "parse_command",
     "run",
     "session_label",
