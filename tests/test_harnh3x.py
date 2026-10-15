@@ -50,6 +50,7 @@ from harnh3x.tui import (
     AgentAnswer,
     DebugBox,
     HarnessApp,
+    HarnessScreen,
     HelpScreen,
     ModelApp,
     ResumeOptions,
@@ -3747,6 +3748,51 @@ def test_scrolled_up_transcript_stays_put_while_output_grows():
             app._apply_delta("content", "tail\n" * 10)
             await pilot.pause()
             assert transcript.is_vertical_scroll_end
+
+    asyncio.run(drive())
+
+
+def test_mousedown_during_markdown_update_does_not_crash():
+    from textual.events import MouseDown
+
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+    app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+    answer = AgentAnswer("# Before\n\nClick target paragraph.")
+
+    async def drive():
+        async with app.run_test(size=(100, 30)) as pilot:
+            assert isinstance(app.screen, HarnessScreen)
+            app.query_one("#transcript").mount(answer)
+            await pilot.pause()
+            document = app.query_one("Markdown")
+            old = document.query("MarkdownParagraph").first()
+            x = old.region.x + 1
+            y = old.region.y
+            hit, offset = app.screen.get_widget_and_offset_at(x, y)
+            assert hit is old
+            assert offset is not None
+            update = document.update(
+                "\n\n".join(f"replacement paragraph {index}" for index in range(201))
+            )
+            try:
+                for _ in range(1000):
+                    await asyncio.sleep(0)
+                    raw, _raw_offset = app.screen._compositor.get_widget_and_offset_at(
+                        x, y
+                    )
+                    if old.parent is None and raw is old:
+                        guarded, guarded_offset = app.screen.get_widget_and_offset_at(
+                            x, y
+                        )
+                        assert guarded is None
+                        assert guarded_offset is None
+                        await app.on_event(
+                            MouseDown(None, x, y, 0, 0, 1, False, False, False)
+                        )
+                        return
+                raise AssertionError("detached markdown paragraph was not observed")
+            finally:
+                await update
 
     asyncio.run(drive())
 

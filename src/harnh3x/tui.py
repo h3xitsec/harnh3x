@@ -12,7 +12,9 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalGroup, VerticalScroll
 from textual.content import Content
 from textual.events import Click, Key
+from textual.geometry import Offset
 from textual.screen import ModalScreen, Screen
+from textual.widget import Widget
 from textual.widgets import Markdown, OptionList, Static, TextArea
 
 from harnh3x import __version__
@@ -819,6 +821,18 @@ class WarningScreen(ModalScreen):
         self.dismiss()
 
 
+class HarnessScreen(Screen):
+    def get_widget_and_offset_at(
+        self, x: int, y: int
+    ) -> tuple[Widget | None, Offset | None]:
+        # Markdown.update detaches blocks while the compositor can still
+        # return them. Selection then reads parent.region and crashes.
+        widget, offset = super().get_widget_and_offset_at(x, y)
+        if widget is not None and not widget.is_attached:
+            return None, None
+        return widget, offset
+
+
 class HarnessApp(App):
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("ctrl+q", "quit", "Quit", priority=True),
@@ -1024,6 +1038,9 @@ class HarnessApp(App):
             return
         self.session.context_limit = limit
         self._refresh_banner()
+
+    def get_default_screen(self) -> Screen:
+        return HarnessScreen(id="_default")
 
     def compose(self) -> ComposeResult:
         yield Static(self._banner(), id="banner", markup=False)
