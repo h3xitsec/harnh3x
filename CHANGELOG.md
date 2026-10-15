@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/h3xitsec/harnh3x/compare/harnh3x-v0.5.0...harnh3x-v0.5.1) (2026-10-15)
+
+
+### Bug Fixes
+
+* **tui:** stay up when clicking a streaming answer ([e31fc7a](https://github.com/h3xitsec/harnh3x/commit/e31fc7abcb9e917977df59e9139aed054ddb6eee))
+
 ## [0.5.0](https://github.com/h3xitsec/harnh3x/compare/harnh3x-v0.4.0...harnh3x-v0.5.0) (2026-10-14)
 
 

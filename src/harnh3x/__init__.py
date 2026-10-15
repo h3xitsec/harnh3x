@@ -49,7 +49,7 @@ from harnh3x.tools import (
     workspace_listing,
 )
 
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 
 __all__ = [
     "API_KEY",
