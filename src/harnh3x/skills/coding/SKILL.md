@@ -9,13 +9,6 @@ allowed-tools: read_source write_source edit_source run_script
 - The user asks for a script, a program, or a change to existing code
 - You need to save source they can run again, not just print a result
 
-## Available Tools
-
-- `read_source` — Read a source file. Pass `offset` and `limit` to page through a long file.
-- `write_source` — Create or overwrite a whole source file. A `.py` file is syntax-checked.
-- `edit_source` — Replace one exact text fragment with another. Set `replace_all` to change every match.
-- `run_script` — Run a `.py` file and return exit code, stdout, and stderr. Optional `args`, `timeout`, and `stdin`.
-
 ## Conventions
 
 - A request for a script, program, or code change is a file in the workspace. Do not answer with only a code block.

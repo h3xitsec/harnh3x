@@ -9,12 +9,6 @@ allowed-tools: write_plan update_plan show_plan
 - A request needs three or more tool calls across different skills
 - The user asks for a plan, a checklist, or progress on a longer job
 
-## Available Tools
-
-- `write_plan` — Replace the plan with a numbered list of steps
-- `update_plan` — Mark a step `done`, `todo`, or `skipped`, with an optional note
-- `show_plan` — Return the plan and how many steps are done
-
 ## Conventions
 
 - Write the plan before starting the work, with one concrete action per step.

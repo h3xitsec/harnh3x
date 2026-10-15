@@ -10,11 +10,6 @@ allowed-tools: remember recall
 - The user asks what you remember, or a question that a saved memory may answer
 - The system prompt lists saved memories that look relevant to the request
 
-## Available Tools
-
-- `remember` — Save text under a short key. Saving the same key again replaces the earlier text.
-- `recall` — Return saved memories, all of them or only those matching a word
-
 ## Conventions
 
 - Use short, descriptive keys such as `user timezone` or `project deadline`, so the system prompt index stays readable.

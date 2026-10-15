@@ -11,11 +11,6 @@ allowed-tools: http_get_json http_request
 - The call needs a method other than GET, a JSON or raw body, or the status and headers
 - To search the web or read an article, use `research` instead
 
-## Available Tools
-
-- `http_get_json` — GET a URL with optional query `params` and return the parsed JSON
-- `http_request` — Send GET, HEAD, OPTIONS, POST, PUT, PATCH, or DELETE. Returns the status code, headers, and body. Use this when `http_get_json` is too narrow.
-
 ## Conventions
 
 - Only http and https URLs on public hosts are allowed. Prefer keyless APIs. Headers may be set; do not invent credentials.

@@ -12,10 +12,6 @@ allowed-tools: run_python
 
 Do not use this skill to deliver a program the user asked you to write. That is the coding skill: it saves a file and runs it.
 
-## Available Tools
-
-- `run_python` — Run a short Python snippet with the standard library and return exit code, stdout, and stderr. Optional `timeout` and `stdin`.
-
 ## Conventions
 
 - The snippet runs in the workspace, so relative paths point at workspace files. The kernel confines the process to that directory: it cannot read or write other paths, and it cannot open network connections.

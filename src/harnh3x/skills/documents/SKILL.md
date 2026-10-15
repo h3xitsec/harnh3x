@@ -9,11 +9,6 @@ allowed-tools: read_pdf read_docx
 - The user asks to read, summarize, or quote a `.pdf` or `.docx` file in the workspace
 - A download saved by `fetch_url` is a PDF
 
-## Available Tools
-
-- `read_pdf` — Extract text from a page range of a PDF. Defaults to the first pages; the result says how to continue.
-- `read_docx` — Extract the paragraphs of a Word `.docx` file
-
 ## Conventions
 
 - Read the whole document before summarizing it. When `read_pdf` reports remaining pages, call it again with the next `first_page`.

@@ -10,14 +10,6 @@ allowed-tools: web_search read_url fetch_url parse_html read_feed
 - The user asks to summarize, read, or quote a web page, article, or online PDF
 - The user asks for the latest items from a site or blog that offers an RSS or Atom feed
 
-## Available Tools
-
-- `web_search` — Return titles, URLs, and snippets for a query. Optional `site` and `time` (d, w, m, y) filters.
-- `read_url` — Fetch a URL and return its readable text in one step. Saves the raw file and a `.txt` copy in `downloads/`.
-- `fetch_url` — Download a URL into the workspace without reading it. Use when the user wants the file kept, or for a page `read_url` could not extract.
-- `parse_html` — Extract title and text from an HTML file already saved by `fetch_url`. `mode: full` keeps every piece of text when the article extractor misses content.
-- `read_feed` — Return the latest entries of an RSS or Atom feed.
-
 ## Conventions
 
 - Snippets are not answers. After `web_search`, call `read_url` on the two or three results that look relevant, then answer from what those pages say. Several `read_url` calls can go in the same turn.

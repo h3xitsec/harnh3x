@@ -9,11 +9,6 @@ allowed-tools: wikipedia_search wikipedia_summary
 - The user asks who, what, where, or when about a person, place, event, or concept
 - You need a quick, stable definition before a deeper web search
 
-## Available Tools
-
-- `wikipedia_search` — Find article titles that match a topic
-- `wikipedia_summary` — Return the lead summary of an article by its exact title
-
 ## Conventions
 
 - Start with `wikipedia_search` unless you already know the exact article title, then call `wikipedia_summary` with one of the returned titles.

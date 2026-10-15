@@ -9,10 +9,6 @@ allowed-tools: run_shell
 - The user asks to run a command, a build, a test suite, or a CLI tool
 - You need output from a program such as `git`, `ls`, or `wc`
 
-## Available Tools
-
-- `run_shell` — Run one command and return its exit code, stdout, and stderr. Optional `timeout` in seconds and `stdin` text.
-
 ## Conventions
 
 - The working directory is the workspace. The kernel confines the process to that directory: it cannot read or write other paths, and it cannot use the network. A path the program builds itself is still confined.

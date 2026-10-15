@@ -8,10 +8,6 @@ allowed-tools: http_request
 
 - The user asks to test a endpoint for sql injection
 
-## Available Tools
-
-- `http_request` - Send GET, HEAD, OPTIONS, POST, PUT, PATCH, or DELETE. Returns the status code, headers, and body.
-
 ## Conventions
 
 - Test input parameters that interact with databases
