@@ -20,18 +20,20 @@ from types import SimpleNamespace
 
 import pytest
 
-from harnh3x import agent
 import harnh3x.agent.client as agent_client
 import harnh3x.agent.loop as agent_loop
 import harnh3x.agent.transcript as agent_transcript
-from harnh3x import rules
-from harnh3x import anthropic_api
-from harnh3x import config
-from harnh3x import __version__
+from harnh3x import (
+    __version__,
+    agent,
+    anthropic_api,
+    config,
+    rules,
+    sandbox,
+    skills,
+    tools,
+)
 from harnh3x.anthropic_api import AnthropicClient, to_anthropic
-from harnh3x import sandbox
-from harnh3x import skills
-from harnh3x import tools
 from harnh3x.config import (
     COMPACT_AT,
     MAX_TOOL_RESULT,
@@ -46,16 +48,16 @@ from harnh3x.tools import _tool_result, execute_tool
 from harnh3x.tui import (
     YOLO_PLAIN,
     AgentAnswer,
+    DebugBox,
     HarnessApp,
     HelpScreen,
-    WarningScreen,
     ModelApp,
     ResumeOptions,
     ResumeScreen,
     ReviewApp,
-    DebugBox,
     Thinking,
     ToolBox,
+    WarningScreen,
     context_line,
     conversation_turns,
     transcript_items,
