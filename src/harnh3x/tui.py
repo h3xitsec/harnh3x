@@ -18,7 +18,8 @@ from textual.events import Click, Key
 from textual.geometry import Offset
 from textual.screen import ModalScreen, Screen
 from textual.widget import Widget
-from textual.widgets import Markdown, OptionList, Static, TextArea
+from textual.widgets import Input, Markdown, OptionList, Static, TextArea
+from textual.widgets.markdown import MarkdownStream
 
 from harnh3x import __version__
 from harnh3x.agent import (
@@ -599,7 +600,10 @@ class AgentAnswer(Vertical):
 
     def compose(self) -> ComposeResult:
         yield Static("Agent", markup=False)
-        yield Markdown(self.source, open_links=False)
+        # A live answer starts empty. Markdown mounts by replacing every
+        # block, so the stream appends instead of rebuilding on each token.
+        yield Markdown(None if self._live else self.source, open_links=False)
+        yield ExportRow()
 
     def on_mount(self) -> None:
         if self._live:
