@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 from typing import ClassVar
 
@@ -15,7 +18,7 @@ from textual.events import Click, Key
 from textual.geometry import Offset
 from textual.screen import ModalScreen, Screen
 from textual.widget import Widget
-from textual.widgets import Markdown, OptionList, Static, TextArea
+from textual.widgets import Input, Markdown, OptionList, Static, TextArea
 from textual.widgets.markdown import MarkdownStream
 
 from harnh3x import __version__
@@ -34,11 +37,16 @@ THINKING_ROWS = 3
 
 YOLO_PLAIN = "YOLO — sandbox off. This session can read any file and run any command, including sudo."
 
+EXPORT_USAGE = "Usage: /export /path/to/file.md"
+NO_EXPORT = "No responses to export."
+_ANSWER_PREVIEW = 60
+
 _TUI_HELP = """\
 Commands
   /help     show commands and hotkeys
   /resume   resume a past session
   /compact  compact context
+  /export   write a response to a markdown file
   /exit     quit
 
 Hotkeys
@@ -333,6 +341,63 @@ def conversation_turns(messages: list) -> list[Turn]:
     return [item for kind, item in transcript_items(messages) if kind == "turn"]
 
 
+def exportable_answers(messages: list) -> list[str]:
+    answers = []
+    for turn in conversation_turns(messages):
+        if turn.answer is not None:
+            answers.append(turn.answer)
+    return answers
+
+
+def answer_preview(text: str) -> str:
+    line = ""
+    for raw in text.splitlines():
+        stripped = " ".join(raw.split())
+        if stripped:
+            line = stripped
+            break
+    if not line:
+        return "(empty)"
+    if len(line) > _ANSWER_PREVIEW:
+        return line[: _ANSWER_PREVIEW - 1] + "…"
+    return line
+
+
+def render_export(answers: list[str]) -> str:
+    if len(answers) == 1:
+        text = answers[0]
+    else:
+        text = "\n\n---\n\n".join(answers)
+    if not text.endswith("\n"):
+        text += "\n"
+    return text
+
+
+def export_base(session) -> Path:
+    project = getattr(session, "project", None)
+    if project:
+        return Path(project)
+    return Path.cwd()
+
+
+def write_export(path: str, text: str, *, base: Path) -> Path:
+    raw = path.strip()
+    if not raw:
+        raise ValueError(EXPORT_USAGE)
+    expanded = Path(raw).expanduser()
+    target = expanded if expanded.is_absolute() else base / expanded
+    target = target.resolve()
+    if target.is_dir():
+        raise ValueError(f"{target} is a directory.")
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+    except OSError as exc:
+        detail = exc.strerror or str(exc)
+        raise ValueError(f"Could not write {target}: {detail}") from exc
+    return target
+
+
 def _panel_inner_width(widget: Static, outer: int) -> int:
     gutter = widget.styles.gutter
     horizontal = gutter.left + gutter.right
@@ -417,6 +482,111 @@ class Thinking(_Expandable):
         self.update(self.plain)
 
 
+class AnswerIcon(Static, can_focus=True):
+    DEFAULT_CSS = """
+    AnswerIcon {
+        width: 3;
+        height: 1;
+        content-align: center middle;
+        color: $text-muted;
+        background: transparent;
+    }
+    AnswerIcon:hover, AnswerIcon:focus {
+        background: $boost;
+        color: $text;
+    }
+    """
+
+    def _answer(self) -> AgentAnswer | None:
+        widget = self.parent
+        while widget is not None and not isinstance(widget, AgentAnswer):
+            widget = widget.parent
+        if isinstance(widget, AgentAnswer):
+            return widget
+        return None
+
+
+class CopyAnswer(AnswerIcon):
+    BINDINGS: ClassVar[list[Binding]] = [
+        Binding("enter", "copy", "Copy", priority=True),
+    ]
+
+    def __init__(self) -> None:
+        super().__init__("⧉", markup=False)
+        self.tooltip = "Copy"
+
+    def on_click(self, event: Click) -> None:
+        event.stop()
+        self._copy()
+
+    def action_copy(self) -> None:
+        self._copy()
+
+    def _copy(self) -> None:
+        answer = self._answer()
+        if answer is None:
+            return
+        copy_response(self.app, answer.source)
+
+
+class ExportAnswer(AnswerIcon):
+    BINDINGS: ClassVar[list[Binding]] = [
+        Binding("enter", "export", "Export", priority=True),
+    ]
+
+    def __init__(self) -> None:
+        super().__init__("⤓", markup=False)
+        self.tooltip = "Export to markdown"
+
+    def on_click(self, event: Click) -> None:
+        event.stop()
+        self._export()
+
+    def action_export(self) -> None:
+        self._export()
+
+    def _export(self) -> None:
+        answer = self._answer()
+        if answer is None:
+            return
+        prompt = getattr(self.app, "_prompt_export_path", None)
+        if callable(prompt):
+            prompt(answer.source)
+
+
+def copy_response(app, text: str) -> None:
+    app.copy_to_clipboard(text)
+    if sys.platform != "darwin":
+        return
+    from textual.drivers.headless_driver import HeadlessDriver
+
+    if isinstance(getattr(app, "_driver", None), HeadlessDriver):
+        return
+    try:
+        subprocess.run(
+            ["pbcopy"],
+            input=text.encode(),
+            check=False,
+            timeout=2,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return
+
+
+class ExportRow(Horizontal):
+    DEFAULT_CSS = """
+    ExportRow {
+        height: 1;
+        width: 1fr;
+        align: right middle;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        yield CopyAnswer()
+        yield ExportAnswer()
+
+
 class AgentAnswer(Vertical):
     def __init__(self, source: str, *, stream: bool = False) -> None:
         # Set before super(), which composes children from this source.
@@ -433,6 +603,7 @@ class AgentAnswer(Vertical):
         # A live answer starts empty. Markdown mounts by replacing every
         # block, so the stream appends instead of rebuilding on each token.
         yield Markdown(None if self._live else self.source, open_links=False)
+        yield ExportRow()
 
     def on_mount(self) -> None:
         if self._live:
@@ -807,6 +978,150 @@ class ResumeOptions(OptionList):
                 screen.add_digit(event.character)
 
 
+class ExportScreen(Screen):
+    BINDINGS: ClassVar[list[Binding]] = [
+        Binding("enter", "choose", "Choose", priority=True),
+        Binding("up", "move_up", "Up", priority=True),
+        Binding("down", "move_down", "Down", priority=True),
+        Binding("escape", "cancel", "Cancel", priority=True),
+        Binding("backspace", "backspace", "Backspace", priority=True),
+    ]
+
+    def __init__(self, answers: list[str]) -> None:
+        super().__init__()
+        self.answers = answers
+        self.digits = ""
+        self.error = ""
+
+    def compose(self) -> ComposeResult:
+        yield Static("Responses:", markup=False)
+        labels = [
+            f"{index + 1}. {answer_preview(answer)}"
+            for index, answer in enumerate(self.answers)
+        ]
+        labels.append("All")
+        yield ExportOptions(*labels, id="exports")
+        yield Static(
+            "Use up/down and Enter, or type a number. Escape cancels.",
+            id="status",
+            markup=False,
+        )
+
+    def on_mount(self) -> None:
+        self.query_one(ExportOptions).focus()
+
+    def add_digit(self, digit: str) -> None:
+        self.error = ""
+        self.digits += digit
+        self._follow_digits()
+        self._refresh_status()
+
+    def action_backspace(self) -> None:
+        self.error = ""
+        self.digits = self.digits[:-1]
+        self._follow_digits()
+        self._refresh_status()
+
+    def action_move_up(self) -> None:
+        self.digits = ""
+        self.error = ""
+        self._refresh_status()
+        self.query_one(ExportOptions).action_cursor_up()
+
+    def action_move_down(self) -> None:
+        self.digits = ""
+        self.error = ""
+        self._refresh_status()
+        self.query_one(ExportOptions).action_cursor_down()
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def action_choose(self) -> None:
+        count = len(self.answers)
+        if self.digits == "":
+            highlighted = self.query_one(ExportOptions).highlighted
+            if highlighted is None:
+                return
+            if highlighted == count:
+                self.dismiss(list(self.answers))
+                return
+            self.dismiss([self.answers[highlighted]])
+            return
+        number = int(self.digits)
+        if str(number) == self.digits and 1 <= number <= count:
+            self.dismiss([self.answers[number - 1]])
+            return
+        self.error = f"Enter a number from 1 to {count}, or choose All."
+        self.digits = ""
+        self._refresh_status()
+
+    def _follow_digits(self) -> None:
+        if self.digits.isdigit() and str(int(self.digits)) == self.digits:
+            number = int(self.digits)
+            if 1 <= number <= len(self.answers):
+                self.query_one(ExportOptions).highlighted = number - 1
+
+    def _refresh_status(self) -> None:
+        if self.error:
+            text = self.error
+        elif self.digits:
+            text = f"Number: {self.digits}"
+        else:
+            text = "Use up/down and Enter, or type a number. Escape cancels."
+        self.query_one("#status", Static).update(text)
+
+
+class ExportOptions(OptionList):
+    def on_key(self, event: Key) -> None:
+        if event.character and event.character.isdigit():
+            event.stop()
+            event.prevent_default()
+            screen = self.screen
+            if isinstance(screen, ExportScreen):
+                screen.add_digit(event.character)
+
+
+class ExportPathScreen(ModalScreen[str | None]):
+    BINDINGS: ClassVar[list[Binding]] = [
+        Binding("escape", "cancel", "Cancel", priority=True),
+    ]
+    DEFAULT_CSS = """
+    ExportPathScreen {
+        align: center middle;
+        background: transparent;
+    }
+    #export-path-box {
+        width: 70;
+        height: auto;
+        border: round ansi_bright_black;
+        padding: 1 2;
+        background: $surface;
+    }
+    #export-path {
+        width: 1fr;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="export-path-box"):
+            yield Static("Path", markup=False)
+            yield Input(placeholder="/path/to/file.md", id="export-path")
+
+    def on_mount(self) -> None:
+        box = self.query_one("#export-path-box", Vertical)
+        box.border_title = "Export to markdown"
+        self.query_one(Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        text = event.value.strip()
+        if text:
+            self.dismiss(text)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class HelpScreen(ModalScreen):
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("escape", "close", "Close", priority=True),
@@ -898,7 +1213,7 @@ class HarnessApp(App):
     }
     #transcript {
         height: 1fr;
-        padding: 1 1 0 1;
+        padding: 1;
     }
     #bottom {
         dock: bottom;
@@ -941,6 +1256,7 @@ class HarnessApp(App):
     }
     AgentAnswer {
         height: auto;
+        margin-bottom: 1;
     }
     """
 
@@ -1197,6 +1513,12 @@ class HarnessApp(App):
         if name == "compact":
             self._note("Usage: /compact")
             return
+        if name == "export" and rest == "":
+            self._note(EXPORT_USAGE)
+            return
+        if name == "export":
+            self._start_export(rest)
+            return
         if name == "exit" and rest == "":
             self.action_quit()
             return
@@ -1205,6 +1527,50 @@ class HarnessApp(App):
             return
         shown = f"/{name}" if name else "/"
         self._note(f"Unknown command: {shown}")
+
+    def _focus_composer(self) -> None:
+        composers = list(self.query(Composer))
+        if not composers or composers[0].disabled:
+            return
+        composers[0].focus()
+
+    def _write_export(self, raw: str, answers: list[str]) -> None:
+        try:
+            path = write_export(
+                raw, render_export(answers), base=export_base(self.session)
+            )
+        except ValueError as exc:
+            self._note(str(exc))
+            return
+        self._note(f"Exported to {path}")
+
+    def _start_export(self, raw: str) -> None:
+        messages = getattr(self.session, "messages", None) or []
+        answers = exportable_answers(messages)
+        if not answers:
+            self._note(NO_EXPORT)
+            return
+        if len(answers) == 1:
+            self._write_export(raw, answers)
+            return
+
+        def chosen(picked: list[str] | None) -> None:
+            if picked:
+                self._write_export(raw, picked)
+            self._focus_composer()
+
+        self.push_screen(ExportScreen(answers), chosen)
+
+    def _prompt_export_path(self, source: str) -> None:
+        if len(self.screen_stack) > 1:
+            return
+
+        def chosen(path: str | None) -> None:
+            if path:
+                self._write_export(path, [source])
+            self._focus_composer()
+
+        self.push_screen(ExportPathScreen(), chosen)
 
     def _stopping(self) -> bool:
         if self._quitting:

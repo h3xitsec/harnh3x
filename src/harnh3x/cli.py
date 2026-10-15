@@ -14,16 +14,23 @@ from harnh3x.agent import (
 )
 from harnh3x.config import MODEL, require_api_settings
 from harnh3x.tui import (
+    EXPORT_USAGE,
+    NO_EXPORT,
     YOLO_PLAIN,
+    answer_preview,
     compact_label,
     debug_text,
+    export_base,
+    exportable_answers,
     line_limit,
     pick_model,
+    render_export,
     reply_reasoning,
     run_interactive,
     thinking_text,
     transcript_items,
     wrap_lines,
+    write_export,
 )
 
 _PLAIN_HELP = """\
@@ -31,6 +38,7 @@ Commands
   /help     show commands
   /resume   resume a past session
   /compact  compact context
+  /export   write a response to a markdown file
   /exit     quit"""
 
 
@@ -236,6 +244,40 @@ def _resume_session(session, *, answer_only: bool) -> None:
     _print_turns(session, answer_only=answer_only)
 
 
+def _choose_export(answers: list[str]) -> list[str] | None:
+    if len(answers) == 1:
+        return answers
+    print("Responses:")
+    for index, answer in enumerate(answers):
+        print(f"  {index + 1}. {answer_preview(answer)}")
+    print("  all  every response")
+    while True:
+        choice = input("Select a response (Enter cancels): ").strip()
+        if choice == "":
+            return None
+        if choice.lower() == "all":
+            return list(answers)
+        if choice.isdigit() and 1 <= int(choice) <= len(answers):
+            return [answers[int(choice) - 1]]
+        print(f"Enter a number from 1 to {len(answers)}, or all.")
+
+
+def _export_answers(session, rest: str) -> None:
+    answers = exportable_answers(getattr(session, "messages", None) or [])
+    if not answers:
+        print(NO_EXPORT)
+        return
+    chosen = _choose_export(answers)
+    if chosen is None:
+        return
+    try:
+        path = write_export(rest, render_export(chosen), base=export_base(session))
+    except ValueError as exc:
+        print(exc)
+        return
+    print(f"Exported to {path}")
+
+
 def _handle_command(session, name: str, rest: str, *, answer_only: bool) -> bool:
     if name == "help" and rest == "":
         print(_PLAIN_HELP)
@@ -254,6 +296,12 @@ def _handle_command(session, name: str, rest: str, *, answer_only: bool) -> bool
         return False
     if name == "compact":
         print("Usage: /compact")
+        return False
+    if name == "export" and rest == "":
+        print(EXPORT_USAGE)
+        return False
+    if name == "export":
+        _export_answers(session, rest)
         return False
     if name == "exit" and rest == "":
         return True
