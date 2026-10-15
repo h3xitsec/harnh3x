@@ -3752,6 +3752,51 @@ def test_scrolled_up_transcript_stays_put_while_output_grows():
     asyncio.run(drive())
 
 
+def test_streaming_answer_keeps_its_place_and_its_text():
+    from textual.widgets import Markdown, Static
+
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+    app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+    updates = []
+    original = Markdown.update
+
+    def record(self, markdown: str):
+        updates.append(markdown)
+        return original(self, markdown)
+
+    Markdown.update = record
+
+    async def drive():
+        try:
+            async with app.run_test(size=(80, 24)) as pilot:
+                transcript = app.query_one("#transcript")
+                for n in range(40):
+                    transcript.mount(Static(f"line {n}", markup=False))
+                await pilot.pause()
+                transcript.scroll_to(y=0, animate=False)
+                await pilot.pause()
+                words = [f"w{n}" for n in range(40)]
+                for word in words:
+                    app._apply_delta("content", word + " ")
+                await pilot.pause()
+                assert transcript.scroll_y == 0
+                doc = app.query_one(Markdown)
+                for _ in range(30):
+                    if all(word in doc.source for word in words):
+                        break
+                    await pilot.pause(0.05)
+                else:
+                    raise AssertionError(doc.source)
+                shown = doc.query_one("MarkdownParagraph")._content.plain
+                assert shown.count("w0") == 1
+                assert shown.count("w39") == 1
+                assert updates == [""]
+        finally:
+            Markdown.update = original
+
+    asyncio.run(drive())
+
+
 def test_mousedown_during_markdown_update_does_not_crash():
     from textual.events import MouseDown
 

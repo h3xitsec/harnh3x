@@ -16,6 +16,7 @@ from textual.geometry import Offset
 from textual.screen import ModalScreen, Screen
 from textual.widget import Widget
 from textual.widgets import Markdown, OptionList, Static, TextArea
+from textual.widgets.markdown import MarkdownStream
 
 from harnh3x import __version__
 from harnh3x.agent import (
@@ -417,25 +418,73 @@ class Thinking(_Expandable):
 
 
 class AgentAnswer(Vertical):
-    def __init__(self, source: str) -> None:
-        super().__init__()
+    def __init__(self, source: str, *, stream: bool = False) -> None:
+        # Set before super(), which composes children from this source.
         self.source = source
+        self._live = stream
+        self._pending = ""
+        self._pumping = False
+        self._closed = False
+        self._stream: MarkdownStream | None = None
+        super().__init__()
 
     def compose(self) -> ComposeResult:
         yield Static("Agent", markup=False)
-        yield Markdown(self.source, open_links=False)
+        # A live answer starts empty. Markdown mounts by replacing every
+        # block, so the stream appends instead of rebuilding on each token.
+        yield Markdown(None if self._live else self.source, open_links=False)
 
     def on_mount(self) -> None:
-        self._refresh()
+        if self._live:
+            # After the empty document's own mount update, so the stream
+            # does not append into a widget that is about to clear itself.
+            self.call_after_refresh(self._open_stream)
+
+    def _open_stream(self) -> None:
+        if self._closed:
+            return
+        self._stream = Markdown.get_stream(self.query_one(Markdown))
+        self._kick()
+
+    def on_unmount(self) -> None:
+        self._closed = True
+        stream = self._stream
+        self._stream = None
+        if stream is not None:
+            self.app.run_worker(stream.stop)
 
     def append(self, text: str) -> None:
+        if not text or self._closed:
+            return
         self.source += text
-        self._refresh()
+        self._pending += text
+        if self._stream is not None:
+            self._kick()
 
-    def _refresh(self) -> None:
-        found = self.query(Markdown)
-        if found:
-            found.first().update(self.source)
+    def _kick(self) -> None:
+        if self._pumping or self._closed or self._stream is None:
+            return
+        self._pumping = True
+        self.run_worker(self._pump)
+
+    async def _pump(self) -> None:
+        try:
+            while self._pending and not self._closed:
+                chunk = self._pending
+                self._pending = ""
+                stream = self._stream
+                if stream is None:
+                    self._pending = chunk + self._pending
+                    return
+                try:
+                    await stream.write(chunk)
+                except RuntimeError:
+                    self._pending = chunk + self._pending
+                    return
+        finally:
+            self._pumping = False
+            if self._pending and not self._closed and self._stream is not None:
+                self._kick()
 
 
 class DebugBox(_Expandable):
@@ -1351,7 +1400,7 @@ class HarnessApp(App):
             if not self._content_open:
                 self._content_open = True
                 self._msg_content = ""
-                block = AgentAnswer("")
+                block = AgentAnswer("", stream=True)
                 self._live_answer = block
                 transcript.mount(block)
             assert self._live_answer is not None
