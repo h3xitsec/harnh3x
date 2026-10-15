@@ -20,18 +20,18 @@ from types import SimpleNamespace
 
 import pytest
 
-import harnh3x.agent as agent
+from harnh3x import agent
 import harnh3x.agent.client as agent_client
 import harnh3x.agent.loop as agent_loop
 import harnh3x.agent.transcript as agent_transcript
-import harnh3x.rules as rules
-import harnh3x.anthropic_api as anthropic_api
-import harnh3x.config as config
+from harnh3x import rules
+from harnh3x import anthropic_api
+from harnh3x import config
 from harnh3x import __version__
 from harnh3x.anthropic_api import AnthropicClient, to_anthropic
-import harnh3x.sandbox as sandbox
-import harnh3x.skills as skills
-import harnh3x.tools as tools
+from harnh3x import sandbox
+from harnh3x import skills
+from harnh3x import tools
 from harnh3x.config import (
     COMPACT_AT,
     MAX_TOOL_RESULT,
