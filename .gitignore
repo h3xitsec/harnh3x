@@ -9,4 +9,5 @@ harnh3x.yaml.dev
 .harnh3x/
 .coverage
 .coverage.*
+htmlcov/
 .venv/
