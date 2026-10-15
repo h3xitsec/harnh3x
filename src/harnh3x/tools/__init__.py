@@ -26,6 +26,8 @@ from harnh3x.tools.reference import FNS as _REFERENCE_FNS
 from harnh3x.tools.reference import SCHEMAS as _REFERENCE_SCHEMAS
 from harnh3x.tools.search import FNS as _SEARCH_FNS
 from harnh3x.tools.search import SCHEMAS as _SEARCH_SCHEMAS
+from harnh3x.tools.system import FNS as _SYSTEM_FNS
+from harnh3x.tools.system import SCHEMAS as _SYSTEM_SCHEMAS
 from harnh3x.tools.tasks import FNS as _TASK_FNS
 from harnh3x.tools.tasks import SCHEMAS as _TASK_SCHEMAS
 
@@ -43,6 +45,7 @@ _SCHEMAS = {
         *_DATA_SCHEMAS,
         *_MEMORY_SCHEMAS,
         *_TASK_SCHEMAS,
+        *_SYSTEM_SCHEMAS,
     )
 }
 _FNS = {
@@ -57,6 +60,7 @@ _FNS = {
     **_DATA_FNS,
     **_MEMORY_FNS,
     **_TASK_FNS,
+    **_SYSTEM_FNS,
 }
 _ORDER = (
     "read_file",
@@ -73,6 +77,7 @@ _ORDER = (
     "write_source",
     "edit_source",
     "run_script",
+    "system_info",
     "web_search",
     "read_url",
     "fetch_url",

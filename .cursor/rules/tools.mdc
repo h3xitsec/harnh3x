@@ -32,6 +32,8 @@ HTTP: `validate_url` allows only `http` and `https`, with no userinfo. Resolve t
 
 `remember` / `recall` keep `## key` sections in `BASE_DIR/MEMORY_FILE` (`~/.harnh3x/memory.md` by default), shared across sessions and outside the workspace. `memory_keys` reads that file for the system prompt. `write_plan` / `update_plan` / `show_plan` keep `N. [ ]` lines in `PLAN_FILE` inside the workspace.
 
+`system_info` reads the host outside the seatbelt. It runs a fixed set of read-only commands and files for OS, machine, CPU, memory, storage, and attached hardware. It does not take a command string. On Windows and any other platform it returns `Error: system_info supports Linux and macOS only`. A failed probe is a note in the report.
+
 ```python
 # BAD: shell=True, or raising into the loop
 subprocess.run(command, shell=True, cwd=workspace)
