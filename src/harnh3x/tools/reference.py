@@ -1,4 +1,5 @@
 import urllib.parse
+from pathlib import Path
 
 from harnh3x.config import SEARCH_MAX_RESULTS, WIKIPEDIA_LANG
 from harnh3x.tools.http import get_json

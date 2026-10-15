@@ -1,5 +1,6 @@
 import csv
 import json
+from pathlib import Path
 
 from harnh3x.config import PREVIEW_ROWS
 from harnh3x.tools.paths import (

@@ -5,6 +5,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from types import SimpleNamespace
+from typing import ClassVar
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -532,7 +533,7 @@ class Composer(TextArea):
 
 
 class ModelScreen(Screen):
-    BINDINGS = [
+    BINDINGS: ClassVar[list[Binding]] = [
         Binding("enter", "choose", "Choose", priority=True),
         Binding("up", "move_up", "Up", priority=True),
         Binding("down", "move_down", "Down", priority=True),
@@ -642,7 +643,7 @@ def pick_model(models: list[str]) -> str:
 
 
 class ResumeScreen(Screen):
-    BINDINGS = [
+    BINDINGS: ClassVar[list[Binding]] = [
         Binding("enter", "choose", "Choose", priority=True),
         Binding("up", "move_up", "Up", priority=True),
         Binding("down", "move_down", "Down", priority=True),
@@ -756,7 +757,7 @@ class ResumeOptions(OptionList):
 
 
 class HelpScreen(ModalScreen):
-    BINDINGS = [
+    BINDINGS: ClassVar[list[Binding]] = [
         Binding("escape", "close", "Close", priority=True),
     ]
     DEFAULT_CSS = """
@@ -783,7 +784,7 @@ class HelpScreen(ModalScreen):
 
 
 class WarningScreen(ModalScreen):
-    BINDINGS = [
+    BINDINGS: ClassVar[list[Binding]] = [
         Binding("escape", "close", "Close", priority=True),
     ]
     DEFAULT_CSS = """
@@ -819,7 +820,7 @@ class WarningScreen(ModalScreen):
 
 
 class HarnessApp(App):
-    BINDINGS = [
+    BINDINGS: ClassVar[list[Binding]] = [
         Binding("ctrl+q", "quit", "Quit", priority=True),
         Binding("ctrl+h", "toggle_trace", "Details", priority=True),
         Binding("ctrl+w", "warnings", "Warnings", priority=True),
@@ -1449,14 +1450,14 @@ class HarnessApp(App):
 
 
 class OneShotApp(HarnessApp):
-    BINDINGS = [
+    BINDINGS: ClassVar[list[Binding]] = [
         *HarnessApp.BINDINGS,
         Binding("enter", "close", "Close", priority=True),
     ]
 
 
 class ReviewApp(HarnessApp):
-    BINDINGS = [
+    BINDINGS: ClassVar[list[Binding]] = [
         Binding("enter", "close", "Close", priority=True),
     ]
 

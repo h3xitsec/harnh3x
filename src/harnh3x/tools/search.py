@@ -1,6 +1,7 @@
 import urllib.parse
 import urllib.request
 from html.parser import HTMLParser
+from pathlib import Path
 
 from harnh3x.config import SEARCH_MAX_RESULTS
 from harnh3x.tools.http import HTML_TYPES, USER_AGENT, _open_request, validate_url

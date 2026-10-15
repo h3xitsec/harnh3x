@@ -57,7 +57,7 @@ SCHEMAS = [
 
 
 class _TextParser(HTMLParser):
-    _SKIP = {"script", "style", "noscript", "template"}
+    _SKIP = frozenset({"script", "style", "noscript", "template"})
 
     def __init__(self):
         super().__init__(convert_charrefs=True)

@@ -1,4 +1,5 @@
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 from harnh3x.config import FEED_MAX_ITEMS
 from harnh3x.tools.http import _checked_get, validate_url

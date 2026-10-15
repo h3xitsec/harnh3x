@@ -16,7 +16,6 @@ from harnh3x.config import MODEL, require_api_settings
 from harnh3x.tui import (
     YOLO_PLAIN,
     compact_label,
-    conversation_turns,
     debug_text,
     line_limit,
     pick_model,

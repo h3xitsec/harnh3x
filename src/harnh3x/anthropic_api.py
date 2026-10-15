@@ -5,6 +5,14 @@ from anthropic import Anthropic, APIConnectionError, APIStatusError, APITimeoutE
 
 from harnh3x import config
 
+__all__ = [
+    "Anthropic",
+    "AnthropicClient",
+    "CompletionError",
+    "status_message",
+    "to_anthropic",
+]
+
 _THINKING = {"thinking", "redacted_thinking"}
 
 

@@ -14,7 +14,7 @@ import urllib.parse
 import urllib.request
 import uuid
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -2512,7 +2512,7 @@ def test_plain_help_lists_commands(monkeypatch, capsys, tmp_path):
 
 def test_thinking_panel_keeps_the_tail_until_expanded():
     cli = _load_cli()
-    reasoning = "\n".join(["alpha", "beta", "gamma", "delta"])
+    reasoning = "alpha\nbeta\ngamma\ndelta"
     collapsed = cli.format_thinking(reasoning, expanded=False, width=80, hold=False)
     assert "alpha" not in collapsed
     assert "beta" in collapsed
@@ -2760,7 +2760,7 @@ def test_model_flag_without_a_name_prompts(monkeypatch, capsys, tmp_path):
 
 def test_model_menu_exits_when_the_api_has_no_models(monkeypatch):
     cli = _load_cli()
-    monkeypatch.setattr(cli, "list_models", lambda: [])
+    monkeypatch.setattr(cli, "list_models", list)
 
     with pytest.raises(SystemExit, match="No models available"):
         cli.main(["--model"])
@@ -3738,16 +3738,13 @@ def test_scrolled_up_transcript_stays_put_while_output_grows():
 
 
 def test_agent_answer_renders_markdown():
-    answer = "\n".join(
-        [
-            "### **Ransomware**",
-            "- **Australia**: 18%",
-            "",
-            "| Date | Event |",
-            "|------|-------|",
-            "| Sep 2019 | First ABCD |",
-        ]
-    )
+    answer = """\
+### **Ransomware**
+- **Australia**: 18%
+
+| Date | Event |
+|------|-------|
+| Sep 2019 | First ABCD |"""
     session = SimpleNamespace(workspace="ws", model="m", messages=[])
     app = ReviewApp(session, "summarize", [], "", answer)
 
@@ -5029,7 +5026,7 @@ def test_wikipedia_summary_returns_extract_and_flags_missing(tmp_path, monkeypat
             "desktop": {"page": "https://en.wikipedia.org/wiki/Ada_Lovelace"}
         },
     }
-    fake_get, seen = _json_get(
+    fake_get, _seen = _json_get(
         [("https://en.wikipedia.org/api/rest_v1/page/summary/Ada_Lovelace", payload)]
     )
     monkeypatch.setattr(tools.http, "_http_get", fake_get)
@@ -5673,7 +5670,7 @@ def test_plan_tools_write_update_and_show(tmp_path):
 
 
 def test_system_prompt_mentions_yolo_only_when_enabled(tmp_path):
-    now = datetime(2026, 10, 6, 16, 30, tzinfo=timezone.utc)
+    now = datetime(2026, 10, 6, 16, 30, tzinfo=datetime.UTC)
 
     plain = system_prompt(tmp_path, "MENU", now=now)
     yolo = system_prompt(tmp_path, "MENU", now=now, yolo=True)
@@ -5721,7 +5718,7 @@ def test_system_prompt_mentions_yolo_only_when_enabled(tmp_path):
 
 
 def test_system_prompt_includes_date_listing_and_memory_index(tmp_path):
-    now = datetime(2026, 10, 6, 16, 30, tzinfo=timezone.utc)
+    now = datetime(2026, 10, 6, 16, 30, tzinfo=datetime.UTC)
 
     empty = system_prompt(tmp_path, "MENU", now=now)
     assert "Today is Tuesday, October 06, 2026, 16:30 UTC." in empty
