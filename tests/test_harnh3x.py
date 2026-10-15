@@ -4688,10 +4688,61 @@ def test_yolo_runs_sudo_without_the_seatbelt(tmp_path, monkeypatch):
 
     assert "blocked" not in result
     assert "status: success" in result
-    assert seen["argv"] == ["sudo", "true"]
+    assert seen["argv"] == ["/bin/sh", "-c", "sudo true"]
     assert seen["shell"] is False
     assert seen["env"] == dict(os.environ)
     assert "HARNESS_SANDBOX_PROFILE" not in seen["env"]
+
+
+def test_yolo_shell_runs_a_pipe_and_a_chain(tmp_path):
+    piped = execute_tool(
+        "run_shell",
+        {"command": "printf hi | tr a-z A-Z"},
+        tmp_path,
+        yolo=True,
+    )
+    assert "status: success" in piped
+    assert "stdout:\nHI\n" in piped
+    assert not (tmp_path / ".shell").exists()
+
+    chained = execute_tool(
+        "run_shell", {"command": "true && printf ok"}, tmp_path, yolo=True
+    )
+    assert "stdout:\nok\n" in chained
+
+
+def test_shell_blocks_a_pipe(tmp_path, monkeypatch):
+    def fail(*_args, **_kwargs):
+        raise AssertionError("shell ran")
+
+    monkeypatch.setattr(tools.process.subprocess, "Popen", fail)
+
+    result = execute_tool("run_shell", {"command": "printf hi | tr a-z A-Z"}, tmp_path)
+
+    assert "blocked" in result
+
+
+def test_long_process_output_is_saved_for_read_file(tmp_path):
+    code = "print('\\n'.join(f'{i:04d}-' + ('x' * 40) for i in range(400)))"
+    result = execute_tool("run_python", {"code": code}, tmp_path)
+
+    assert len(result) <= MAX_TOOL_RESULT
+    match = re.search(
+        r"full output saved to (\S+); call read_file with path \1 and offset (\d+)",
+        result,
+    )
+    assert match
+    path = Path(match.group(1))
+    offset = int(match.group(2))
+    assert path.is_relative_to((tmp_path / ".shell").resolve())
+    saved = path.read_text(encoding="utf-8")
+    assert len(saved) > MAX_TOOL_RESULT
+    prefix = result.split("\n...[truncated", 1)[0]
+    assert prefix.endswith("\n")
+    assert saved.startswith(prefix)
+    rest = execute_tool("read_file", {"path": str(path), "offset": offset}, tmp_path)
+    assert saved[len(prefix) :].splitlines()[0] in rest
+    assert "0399-" in saved
 
 
 def test_yolo_python_reads_outside_the_workspace(tmp_path):
@@ -6077,10 +6128,15 @@ def test_system_prompt_mentions_yolo_only_when_enabled(tmp_path):
 
     assert "Yolo mode" not in plain
     assert YOLO_NOTE in yolo
+    assert "/bin/sh" in yolo
+    assert "are blocked" not in yolo
     assert "localhost" in yolo
     assert yolo.endswith("MENU")
     loaded = SkillRegistry(yolo=True).load_skill("shell")
     assert loaded.endswith(YOLO_NOTE)
+    assert "are blocked" not in loaded
+    assert "`/bin/sh -c`" in loaded
+    assert "are blocked" in SkillRegistry().load_skill("shell")
     assert YOLO_NOTE not in SkillRegistry(yolo=True).load_skill("memory")
     assert YOLO_NOTE not in SkillRegistry().load_skill("shell")
     for name in ("http", "research", "reference"):
@@ -6115,6 +6171,8 @@ def test_system_prompt_mentions_yolo_only_when_enabled(tmp_path):
     shell = SkillRegistry(yolo=True, project=project).load_skill("shell")
     assert project_note(project) in shell
     assert f"or the project at {project}." in shell
+    assert "are blocked" not in shell
+    assert "`/bin/sh -c`" in shell
 
 
 def test_system_prompt_includes_date_listing_and_memory_index(tmp_path):

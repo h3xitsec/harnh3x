@@ -14,6 +14,15 @@ from harnh3x.tools import TOOLS, execute_tool
 _YOLO_SKILLS = {"file-ops", "shell", "python", "http", "research", "reference"}
 _PROJECT_SKILLS = {"file-ops", "shell", "python", "coding"}
 
+# Sandbox sentences in skills/shell/SKILL.md. A yolo load replaces them so the
+# model does not read a ban and a permission for the same syntax.
+_SHELL_SANDBOX = """- The working directory is the workspace. The kernel confines the process to that directory: it cannot read or write other paths, and it cannot use the network. A path the program builds itself is still confined.
+- One program per call. Pipes, redirects, `;`, `&&`, backticks, and `$` are blocked and return `Error:`; so are `rm`, `mv`, `chmod`, and `sudo`. Use `file-ops` to move or delete files, and `python` for anything that needs a pipeline.
+- Pass data to a program through `stdin` instead of a redirect."""
+
+_SHELL_OPEN = """- The working directory is the workspace, or the project when one is granted. The seatbelt is off: the command may read or write any path and may use the network.
+- `run_shell` is `/bin/sh -c`. Pipes, redirects, `;`, `&&`, backticks, and `$` run, including `rm`, `mv`, `chmod`, and `sudo`."""
+
 SKILLS_DIR = Path(__file__).resolve().parent
 
 _METADATA_TOKEN_LIMIT = 100
@@ -352,10 +361,13 @@ class SkillRegistry:
             skill = loaded
         self._active[name] = skill
         tool_names = [tool["function"]["name"] for tool in skill.tools]
+        doc = skill.doc
+        if self._yolo and name == "shell":
+            doc = doc.replace(_SHELL_SANDBOX, _SHELL_OPEN, 1)
         text = (
             f"Loaded skill '{name}' with {len(skill.tools)} tools: "
             f"{', '.join(tool_names)}\n\n"
-            f"Documentation:\n{skill.doc}"
+            f"Documentation:\n{doc}"
         )
         if self._yolo and name in _YOLO_SKILLS:
             text += f"\n\n{yolo_note(self._project)}"

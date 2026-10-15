@@ -4,9 +4,10 @@ import signal
 import subprocess
 import sys
 import threading
+import uuid
 from pathlib import Path
 
-from harnh3x.config import SHELL_MAX_TIMEOUT, SHELL_TIMEOUT
+from harnh3x.config import MAX_TOOL_RESULT, SHELL_MAX_TIMEOUT, SHELL_TIMEOUT
 from harnh3x.sandbox import sandboxed_argv
 from harnh3x.tools.files import edit_file, read_file, write_file
 from harnh3x.tools.paths import (
@@ -236,11 +237,47 @@ def prepare_shell(command: str, workspace: Path) -> list[str]:
     return argv
 
 
-def _format_shell(exit_code: int, stdout: str, stderr: str) -> str:
-    status = "success" if exit_code == 0 else "error"
-    return cap_result(
-        f"status: {status}\nexit_code: {exit_code}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+def _spill_shell(workspace: Path, text: str) -> Path:
+    directory = workspace / ".shell"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{uuid.uuid4().hex}.txt"
+    path.write_text(text, encoding="utf-8")
+    return path.resolve()
+
+
+def _shell_hint(path: Path, offset: int) -> str:
+    return (
+        f"full output saved to {path}; "
+        f"call read_file with path {path} and offset {offset}"
     )
+
+
+def _truncate_shell(text: str, workspace: Path) -> str:
+    if len(text) <= MAX_TOOL_RESULT:
+        return text
+    path = _spill_shell(workspace, text)
+    lines = text.splitlines(keepends=True)
+    chosen = ""
+    marker = ""
+    for count in range(len(lines) + 1):
+        prefix = "".join(lines[:count])
+        omitted = len(text) - len(prefix)
+        candidate = (
+            f"\n...[truncated, {omitted} chars omitted; {_shell_hint(path, count + 1)}]"
+        )
+        if len(prefix) + len(candidate) > MAX_TOOL_RESULT:
+            break
+        chosen = prefix
+        marker = candidate
+    if chosen:
+        return chosen + marker
+    return cap_result(text, hint=_shell_hint(path, 1))
+
+
+def _format_shell(exit_code: int, stdout: str, stderr: str, workspace: Path) -> str:
+    status = "success" if exit_code == 0 else "error"
+    text = f"status: {status}\nexit_code: {exit_code}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    return _truncate_shell(text, workspace)
 
 
 def _timeout_arg(raw) -> int:
@@ -322,17 +359,25 @@ def _run_process(
             _kill_group(proc)
             stdout, stderr = proc.communicate()
             return _format_shell(
-                124, stdout or "", stderr or f"timed out after {timeout}s"
+                124, stdout or "", stderr or f"timed out after {timeout}s", workspace
             )
-        return _format_shell(proc.returncode or 0, stdout or "", stderr or "")
+        return _format_shell(
+            proc.returncode or 0, stdout or "", stderr or "", workspace
+        )
     finally:
         _untrack(proc)
 
 
 def run_shell(workspace: Path, args: dict) -> str:
-    argv = prepare_shell(args.get("command", ""), workspace)
+    command = args.get("command", "")
     timeout = _timeout_arg(args.get("timeout"))
     stdin = _stdin_arg(args.get("stdin"))
+    if _yolo.get():
+        if not isinstance(command, str) or not command.strip():
+            raise ValueError("command is required")
+        argv = ["/bin/sh", "-c", command]
+    else:
+        argv = prepare_shell(command, workspace)
     return _run_process(argv, workspace, timeout, stdin)
 
 
