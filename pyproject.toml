@@ -43,5 +43,11 @@ include = ["pyproject.toml", "src/**/*.py", "tests/**/*.py"]
 quote-style = "double"
 indent-style = "space"
 
+[tool.ruff.lint]
+ignore = ["TRY004"]
+
 [tool.ruff.lint.per-file-ignores]
+"src/harnh3x/agent/compact.py" = ["BLE001"]
 "src/harnh3x/tools/__init__.py" = ["F401"]
+"src/harnh3x/tui.py" = ["BLE001"]
+"tests/test_harnh3x.py" = ["BLE001"]
