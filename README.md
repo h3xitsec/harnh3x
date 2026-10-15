@@ -183,7 +183,8 @@ Each skill's `SKILL.md` has YAML frontmatter (`name`, `description`, and optiona
 
 ```bash
 poetry run pytest
-poetry run black src tests
+poetry run ruff check
+poetry run ruff format
 ```
 
 Limits (turns, compaction threshold, fetch and shell caps, the default model) live in `src/harnh3x/config.py`. A new tool, or a looser path or shell check, needs a matching test in `tests/test_harnh3x.py`.
