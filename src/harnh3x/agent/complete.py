@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 from openai import APIConnectionError, APIStatusError
 
+from harnh3x import config
 from harnh3x.agent.messages import _reasoning_text
 from harnh3x.agent.session import Session
 from harnh3x.anthropic_api import AnthropicClient
@@ -24,6 +25,37 @@ def _rejects_stream_options(exc: APIStatusError) -> bool:
         return True
     text = str(exc).lower()
     return "stream_options" in text or "include_usage" in text
+
+
+def _rejects_max_tokens(exc: APIStatusError) -> bool:
+    param = getattr(exc, "param", None)
+    if isinstance(param, str) and param == "max_tokens":
+        return True
+    text = str(exc).lower()
+    return "max_tokens" in text and "max_completion_tokens" in text
+
+
+def create_completion(api, **kwargs):
+    """Call chat.completions.create, retrying without options a server rejects.
+
+    Every call carries max_tokens. A server that rejects stream_options gets
+    the call again without it; one that wants max_completion_tokens gets the
+    limit under that name. Each retry removes a key, so at most three calls.
+    """
+    kwargs.setdefault("max_tokens", config.MAX_TOKENS)
+    while True:
+        try:
+            return api.chat.completions.create(**kwargs)
+        except APIConnectionError:
+            raise
+        except APIStatusError as exc:
+            if "stream_options" in kwargs and _rejects_stream_options(exc):
+                del kwargs["stream_options"]
+                continue
+            if "max_tokens" in kwargs and _rejects_max_tokens(exc):
+                kwargs["max_completion_tokens"] = kwargs.pop("max_tokens")
+                continue
+            raise
 
 
 def _without_thinking_blocks(messages: list) -> list:
@@ -51,18 +83,9 @@ def _request_completion(api, **kwargs):
     messages = kwargs.get("messages")
     if isinstance(messages, list):
         kwargs["messages"] = _without_thinking_blocks(messages)
-    try:
-        return api.chat.completions.create(
-            stream=True,
-            stream_options={"include_usage": True},
-            **kwargs,
-        )
-    except APIConnectionError:
-        raise
-    except APIStatusError as exc:
-        if not _rejects_stream_options(exc):
-            raise
-        return api.chat.completions.create(stream=True, **kwargs)
+    return create_completion(
+        api, stream=True, stream_options={"include_usage": True}, **kwargs
+    )
 
 
 def _debug_text(value: object) -> str:

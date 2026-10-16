@@ -4,6 +4,7 @@ from openai import OpenAI
 
 import harnh3x.agent.client as api_client
 from harnh3x.agent.client import _count
+from harnh3x.agent.complete import create_completion
 from harnh3x.agent.session import Session
 from harnh3x.agent.transcript import _save_transcript, write_log
 from harnh3x.anthropic_api import AnthropicClient
@@ -237,7 +238,7 @@ def _summary_response(session: Session, api, body: str):
         summary, response = api.complete_text(model=session.model, messages=messages)
         response.choices = [SimpleNamespace(message=SimpleNamespace(content=summary))]
         return response
-    return api.chat.completions.create(model=session.model, messages=messages)
+    return create_completion(api, model=session.model, messages=messages)
 
 
 def compact_session(

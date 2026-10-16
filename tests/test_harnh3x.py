@@ -382,6 +382,74 @@ def test_run_retries_when_stream_options_are_rejected(tmp_path, monkeypatch):
     assert calls == [True, False]
 
 
+def test_run_sends_max_tokens_on_every_openai_call(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        agent_client, "model_context_limit", lambda model, client=None: None
+    )
+    monkeypatch.setattr(config, "MAX_TOKENS", 777)
+    calls = []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        message = SimpleNamespace(content="ok", tool_calls=None)
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    session = agent.Session(workspace=tmp_path)
+
+    assert agent.run("hi", session, client=client) == "ok"
+    assert calls[0]["max_tokens"] == 777
+    assert "max_completion_tokens" not in calls[0]
+
+    _prior_turn(session)
+    session.context_tokens = 10
+    session.context_limit = 100
+    assert agent.compact_session(session, client=client) == "Context compacted."
+    assert calls[-1]["max_tokens"] == 777
+    assert "stream" not in calls[-1]
+
+
+def test_run_falls_back_to_max_completion_tokens(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        agent_client, "model_context_limit", lambda model, client=None: None
+    )
+    calls = []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        if "max_tokens" in kwargs:
+            raise _status_error(
+                "Unsupported parameter: 'max_tokens' is not supported with this "
+                "model. Use 'max_completion_tokens' instead."
+            )
+        if "stream_options" in kwargs:
+            raise _status_error("unknown parameter stream_options")
+        message = SimpleNamespace(content="ok", tool_calls=None)
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    session = agent.Session(workspace=tmp_path)
+
+    assert agent.run("hi", session, client=client) == "ok"
+    assert len(calls) == 3
+    assert "max_tokens" not in calls[-1]
+    assert calls[-1]["max_completion_tokens"] == config.MAX_TOKENS
+    assert "stream_options" not in calls[-1]
+    assert calls[-1]["stream"] is True
+
+    def reject_everything(**kwargs):
+        raise _status_error("max_tokens is too large for this model")
+
+    client.chat.completions.create = reject_everything
+    assert agent.run("again", session, client=client).startswith(
+        "The API rejected the request: max_tokens is too large"
+    )
+
+
 def test_abort_during_a_stream_skips_the_rest_of_the_turn(tmp_path):
     calls = []
 
