@@ -86,7 +86,7 @@ Each `agent-transcripts/<uuid>/` directory is typically **one chat session**. Ma
 
 **Do not split** when:
 
-- Changes are a tight bundle (feature + its tests in `tests/test_harnh3x.py` + docs for that feature only; or a fix and its follow-up in the same module from the same task).
+- Changes are a tight bundle (feature + its tests under `tests/` + docs for that feature only; or a fix and its follow-up in the same module from the same task).
 
 For each proposed commit: **one conventional type**, **one scope** when it fits, **one changelog-ready subject**, body explains **why** for that slice only.
 
@@ -143,7 +143,7 @@ with the same tools and files.
 
 - `src/harnh3x/cli.py`
 - `src/harnh3x/agent/`
-- `tests/test_harnh3x.py`
+- `tests/test_cli.py`, `tests/test_session.py`
 
 **Skipped**
 
