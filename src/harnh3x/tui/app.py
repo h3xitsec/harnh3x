@@ -424,9 +424,9 @@ class HarnessApp(App):
                 abort.set()
             kill_children()
             skills = getattr(self.session, "skills", None)
-            kill = getattr(skills, "kill", None)
-            if callable(kill):
-                kill()
+            close = getattr(skills, "close", None)
+            if callable(close):
+                close()
         self.exit()
 
     def _spawn(self, work: Callable[[], None]) -> None:

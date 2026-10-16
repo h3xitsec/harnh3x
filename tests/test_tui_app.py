@@ -369,6 +369,21 @@ def test_ctrl_q_quits_the_app():
     asyncio.run(drive())
 
 
+def test_ctrl_q_closes_the_skill_registry():
+    closed = []
+    skills = SimpleNamespace(close=lambda: closed.append(True))
+    session = SimpleNamespace(workspace="ws", model="m", messages=[], skills=skills)
+    app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press("ctrl+q")
+            assert app._exit
+
+    asyncio.run(drive())
+    assert closed == [True]
+
+
 def test_ctrl_q_aborts_a_running_request():
     started = threading.Event()
     released = threading.Event()
