@@ -10,20 +10,17 @@ from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Input, Static
 
-_TUI_HELP = """\
-Commands
-  /help     show commands and hotkeys
-  /resume   resume a past session
-  /compact  compact context
-  /export   write a response to a markdown file
-  /exit     quit
+from harnh3x.commands import help_lines
 
+_HOTKEYS = """\
 Hotkeys
   Shift+Enter  new line
   Ctrl+N       new session
   Ctrl+H       hide or show thinking, tool calls, debug, and compaction boxes
   Ctrl+W       open warning details
   Ctrl+Q       quit and stop the running request"""
+
+_TUI_HELP = "\n".join(help_lines(hotkeys=True)) + "\n\n" + _HOTKEYS
 
 
 class ExportPathScreen(ModalScreen[str | None]):

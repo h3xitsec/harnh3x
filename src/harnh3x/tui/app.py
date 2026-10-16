@@ -22,10 +22,9 @@ from harnh3x.agent import (
     model_context_limit,
     parse_command,
 )
+from harnh3x.commands import NO_EXPORT, dispatch
 from harnh3x.tools.process import kill_children
 from harnh3x.tui.export import (
-    EXPORT_USAGE,
-    NO_EXPORT,
     export_base,
     exportable_answers,
     render_export,
@@ -351,40 +350,21 @@ class HarnessApp(App):
         self._spawn(lambda: self._turn(text))
 
     def _command(self, name: str, rest: str) -> None:
-        if name == "help" and rest == "":
-            self.push_screen(HelpScreen())
-            return
-        if name == "help":
-            self._note("Usage: /help")
-            return
-        if name == "resume" and rest == "":
-            self.push_screen(ResumeScreen(list_sessions()), self._on_resume)
-            return
-        if name == "resume":
-            self._note("Usage: /resume")
-            return
-        if name == "compact" and rest == "":
-            composer = self.query_one(Composer)
-            composer.disabled = True
-            self._spawn(self._compact_now)
-            return
-        if name == "compact":
-            self._note("Usage: /compact")
-            return
-        if name == "export" and rest == "":
-            self._note(EXPORT_USAGE)
-            return
-        if name == "export":
-            self._start_export(rest)
-            return
-        if name == "exit" and rest == "":
-            self.action_quit()
-            return
-        if name == "exit":
-            self._note("Usage: /exit")
-            return
-        shown = f"/{name}" if name else "/"
-        self._note(f"Unknown command: {shown}")
+        handlers = {
+            "help": lambda _rest: self.push_screen(HelpScreen()),
+            "resume": lambda _rest: self.push_screen(
+                ResumeScreen(list_sessions()), self._on_resume
+            ),
+            "compact": lambda _rest: self._start_compact(),
+            "export": self._start_export,
+            "exit": lambda _rest: self.action_quit(),
+        }
+        dispatch(name, rest, handlers, self._note)
+
+    def _start_compact(self) -> None:
+        composer = self.query_one(Composer)
+        composer.disabled = True
+        self._spawn(self._compact_now)
 
     def _focus_composer(self) -> None:
         composers = list(self.query(Composer))

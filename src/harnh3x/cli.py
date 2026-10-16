@@ -12,10 +12,9 @@ from harnh3x.agent import (
     run,
     session_label,
 )
+from harnh3x.commands import NO_EXPORT, dispatch, help_lines
 from harnh3x.config import MODEL, require_api_settings
 from harnh3x.tui import (
-    EXPORT_USAGE,
-    NO_EXPORT,
     YOLO_PLAIN,
     answer_preview,
     compact_label,
@@ -33,13 +32,7 @@ from harnh3x.tui import (
     write_export,
 )
 
-_PLAIN_HELP = """\
-Commands
-  /help     show commands
-  /resume   resume a past session
-  /compact  compact context
-  /export   write a response to a markdown file
-  /exit     quit"""
+_PLAIN_HELP = "\n".join(help_lines())
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -279,38 +272,15 @@ def _export_answers(session, rest: str) -> None:
 
 
 def _handle_command(session, name: str, rest: str, *, answer_only: bool) -> bool:
-    if name == "help" and rest == "":
-        print(_PLAIN_HELP)
-        return False
-    if name == "help":
-        print("Usage: /help")
-        return False
-    if name == "resume" and rest == "":
-        _resume_session(session, answer_only=answer_only)
-        return False
-    if name == "resume":
-        print("Usage: /resume")
-        return False
-    if name == "compact" and rest == "":
-        print(compact_session(session))
-        return False
-    if name == "compact":
-        print("Usage: /compact")
-        return False
-    if name == "export" and rest == "":
-        print(EXPORT_USAGE)
-        return False
-    if name == "export":
-        _export_answers(session, rest)
-        return False
-    if name == "exit" and rest == "":
-        return True
-    if name == "exit":
-        print("Usage: /exit")
-        return False
-    shown = f"/{name}" if name else "/"
-    print(f"Unknown command: {shown}")
-    return False
+    """Run one slash command at the plain prompt. True means quit."""
+    handlers = {
+        "help": lambda _rest: print(_PLAIN_HELP),
+        "resume": lambda _rest: _resume_session(session, answer_only=answer_only),
+        "compact": lambda _rest: print(compact_session(session)),
+        "export": lambda rest: _export_answers(session, rest),
+        "exit": lambda _rest: True,
+    }
+    return dispatch(name, rest, handlers, print) is True
 
 
 def _print_debug(system: str | None, request: str) -> None:
