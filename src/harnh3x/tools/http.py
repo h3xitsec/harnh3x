@@ -1,4 +1,5 @@
 import hashlib
+import http.client
 import ipaddress
 import json
 import re
@@ -171,8 +172,19 @@ def validate_url(url: str):
 def _assert_public_host(host: str) -> None:
     if _yolo.get():
         return
+    _vetted_addresses(host)
+
+
+def _vetted_addresses(host: str) -> list[str]:
+    """Resolve host and return its addresses, refusing any that is not global.
+
+    Outside yolo every address must be global; one private answer blocks the
+    host. The same check runs when the URL is validated and again when the
+    socket is opened, so a DNS answer that changes between the two cannot
+    reach a private address.
+    """
     try:
-        addresses = [ipaddress.ip_address(host)]
+        addresses = [str(ipaddress.ip_address(host))]
     except ValueError:
         try:
             infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
@@ -181,14 +193,56 @@ def _assert_public_host(host: str) -> None:
         addresses = []
         for info in infos:
             try:
-                addresses.append(ipaddress.ip_address(info[4][0]))
+                ipaddress.ip_address(info[4][0])
             except ValueError:
                 continue
+            if info[4][0] not in addresses:
+                addresses.append(info[4][0])
         if not addresses:
             raise ValueError("could not resolve host")
-    for ip in addresses:
-        if not ip.is_global:
-            raise ValueError("blocked host")
+    if _yolo.get():
+        return addresses
+    if any(not ipaddress.ip_address(address).is_global for address in addresses):
+        raise ValueError("blocked host")
+    return addresses
+
+
+def _pinned_create_connection(address, timeout=None, source_address=None):
+    """Connect to an address that passed _vetted_addresses just now."""
+    host, port = address
+    last_error: OSError | None = None
+    for ip in _vetted_addresses(host):
+        try:
+            return socket.create_connection((ip, port), timeout, source_address)
+        except OSError as exc:
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    raise OSError("could not connect")
+
+
+class _PinnedConnection:
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._create_connection = _pinned_create_connection
+
+
+class _PinnedHTTPConnection(_PinnedConnection, http.client.HTTPConnection):
+    pass
+
+
+class _PinnedHTTPSConnection(_PinnedConnection, http.client.HTTPSConnection):
+    pass
+
+
+class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+    def do_open(self, http_class, req, **http_conn_args):
+        return super().do_open(_PinnedHTTPConnection, req, **http_conn_args)
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def do_open(self, http_class, req, **http_conn_args):
+        return super().do_open(_PinnedHTTPSConnection, req, **http_conn_args)
 
 
 def default_download_path(url: str, host: str, extension: str = ".html") -> str:
@@ -250,6 +304,8 @@ def _open_request(request: urllib.request.Request) -> tuple[int, str, bytes]:
     opener = urllib.request.build_opener(
         _CheckedRedirectHandler,
         urllib.request.ProxyHandler({}),
+        _PinnedHTTPHandler,
+        _PinnedHTTPSHandler,
     )
     try:
         with opener.open(request, timeout=FETCH_TIMEOUT) as response:
@@ -420,12 +476,16 @@ def _request_bytes(json_body, body, headers: dict[str, str]) -> bytes | None:
 
 
 def _http_opener(follow_redirects: bool) -> urllib.request.OpenerDirector:
-    proxy = urllib.request.ProxyHandler({})
+    shared = (
+        urllib.request.ProxyHandler({}),
+        _PinnedHTTPHandler,
+        _PinnedHTTPSHandler,
+    )
     if follow_redirects:
         return urllib.request.build_opener(
-            proxy, _CheckedRedirectHandler, _RedirectOrReturn
+            *shared, _CheckedRedirectHandler, _RedirectOrReturn
         )
-    return urllib.request.build_opener(proxy, _ReturnStatus)
+    return urllib.request.build_opener(*shared, _ReturnStatus)
 
 
 def _read_capped(response, limit: int) -> tuple[bytes, bool]:

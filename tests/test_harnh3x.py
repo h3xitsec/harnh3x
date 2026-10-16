@@ -5714,6 +5714,93 @@ def test_http_request_blocks_targets_and_bad_arguments(tmp_path):
     )
 
 
+def _dns(monkeypatch, *answers):
+    """Make getaddrinfo answer each resolution from the given addresses."""
+    pending = list(answers)
+
+    def getaddrinfo(host, port, *args, **kwargs):
+        if not pending:
+            raise AssertionError("unexpected DNS lookup")
+        answer = pending.pop(0)
+        addresses = answer if isinstance(answer, list) else [answer]
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, port or 0))
+            for address in addresses
+        ]
+
+    monkeypatch.setattr(tools.http.socket, "getaddrinfo", getaddrinfo)
+    return pending
+
+
+def test_http_tools_block_a_dns_answer_that_flips_before_connecting(
+    tmp_path, monkeypatch
+):
+    def no_socket(*args, **kwargs):
+        raise AssertionError("socket opened")
+
+    monkeypatch.setattr(tools.http.socket, "create_connection", no_socket)
+
+    _dns(monkeypatch, "1.1.1.1", "127.0.0.1")
+    result = execute_tool(
+        "http_request", {"method": "GET", "url": "http://rebind.test/"}, tmp_path
+    )
+    assert result == "Error: blocked host"
+
+    _dns(monkeypatch, "1.1.1.1", "169.254.169.254")
+    result = execute_tool("fetch_url", {"url": "http://rebind.test/"}, tmp_path)
+    assert result == "Error: blocked host"
+    assert not (tmp_path / "downloads").exists()
+
+
+def test_pinned_connection_uses_the_vetted_address(monkeypatch):
+    seen = []
+
+    def create_connection(address, timeout=None, source_address=None):
+        seen.append((address, timeout, source_address))
+        if address[0] == "1.0.0.1":
+            raise OSError("unreachable")
+        return "sock"
+
+    monkeypatch.setattr(tools.http.socket, "create_connection", create_connection)
+
+    _dns(monkeypatch, ["1.0.0.1", "1.1.1.1"])
+    assert tools.http._pinned_create_connection(("dns.test", 443), 5, None) == "sock"
+    assert seen == [
+        (("1.0.0.1", 443), 5, None),
+        (("1.1.1.1", 443), 5, None),
+    ]
+
+    seen.clear()
+    _dns(monkeypatch, ["1.1.1.1", "10.0.0.5"])
+    with pytest.raises(ValueError, match="blocked host"):
+        tools.http._pinned_create_connection(("dns.test", 80), 5, None)
+    assert seen == []
+
+    _dns(monkeypatch, ["10.0.0.5"])
+    token = tools.paths._yolo.set(True)
+    try:
+        assert tools.http._pinned_create_connection(("dns.test", 80), 5, None) == "sock"
+    finally:
+        tools.paths._yolo.reset(token)
+    assert seen == [(("10.0.0.5", 80), 5, None)]
+
+    _dns(monkeypatch, ["1.0.0.1"])
+    with pytest.raises(OSError, match="unreachable"):
+        tools.http._pinned_create_connection(("dns.test", 80), 5, None)
+
+
+def test_http_openers_pin_every_connection():
+    for opener in (tools.http._http_opener(True), tools.http._http_opener(False)):
+        kinds = {type(handler) for handler in opener.handlers}
+        assert tools.http._PinnedHTTPHandler in kinds
+        assert tools.http._PinnedHTTPSHandler in kinds
+        assert urllib.request.HTTPHandler not in kinds
+        assert urllib.request.HTTPSHandler not in kinds
+    connection = tools.http._PinnedHTTPSConnection("dns.test")
+    assert connection._create_connection is tools.http._pinned_create_connection
+    assert connection.host == "dns.test"
+
+
 def test_http_request_posts_json_and_returns_status(tmp_path, monkeypatch):
     seen = _install_http(
         monkeypatch,
