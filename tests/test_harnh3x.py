@@ -3765,15 +3765,17 @@ def test_click_toggles_the_thinking_box_that_was_hit():
             assert "click to expand" in (first.border_subtitle or "")
             assert "alpha" not in first.plain
             assert "one" not in second.plain
-            await pilot.click(first)
+            # Click inside the body: the anchored transcript scrolls when a
+            # panel grows, which can push a panel's top border out of view.
+            await pilot.click(first, offset=(2, 2))
             assert "alpha" in first.plain
             assert "click to collapse" in (first.border_subtitle or "")
             assert "one" not in second.plain
-            await pilot.click(second)
+            await pilot.click(second, offset=(2, 2))
             assert "four" in second.plain
             assert "one" in second.plain
             assert first.expanded
-            await pilot.click(first)
+            await pilot.click(first, offset=(2, 2))
             assert "alpha" not in first.plain
             assert second.expanded
 
