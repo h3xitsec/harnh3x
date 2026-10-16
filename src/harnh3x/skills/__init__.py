@@ -26,6 +26,7 @@ _SHELL_OPEN = """- The working directory is the workspace, or the project when o
 
 SKILLS_DIR = Path(__file__).resolve().parent
 
+# Budget for a shipped SKILL.md, checked by the test suite.
 _METADATA_TOKEN_LIMIT = 100
 _BODY_TOKEN_LIMIT = 5000
 _NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -329,10 +330,6 @@ class SkillRegistry:
         _live_registries.discard(self)
         for client in self._clients.values():
             client.close()
-
-    def kill(self) -> None:
-        for client in self._clients.values():
-            client.kill()
 
     def loaded_names(self) -> list[str]:
         return sorted(self._active)

@@ -150,15 +150,6 @@ class McpClient:
             self.close()
             raise
 
-    def kill(self) -> None:
-        proc = self._proc
-        if proc is None or proc.poll() is not None:
-            return
-        try:
-            proc.kill()
-        except OSError:
-            pass
-
     def close(self) -> None:
         proc = self._proc
         self._proc = None
