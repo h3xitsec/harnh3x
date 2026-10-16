@@ -1536,6 +1536,32 @@ def test_compact_session_forces_a_summary_under_the_threshold(tmp_path):
     assert "forced summary" in saved["messages"][1]["content"]
 
 
+def test_compact_keeps_the_scaled_estimate_not_the_summary_usage(tmp_path):
+    session = agent.Session(workspace=tmp_path, model="custom-model")
+    _prior_turn(session)
+    session.messages[2]["content"] = "did the earlier work " + ("x" * 800)
+    session.messages.append({"role": "user", "content": "later"})
+    session.messages.append({"role": "assistant", "content": "answered"})
+    session.context_tokens = 900
+    session.context_limit = 1000
+
+    def create(**kwargs):
+        return _completion("short summary", 7)
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+
+    assert agent.compact_session(session, client=client) == "Context compacted."
+    note = session.messages[1]
+    assert note["context_before"] == 900
+    assert session.context_tokens == note["context_after"]
+    assert session.context_tokens != 7
+    assert 1 <= session.context_tokens < 900
+    saved = json.loads((tmp_path / TRANSCRIPT_FILE).read_text(encoding="utf-8"))
+    assert saved["context_tokens"] == note["context_after"]
+
+
 def test_compact_session_reports_when_there_is_nothing_to_compact(tmp_path):
     def create(**kwargs):
         raise AssertionError("should not call the model")
@@ -6809,7 +6835,7 @@ def test_compact_session_uses_the_messages_api(tmp_path, monkeypatch):
     assert seen[0]["system"].startswith("Summarize")
     assert "tools" not in seen[0]
     assert all(message["role"] != "system" for message in seen[0]["messages"])
-    assert session.context_tokens == 7
+    assert session.context_tokens == session.messages[1]["context_after"]
     assert session.messages[1]["content"].startswith(
         "Context compacted:\nforced summary"
     )

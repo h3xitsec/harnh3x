@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from openai import OpenAI
 
 import harnh3x.agent.client as api_client
-from harnh3x.agent.client import _count, _remember_context
+from harnh3x.agent.client import _count
 from harnh3x.agent.session import Session
 from harnh3x.agent.transcript import _save_transcript, write_log
 from harnh3x.anthropic_api import AnthropicClient
@@ -210,7 +210,15 @@ def _compact(session: Session, api, *, force: bool = False) -> bool:
         before = session.context_tokens
         session.messages = [session.messages[0], note, *tail]
         session.sync_prompt()
-        _remember_context(session, response, api)
+        # The summary call's usage describes the summary request, not the
+        # compacted history, so keep the scaled estimate until the next
+        # completion reports real usage.
+        if before_tokens is not None:
+            session.context_tokens = note["context_after"]
+        if session.context_limit is None:
+            limit = api_client.model_context_limit(session.model, api)
+            if limit is not None:
+                session.context_limit = limit
         write_log(
             {"event": "compact", "before": before, "dropped": len(middle)},
             session.workspace,
