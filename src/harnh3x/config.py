@@ -159,7 +159,41 @@ def resolve_settings(
             continue
         resolved[spec.attr] = spec.default
     _apply_provider(resolved, origins, file_values, environ, path)
+    _validate_ranges(resolved, origins)
     return resolved
+
+
+_POSITIVE_SETTINGS = (
+    ("MAX_TURNS", "max_turns"),
+    ("MAX_TOOL_RESULT", "max_tool_result"),
+    ("FETCH_TIMEOUT", "fetch_timeout"),
+    ("FETCH_MAX_BYTES", "fetch_max_bytes"),
+    ("SEARCH_MAX_RESULTS", "search_max_results"),
+    ("FEED_MAX_ITEMS", "feed_max_items"),
+    ("SHELL_TIMEOUT", "shell_timeout"),
+    ("SHELL_MAX_TIMEOUT", "shell_max_timeout"),
+    ("SHELL_MAX_OUTPUT", "shell_max_output"),
+    ("LIST_FILES_MAX", "list_files_max"),
+    ("SEARCH_FILES_MAX", "search_files_max"),
+    ("PDF_MAX_PAGES", "pdf_max_pages"),
+    ("PREVIEW_ROWS", "preview_rows"),
+)
+
+
+def _validate_ranges(resolved: dict[str, object], origins: dict[str, str]) -> None:
+    for attr, label in _POSITIVE_SETTINGS:
+        _require_positive(resolved, origins, attr, label)
+    redirects = resolved["FETCH_MAX_REDIRECTS"]
+    if not isinstance(redirects, int) or isinstance(redirects, bool) or redirects < 0:
+        origin = origins.get("FETCH_MAX_REDIRECTS", "fetch_max_redirects")
+        raise SystemExit(f"{origin}: must be zero or a positive integer")
+    compact_at = resolved["COMPACT_AT"]
+    if not isinstance(compact_at, float) or not 0 < compact_at <= 1:
+        origin = origins.get("COMPACT_AT", "compact_at")
+        raise SystemExit(f"{origin}: must be greater than 0 and at most 1")
+    if resolved["SHELL_MAX_TIMEOUT"] < resolved["SHELL_TIMEOUT"]:
+        origin = origins.get("SHELL_MAX_TIMEOUT", "shell_max_timeout")
+        raise SystemExit(f"{origin}: shell_max_timeout must be at least shell_timeout")
 
 
 def _apply_provider(

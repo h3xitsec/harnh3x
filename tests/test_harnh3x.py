@@ -6514,6 +6514,77 @@ def test_config_file_rejects_unknown_keys_and_bad_numbers():
         config.resolve_settings(values, {}, path)
 
 
+@pytest.mark.parametrize(
+    "key",
+    [
+        "max_tokens",
+        "max_turns",
+        "max_tool_result",
+        "fetch_timeout",
+        "fetch_max_bytes",
+        "search_max_results",
+        "feed_max_items",
+        "shell_timeout",
+        "shell_max_timeout",
+        "shell_max_output",
+        "list_files_max",
+        "search_files_max",
+        "pdf_max_pages",
+        "preview_rows",
+    ],
+)
+@pytest.mark.parametrize("raw", ["0", "-1"])
+def test_counts_and_limits_must_be_positive(key, raw):
+    path = Path("demo.yaml")
+    with pytest.raises(
+        SystemExit, match=rf"demo.yaml: {key}: must be a positive integer"
+    ):
+        values, _servers = config.parse_config(f"{key}: {raw}\n", path)
+        config.resolve_settings(values, {}, path)
+    env = "HARNH3X_" + key.upper()
+    with pytest.raises(SystemExit, match=rf"{env}: must be a positive integer"):
+        config.resolve_settings({}, {env: raw}, path)
+
+
+def test_range_checked_settings():
+    path = Path("demo.yaml")
+
+    def resolve(text):
+        values, _servers = config.parse_config(text, path)
+        return config.resolve_settings(values, {}, path)
+
+    assert resolve("fetch_max_redirects: 0\n")["FETCH_MAX_REDIRECTS"] == 0
+    with pytest.raises(
+        SystemExit,
+        match=r"demo.yaml: fetch_max_redirects: must be zero or a positive integer",
+    ):
+        resolve("fetch_max_redirects: -1\n")
+
+    assert resolve("compact_at: 1\n")["COMPACT_AT"] == 1.0
+    assert resolve("compact_at: 0.25\n")["COMPACT_AT"] == 0.25
+    for raw in ("0", "-0.5", "1.5"):
+        with pytest.raises(
+            SystemExit,
+            match=r"demo.yaml: compact_at: must be greater than 0 and at most 1",
+        ):
+            resolve(f"compact_at: {raw}\n")
+    with pytest.raises(
+        SystemExit, match=r"HARNH3X_COMPACT_AT: must be greater than 0 and at most 1"
+    ):
+        config.resolve_settings({}, {"HARNH3X_COMPACT_AT": "2"}, path)
+
+    assert resolve("shell_timeout: 30\nshell_max_timeout: 30\n")["SHELL_TIMEOUT"] == 30
+    with pytest.raises(
+        SystemExit,
+        match=r"demo.yaml: shell_max_timeout: shell_max_timeout must be at least shell_timeout",
+    ):
+        resolve("shell_timeout: 60\nshell_max_timeout: 30\n")
+    with pytest.raises(
+        SystemExit, match=r"shell_max_timeout: shell_max_timeout must be at least"
+    ):
+        resolve("shell_timeout: 500\n")
+
+
 def test_environment_overrides_the_config_file():
     path = Path("harnh3x.yaml")
     values, _servers = config.parse_config(
