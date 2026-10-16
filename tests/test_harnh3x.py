@@ -6137,6 +6137,22 @@ def test_read_docx_truncation_saves_a_text_copy(tmp_path):
     assert (tmp_path / "long.txt").read_text().startswith("Paragraph 0")
 
 
+def test_read_docx_refuses_an_oversized_document_part(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools.documents, "FETCH_MAX_BYTES", 2_000)
+    # The member size from the zip directory is checked before any bytes
+    # are inflated.
+    (tmp_path / "bomb.docx").write_bytes(_docx_bytes(["x" * 5_000]))
+
+    result = execute_tool("read_docx", {"path": "bomb.docx"}, tmp_path)
+
+    assert result.startswith("Error: document.xml is ")
+    assert "larger than the 2000 byte limit" in result
+    assert not (tmp_path / "bomb.txt").exists()
+
+    (tmp_path / "ok.docx").write_bytes(_docx_bytes(["fits"]))
+    assert "fits" in execute_tool("read_docx", {"path": "ok.docx"}, tmp_path)
+
+
 # --- data -----------------------------------------------------------------
 
 

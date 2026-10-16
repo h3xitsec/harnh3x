@@ -28,7 +28,7 @@ HTTP: `validate_url` allows only `http` and `https`, with no userinfo. Resolve t
 
 `web_search` POSTs the query to DuckDuckGo's HTML results page with optional `site:` and `df=` (`time` in `d`, `w`, `m`, `y`). Parse titles, snippets, and `uddg` redirect targets with the stdlib HTML parser. Drop a result whose URL is not public http(s). Default to 5 results and cap at `SEARCH_MAX_RESULTS`. Empty queries are `Error: query is required`. A page with nothing parseable is `Error: no results`. The result ends with `SEARCH_HINT` so the model reads pages instead of answering from snippets.
 
-`read_feed`, `read_docx`, and any other XML go through `_parse_xml`, which refuses `DOCTYPE` and `ENTITY` declarations before calling ElementTree. `get_json` accepts only `JSON_TYPES`; `http_get_json`, `wikipedia_search`, and `wikipedia_summary` build on it.
+`read_feed`, `read_docx`, and any other XML go through `_parse_xml`, which refuses `DOCTYPE` and `ENTITY` declarations before calling ElementTree. `read_docx` checks the `word/document.xml` member size against `FETCH_MAX_BYTES` before inflating it. `get_json` accepts only `JSON_TYPES`; `http_get_json`, `wikipedia_search`, and `wikipedia_summary` build on it.
 
 `remember` / `recall` keep `## key` sections in `BASE_DIR/MEMORY_FILE` (`~/.harnh3x/memory.md` by default), shared across sessions and outside the workspace. `memory_keys` reads that file for the system prompt. `write_plan` / `update_plan` / `show_plan` keep `N. [ ]` lines in `PLAN_FILE` inside the workspace.
 

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pypdf
 
-from harnh3x.config import MAX_TOOL_RESULT, PDF_MAX_PAGES
+from harnh3x.config import FETCH_MAX_BYTES, MAX_TOOL_RESULT, PDF_MAX_PAGES
 from harnh3x.tools.paths import (
     _path_param,
     _positive_int,
@@ -124,7 +124,13 @@ _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 def _docx_paragraphs(path: Path) -> list[str]:
     try:
         with zipfile.ZipFile(path) as archive:
-            document = archive.read("word/document.xml")
+            info = archive.getinfo("word/document.xml")
+            if info.file_size > FETCH_MAX_BYTES:
+                raise ValueError(
+                    f"document.xml is {info.file_size} bytes, "
+                    f"larger than the {FETCH_MAX_BYTES} byte limit"
+                )
+            document = archive.read(info)
     except (zipfile.BadZipFile, KeyError) as exc:
         raise ValueError("not a .docx file") from exc
     root = _parse_xml(document)
