@@ -20,25 +20,31 @@ from harnh3x.tui.text import (
 )
 
 
-class _Expandable(Static):
+class CollapsiblePanel(Static):
+    """A bordered panel that keeps its last rows until a click expands it.
+
+    Subclasses set ``title`` and return the full text from ``body()``; the
+    panel wraps it, decides whether it overflows, and keeps the hint in the
+    border subtitle current.
+    """
+
+    title = ""
+
+    def __init__(self, *, classes: str = "panel trace", hold: bool = False) -> None:
+        super().__init__("", markup=False, classes=classes)
+        self.expanded = False
+        self.hold = hold
+        self.plain = ""
+        self._expandable = False
+
+    def body(self) -> str:
+        raise NotImplementedError
+
     def on_click(self, event: Click) -> None:
         event.stop()
         if self.text_selection is not None:
             return
         self.toggle()
-
-    def toggle(self) -> None:
-        raise NotImplementedError
-
-
-class Thinking(_Expandable):
-    def __init__(self, reasoning: str, *, hold: bool) -> None:
-        super().__init__("", markup=False, classes="panel trace")
-        self.reasoning = reasoning
-        self.expanded = False
-        self.hold = hold
-        self.plain = ""
-        self._sync(80)
 
     def on_mount(self) -> None:
         self._sync(self.size.width or 80)
@@ -52,16 +58,16 @@ class Thinking(_Expandable):
         self.expanded = not self.expanded
         self._sync(self.size.width or 80)
 
-    def append(self, text: str) -> None:
-        self.reasoning += text
+    def refresh_body(self) -> None:
         self._sync(self.size.width or 80)
 
     def _sync(self, width: int) -> None:
+        text = self.body()
         inner = _panel_inner_width(self, width)
-        self._expandable = thinking_overflows(self.reasoning, width=inner)
+        self._expandable = thinking_overflows(text, width=inner)
         if not self._expandable:
             self.expanded = False
-        self.border_title = "Thinking"
+        self.border_title = self.title
         if self._expandable:
             self.border_subtitle = thinking_hint(
                 expanded=self.expanded, hold=self.hold, click=True
@@ -71,13 +77,25 @@ class Thinking(_Expandable):
         else:
             self.border_subtitle = ""
         self.plain = "\n".join(
-            thinking_shown(
-                self.reasoning,
-                expanded=self.expanded,
-                width=inner,
-            )
+            thinking_shown(text, expanded=self.expanded, width=inner)
         )
         self.update(self.plain)
+
+
+class Thinking(CollapsiblePanel):
+    title = "Thinking"
+
+    def __init__(self, reasoning: str, *, hold: bool) -> None:
+        super().__init__(hold=hold)
+        self.reasoning = reasoning
+        self._sync(80)
+
+    def body(self) -> str:
+        return self.reasoning
+
+    def append(self, text: str) -> None:
+        self.reasoning += text
+        self.refresh_body()
 
 
 class AnswerIcon(Static, can_focus=True):
@@ -237,82 +255,31 @@ class AgentAnswer(Vertical):
                 self._kick()
 
 
-class DebugBox(_Expandable):
+class DebugBox(CollapsiblePanel):
     def __init__(self, title: str, body: str) -> None:
-        super().__init__("", markup=False, classes="panel trace debug")
+        super().__init__(classes="panel trace debug")
         self.title = title
-        self.body = body
-        self.expanded = False
+        self.source = body
         self._sync(80)
 
-    def on_mount(self) -> None:
-        self._sync(self.size.width or 80)
-
-    def on_resize(self, event) -> None:
-        self._sync(event.size.width or 80)
-
-    def toggle(self) -> None:
-        if not self._expandable:
-            return
-        self.expanded = not self.expanded
-        self._sync(self.size.width or 80)
-
-    def _sync(self, width: int) -> None:
-        inner = _panel_inner_width(self, width)
-        self._expandable = thinking_overflows(self.body, width=inner)
-        if not self._expandable:
-            self.expanded = False
-        self.border_title = self.title
-        if self._expandable:
-            self.border_subtitle = thinking_hint(
-                expanded=self.expanded, hold=False, click=True
-            )
-        else:
-            self.border_subtitle = ""
-        self.update(
-            "\n".join(thinking_shown(self.body, expanded=self.expanded, width=inner))
-        )
+    def body(self) -> str:
+        return self.source
 
 
-class ToolBox(_Expandable):
+class ToolBox(CollapsiblePanel):
+    title = "Tools"
+
     def __init__(self) -> None:
-        super().__init__("", markup=False, classes="panel trace")
+        super().__init__()
         self.lines: list[str] = []
-        self.expanded = False
         self._sync(80)
 
-    def on_mount(self) -> None:
-        self._sync(self.size.width or 80)
-
-    def on_resize(self, event) -> None:
-        self._sync(event.size.width or 80)
-
-    def toggle(self) -> None:
-        if not self._expandable:
-            return
-        self.expanded = not self.expanded
-        self._sync(self.size.width or 80)
+    def body(self) -> str:
+        return "\n".join(self.lines)
 
     def add(self, name: str, args: object) -> None:
         self.lines.append(f"🔧 {name}({args})")
-        self._sync(self.size.width or 80)
-
-    def _sync(self, width: int) -> None:
-        text = "\n".join(self.lines)
-        inner = _panel_inner_width(self, width)
-        self._expandable = thinking_overflows(text, width=inner)
-        if not self._expandable:
-            self.expanded = False
-        self.border_title = "Tools"
-        if self._expandable:
-            self.border_subtitle = thinking_hint(
-                expanded=self.expanded, hold=False, click=True
-            )
-        else:
-            self.border_subtitle = ""
-        self.update(
-            "\n".join(thinking_shown(text, expanded=self.expanded, width=inner))
-        )
+        self.refresh_body()
 
 
 class Composer(TextArea):

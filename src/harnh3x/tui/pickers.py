@@ -13,8 +13,21 @@ from textual.widgets import OptionList, Static
 from harnh3x.agent import session_label
 from harnh3x.tui.export import answer_preview
 
+_PROMPT = "Use up/down and Enter, or type a number."
+_BACK = "Press Enter or Escape to go back."
+_CANCEL = Binding("escape", "cancel", "Cancel", priority=True)
 
-class ModelScreen(Screen):
+
+class NumberedPicker(Screen):
+    """A heading, a numbered option list, and a status line.
+
+    Arrow keys move the highlight; typed digits follow it and Enter picks.
+    Subclasses set the class attributes, build the labels, and implement
+    ``choose``. ``extra_label`` adds one trailing option outside the
+    numbered range that ``choose_extra`` handles. ``empty_text`` replaces
+    the list when there is nothing to pick.
+    """
+
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("enter", "choose", "Choose", priority=True),
         Binding("up", "move_up", "Up", priority=True),
@@ -22,26 +35,47 @@ class ModelScreen(Screen):
         Binding("backspace", "backspace", "Backspace", priority=True),
     ]
 
-    def __init__(self, models: list[str]) -> None:
+    heading: ClassVar[str] = ""
+    option_id: ClassVar[str] = ""
+    cancellable: ClassVar[bool] = False
+    empty_text: ClassVar[str | None] = None
+    extra_label: ClassVar[str | None] = None
+
+    def __init__(self, labels: list[str]) -> None:
         super().__init__()
-        self.models = models
+        self.labels = labels
         self.digits = ""
         self.error = ""
 
+    def choose(self, index: int) -> None:
+        raise NotImplementedError
+
+    def choose_extra(self) -> None:
+        self.dismiss(None)
+
+    @property
+    def _empty(self) -> bool:
+        return not self.labels and self.empty_text is not None
+
+    @property
+    def _prompt(self) -> str:
+        return f"{_PROMPT} Escape cancels." if self.cancellable else _PROMPT
+
     def compose(self) -> ComposeResult:
-        yield Static("Available models:", markup=False)
-        yield ModelOptions(
-            *[f"{index + 1}. {name}" for index, name in enumerate(self.models)],
-            id="models",
-        )
-        yield Static(
-            "Use up/down and Enter, or type a number.",
-            id="status",
-            markup=False,
-        )
+        if self._empty:
+            yield Static(self.empty_text or "", markup=False)
+            yield Static(_BACK, id="status", markup=False)
+            return
+        yield Static(self.heading, markup=False)
+        options = list(self.labels)
+        if self.extra_label is not None:
+            options.append(self.extra_label)
+        yield NumberedOptions(*options, id=self.option_id)
+        yield Static(self._prompt, id="status", markup=False)
 
     def on_mount(self) -> None:
-        self.query_one(ModelOptions).focus()
+        if not self._empty:
+            self.query_one(NumberedOptions).focus()
 
     def add_digit(self, digit: str) -> None:
         self.error = ""
@@ -59,53 +93,89 @@ class ModelScreen(Screen):
         self.digits = ""
         self.error = ""
         self._refresh_status()
-        self.query_one(ModelOptions).action_cursor_up()
+        if not self._empty:
+            self.query_one(NumberedOptions).action_cursor_up()
 
     def action_move_down(self) -> None:
         self.digits = ""
         self.error = ""
         self._refresh_status()
-        self.query_one(ModelOptions).action_cursor_down()
+        if not self._empty:
+            self.query_one(NumberedOptions).action_cursor_down()
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
     def action_choose(self) -> None:
+        if self._empty:
+            self.dismiss(None)
+            return
+        count = len(self.labels)
         if self.digits == "":
-            highlighted = self.query_one(ModelOptions).highlighted
+            highlighted = self.query_one(NumberedOptions).highlighted
             if highlighted is None:
                 return
-            self.dismiss(self.models[highlighted])
+            if highlighted >= count:
+                self.choose_extra()
+                return
+            self.choose(highlighted)
             return
         number = int(self.digits)
-        if str(number) == self.digits and 1 <= number <= len(self.models):
-            self.dismiss(self.models[number - 1])
+        if str(number) == self.digits and 1 <= number <= count:
+            self.choose(number - 1)
             return
-        self.error = f"Enter a number from 1 to {len(self.models)}."
+        self.error = self._range_error(count)
         self.digits = ""
         self._refresh_status()
+
+    def _range_error(self, count: int) -> str:
+        if self.extra_label is not None:
+            return f"Enter a number from 1 to {count}, or choose {self.extra_label}."
+        return f"Enter a number from 1 to {count}."
 
     def _follow_digits(self) -> None:
         if self.digits.isdigit() and str(int(self.digits)) == self.digits:
             number = int(self.digits)
-            if 1 <= number <= len(self.models):
-                self.query_one(ModelOptions).highlighted = number - 1
+            if 1 <= number <= len(self.labels):
+                self.query_one(NumberedOptions).highlighted = number - 1
 
     def _refresh_status(self) -> None:
-        if self.error:
+        if self._empty:
+            text = _BACK
+        elif self.error:
             text = self.error
         elif self.digits:
             text = f"Number: {self.digits}"
         else:
-            text = "Use up/down and Enter, or type a number."
+            text = self._prompt
         self.query_one("#status", Static).update(text)
 
 
-class ModelOptions(OptionList):
+class NumberedOptions(OptionList):
     def on_key(self, event: Key) -> None:
         if event.character and event.character.isdigit():
             event.stop()
             event.prevent_default()
             screen = self.screen
-            if isinstance(screen, ModelScreen):
+            if isinstance(screen, NumberedPicker):
                 screen.add_digit(event.character)
+
+
+ModelOptions = NumberedOptions
+ResumeOptions = NumberedOptions
+ExportOptions = NumberedOptions
+
+
+class ModelScreen(NumberedPicker):
+    heading = "Available models:"
+    option_id = "models"
+
+    def __init__(self, models: list[str]) -> None:
+        super().__init__([f"{index + 1}. {name}" for index, name in enumerate(models)])
+        self.models = models
+
+    def choose(self, index: int) -> None:
+        self.dismiss(self.models[index])
 
 
 class ModelApp(App[str]):
@@ -124,219 +194,43 @@ def pick_model(models: list[str]) -> str:
     return chosen
 
 
-class ResumeScreen(Screen):
-    BINDINGS: ClassVar[list[Binding]] = [
-        Binding("enter", "choose", "Choose", priority=True),
-        Binding("up", "move_up", "Up", priority=True),
-        Binding("down", "move_down", "Down", priority=True),
-        Binding("escape", "cancel", "Cancel", priority=True),
-        Binding("backspace", "backspace", "Backspace", priority=True),
-    ]
+class ResumeScreen(NumberedPicker):
+    BINDINGS: ClassVar[list[Binding]] = [_CANCEL]
+
+    heading = "Past sessions:"
+    option_id = "sessions"
+    cancellable = True
+    empty_text = "No past sessions."
 
     def __init__(self, sessions: list) -> None:
-        super().__init__()
+        super().__init__(
+            [session_label(info, index) for index, info in enumerate(sessions)]
+        )
         self.sessions = sessions
-        self.digits = ""
-        self.error = ""
 
-    def compose(self) -> ComposeResult:
-        if not self.sessions:
-            yield Static("No past sessions.", markup=False)
-            yield Static(
-                "Press Enter or Escape to go back.",
-                id="status",
-                markup=False,
-            )
-            return
-        yield Static("Past sessions:", markup=False)
-        yield ResumeOptions(
-            *[session_label(info, index) for index, info in enumerate(self.sessions)],
-            id="sessions",
-        )
-        yield Static(
-            "Use up/down and Enter, or type a number. Escape cancels.",
-            id="status",
-            markup=False,
-        )
-
-    def on_mount(self) -> None:
-        if self.sessions:
-            self.query_one(ResumeOptions).focus()
-
-    def add_digit(self, digit: str) -> None:
-        self.error = ""
-        self.digits += digit
-        self._follow_digits()
-        self._refresh_status()
-
-    def action_backspace(self) -> None:
-        self.error = ""
-        self.digits = self.digits[:-1]
-        self._follow_digits()
-        self._refresh_status()
-
-    def action_move_up(self) -> None:
-        self.digits = ""
-        self.error = ""
-        self._refresh_status()
-        if self.sessions:
-            self.query_one(ResumeOptions).action_cursor_up()
-
-    def action_move_down(self) -> None:
-        self.digits = ""
-        self.error = ""
-        self._refresh_status()
-        if self.sessions:
-            self.query_one(ResumeOptions).action_cursor_down()
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
-    def action_choose(self) -> None:
-        if not self.sessions:
-            self.dismiss(None)
-            return
-        if self.digits == "":
-            highlighted = self.query_one(ResumeOptions).highlighted
-            if highlighted is None:
-                return
-            self.dismiss(self.sessions[highlighted])
-            return
-        number = int(self.digits)
-        if str(number) == self.digits and 1 <= number <= len(self.sessions):
-            self.dismiss(self.sessions[number - 1])
-            return
-        self.error = f"Enter a number from 1 to {len(self.sessions)}."
-        self.digits = ""
-        self._refresh_status()
-
-    def _follow_digits(self) -> None:
-        if self.digits.isdigit() and str(int(self.digits)) == self.digits:
-            number = int(self.digits)
-            if 1 <= number <= len(self.sessions):
-                self.query_one(ResumeOptions).highlighted = number - 1
-
-    def _refresh_status(self) -> None:
-        if not self.sessions:
-            text = "Press Enter or Escape to go back."
-        elif self.error:
-            text = self.error
-        elif self.digits:
-            text = f"Number: {self.digits}"
-        else:
-            text = "Use up/down and Enter, or type a number. Escape cancels."
-        self.query_one("#status", Static).update(text)
+    def choose(self, index: int) -> None:
+        self.dismiss(self.sessions[index])
 
 
-class ResumeOptions(OptionList):
-    def on_key(self, event: Key) -> None:
-        if event.character and event.character.isdigit():
-            event.stop()
-            event.prevent_default()
-            screen = self.screen
-            if isinstance(screen, ResumeScreen):
-                screen.add_digit(event.character)
+class ExportScreen(NumberedPicker):
+    BINDINGS: ClassVar[list[Binding]] = [_CANCEL]
 
-
-class ExportScreen(Screen):
-    BINDINGS: ClassVar[list[Binding]] = [
-        Binding("enter", "choose", "Choose", priority=True),
-        Binding("up", "move_up", "Up", priority=True),
-        Binding("down", "move_down", "Down", priority=True),
-        Binding("escape", "cancel", "Cancel", priority=True),
-        Binding("backspace", "backspace", "Backspace", priority=True),
-    ]
+    heading = "Responses:"
+    option_id = "exports"
+    cancellable = True
+    extra_label = "All"
 
     def __init__(self, answers: list[str]) -> None:
-        super().__init__()
-        self.answers = answers
-        self.digits = ""
-        self.error = ""
-
-    def compose(self) -> ComposeResult:
-        yield Static("Responses:", markup=False)
-        labels = [
-            f"{index + 1}. {answer_preview(answer)}"
-            for index, answer in enumerate(self.answers)
-        ]
-        labels.append("All")
-        yield ExportOptions(*labels, id="exports")
-        yield Static(
-            "Use up/down and Enter, or type a number. Escape cancels.",
-            id="status",
-            markup=False,
+        super().__init__(
+            [
+                f"{index + 1}. {answer_preview(answer)}"
+                for index, answer in enumerate(answers)
+            ]
         )
+        self.answers = answers
 
-    def on_mount(self) -> None:
-        self.query_one(ExportOptions).focus()
+    def choose(self, index: int) -> None:
+        self.dismiss([self.answers[index]])
 
-    def add_digit(self, digit: str) -> None:
-        self.error = ""
-        self.digits += digit
-        self._follow_digits()
-        self._refresh_status()
-
-    def action_backspace(self) -> None:
-        self.error = ""
-        self.digits = self.digits[:-1]
-        self._follow_digits()
-        self._refresh_status()
-
-    def action_move_up(self) -> None:
-        self.digits = ""
-        self.error = ""
-        self._refresh_status()
-        self.query_one(ExportOptions).action_cursor_up()
-
-    def action_move_down(self) -> None:
-        self.digits = ""
-        self.error = ""
-        self._refresh_status()
-        self.query_one(ExportOptions).action_cursor_down()
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
-    def action_choose(self) -> None:
-        count = len(self.answers)
-        if self.digits == "":
-            highlighted = self.query_one(ExportOptions).highlighted
-            if highlighted is None:
-                return
-            if highlighted == count:
-                self.dismiss(list(self.answers))
-                return
-            self.dismiss([self.answers[highlighted]])
-            return
-        number = int(self.digits)
-        if str(number) == self.digits and 1 <= number <= count:
-            self.dismiss([self.answers[number - 1]])
-            return
-        self.error = f"Enter a number from 1 to {count}, or choose All."
-        self.digits = ""
-        self._refresh_status()
-
-    def _follow_digits(self) -> None:
-        if self.digits.isdigit() and str(int(self.digits)) == self.digits:
-            number = int(self.digits)
-            if 1 <= number <= len(self.answers):
-                self.query_one(ExportOptions).highlighted = number - 1
-
-    def _refresh_status(self) -> None:
-        if self.error:
-            text = self.error
-        elif self.digits:
-            text = f"Number: {self.digits}"
-        else:
-            text = "Use up/down and Enter, or type a number. Escape cancels."
-        self.query_one("#status", Static).update(text)
-
-
-class ExportOptions(OptionList):
-    def on_key(self, event: Key) -> None:
-        if event.character and event.character.isdigit():
-            event.stop()
-            event.prevent_default()
-            screen = self.screen
-            if isinstance(screen, ExportScreen):
-                screen.add_digit(event.character)
+    def choose_extra(self) -> None:
+        self.dismiss(list(self.answers))

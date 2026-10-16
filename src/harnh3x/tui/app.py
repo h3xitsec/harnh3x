@@ -734,7 +734,7 @@ class HarnessApp(App):
             self._hold_close = True
             for block in self.query(Thinking):
                 block.hold = True
-                block._sync(block.size.width or 80)
+                block.refresh_body()
             return
         self.exit()
 
