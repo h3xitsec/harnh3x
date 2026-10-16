@@ -69,8 +69,9 @@ def _complete(
             _compact(session, api)
             return _visible_answer(stored)
 
-        for tc in msg.tool_calls:
+        for position, tc in enumerate(msg.tool_calls):
             if session.abort.is_set():
+                _answer_interrupted(session, msg.tool_calls[position:])
                 return ""
             args, result = _tool_result(
                 tc.function.name,
@@ -118,6 +119,26 @@ def _complete(
             )
 
     return _close_with(session, "Max turns reached.", compact=api)
+
+
+INTERRUPTED_RESULT = "Error: interrupted before this tool ran"
+
+
+def _answer_interrupted(session: Session, tool_calls) -> None:
+    # Every tool call the model made needs a result, or the next completion
+    # and a later /resume send an assistant turn the API rejects.
+    for tc in tool_calls:
+        write_log(
+            {
+                "event": "tool_result",
+                "name": tc.function.name,
+                "content": INTERRUPTED_RESULT,
+            },
+            session.workspace,
+        )
+        session.messages.append(
+            {"role": "tool", "tool_call_id": tc.id, "content": INTERRUPTED_RESULT}
+        )
 
 
 def _close_with(session: Session, text: str, compact=None) -> str:

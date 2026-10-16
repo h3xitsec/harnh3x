@@ -452,6 +452,49 @@ def test_abort_skips_the_next_completion(tmp_path):
     assert session.messages[-1]["role"] == "tool"
 
 
+def test_abort_answers_every_pending_tool_call(tmp_path):
+    def call(call_id):
+        return SimpleNamespace(
+            id=call_id,
+            type="function",
+            function=SimpleNamespace(name="load_skill", arguments='{"name": "shell"}'),
+        )
+
+    def create(**kwargs):
+        message = SimpleNamespace(
+            content=None, tool_calls=[call("call_1"), call("call_2"), call("call_3")]
+        )
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    session = agent.Session(workspace=tmp_path)
+
+    def on_tool(name, args):
+        session.abort.set()
+
+    assert agent.run("hello", session, client=client, on_tool=on_tool) == ""
+
+    tools = [m for m in session.messages if m["role"] == "tool"]
+    assert [m["tool_call_id"] for m in tools] == ["call_1", "call_2", "call_3"]
+    assert "shell" in tools[0]["content"]
+    assert tools[1]["content"] == agent_loop.INTERRUPTED_RESULT
+    assert tools[2]["content"] == agent_loop.INTERRUPTED_RESULT
+    saved = json.loads((tmp_path / TRANSCRIPT_FILE).read_text(encoding="utf-8"))
+    assert [m["tool_call_id"] for m in saved["messages"] if m["role"] == "tool"] == [
+        "call_1",
+        "call_2",
+        "call_3",
+    ]
+    events = [
+        json.loads(line) for line in (tmp_path / "session.log").read_text().splitlines()
+    ]
+    results = [e for e in events if e["event"] == "tool_result"]
+    assert len(results) == 3
+    assert results[2]["content"] == agent_loop.INTERRUPTED_RESULT
+
+
 def test_run_drops_a_partial_stream_when_the_api_drops(tmp_path):
     def create(**kwargs):
         def chunks():
