@@ -51,7 +51,9 @@ HARNH3X_MODEL=qwen3.5-128k
 
 Startup exits with a short error when `api_key` or `api_url` is missing from both the config file and the environment.
 
-`provider` is `openai` by default. Set it to `anthropic` to call Claude's Messages API. The key is then `ANTHROPIC_API_KEY` when that variable is set, otherwise `api_key`. `OPENAI_API_KEY` does not override the Claude key. `api_url` is optional in that mode and defaults to `https://api.anthropic.com`. `max_tokens` (default 8192) is sent on every Messages call, including compaction. `context_limit` sets the window used for compaction; when it is unset, Claude uses 200000.
+`provider` is `openai` by default. Set it to `anthropic` to call Claude's Messages API. The key is then `ANTHROPIC_API_KEY` when that variable is set, otherwise `api_key`. `OPENAI_API_KEY` does not override the Claude key. `api_url` is optional in that mode and defaults to `https://api.anthropic.com`. `max_tokens` (default 8192) is sent on every Messages call, including compaction.
+
+`context_limit` sets the window used for compaction with either provider. When it is unset, Claude uses 200000 and an OpenAI-compatible server is asked through Ollama's `/api/show`; a server without that endpoint leaves the limit unknown and compaction off until `context_limit` is set.
 
 ```yaml
 provider: anthropic

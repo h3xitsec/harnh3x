@@ -1251,6 +1251,18 @@ def test_model_context_limit_returns_none_when_show_fails(monkeypatch):
     assert agent.model_context_limit("m", SimpleNamespace()) is None
 
 
+def test_model_context_limit_prefers_the_configured_limit_for_openai(monkeypatch):
+    def urlopen(request, timeout=0):
+        raise AssertionError("show should not be called")
+
+    monkeypatch.setattr(agent_client.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(config, "CONTEXT_LIMIT", 32_000)
+    client = SimpleNamespace(base_url="http://host:11434/v1")
+
+    assert agent.model_context_limit("m", client) == 32_000
+    assert agent.model_context_limit("m", SimpleNamespace()) == 32_000
+
+
 def test_run_stores_the_latest_context_tokens(tmp_path):
     step = {"n": 0}
 

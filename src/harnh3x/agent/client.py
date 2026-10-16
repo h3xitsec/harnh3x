@@ -87,11 +87,11 @@ def _context_limit_from_show(payload: object) -> int | None:
 def model_context_limit(
     model: str, client: OpenAI | AnthropicClient | None = None
 ) -> int | None:
+    configured = _count(config.CONTEXT_LIMIT)
+    if configured is not None:
+        return configured
     api = client or get_client()
     if isinstance(api, AnthropicClient):
-        configured = _count(config.CONTEXT_LIMIT)
-        if configured is not None:
-            return configured
         return config.ANTHROPIC_CONTEXT_LIMIT
     url = _show_url(api)
     if url is None:
