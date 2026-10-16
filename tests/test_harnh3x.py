@@ -3127,7 +3127,7 @@ def test_compact_command_shows_the_note(monkeypatch):
         )
         return "Context compacted."
 
-    monkeypatch.setattr("harnh3x.tui.compact_session", fake_compact)
+    monkeypatch.setattr("harnh3x.tui.app.compact_session", fake_compact)
     session = SimpleNamespace(
         workspace="ws",
         model="m",
