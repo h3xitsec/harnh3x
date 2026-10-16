@@ -4504,22 +4504,33 @@ def test_abort_kills_a_running_shell_child(tmp_path):
         thread.join(timeout=2)
 
 
+class _FinishedProcess:
+    """A Popen stand-in for a child that already exited with no output."""
+
+    pid = 0
+    returncode = 0
+
+    def __init__(self, seen=None):
+        self.seen = {} if seen is None else seen
+        self.stdout = io.BytesIO(b"")
+        self.stderr = io.BytesIO(b"")
+        self.stdin = None
+
+    def poll(self):
+        return 0
+
+    def wait(self, timeout=None):
+        self.seen["timeout"] = timeout
+        return 0
+
+
 def test_shell_timeout_is_capped(tmp_path, monkeypatch):
     seen = {}
 
-    class Finished:
-        pid = 0
-        returncode = 0
-
-        def poll(self):
-            return 0
-
-        def communicate(self, input=None, timeout=None):
-            seen["timeout"] = timeout
-            return "", ""
-
     monkeypatch.setattr(
-        tools.process.subprocess, "Popen", lambda argv, **kwargs: Finished()
+        tools.process.subprocess,
+        "Popen",
+        lambda argv, **kwargs: _FinishedProcess(seen),
     )
 
     execute_tool("run_shell", {"command": "true", "timeout": 10_000}, tmp_path)
@@ -4750,21 +4761,11 @@ def test_yolo_reads_outside_the_workspace_and_keeps_writes_inside(tmp_path):
 def test_yolo_runs_sudo_without_the_seatbelt(tmp_path, monkeypatch):
     seen = {}
 
-    class Finished:
-        pid = 0
-        returncode = 0
-
-        def poll(self):
-            return 0
-
-        def communicate(self, input=None, timeout=None):
-            return "", ""
-
     def fake_popen(argv, **kwargs):
         seen["argv"] = argv
         seen["env"] = kwargs["env"]
         seen["shell"] = kwargs["shell"]
-        return Finished()
+        return _FinishedProcess()
 
     monkeypatch.setattr(tools.process.subprocess, "Popen", fake_popen)
 
@@ -4827,6 +4828,42 @@ def test_long_process_output_is_saved_for_read_file(tmp_path):
     rest = execute_tool("read_file", {"path": str(path), "offset": offset}, tmp_path)
     assert saved[len(prefix) :].splitlines()[0] in rest
     assert "0399-" in saved
+
+
+def test_process_output_past_the_cap_kills_the_child(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools.process, "SHELL_MAX_OUTPUT", 200_000)
+    # Without the cap this would run for the whole timeout.
+    code = (
+        "import sys\n"
+        "while True:\n"
+        "    sys.stdout.write('y' * 65536)\n"
+        "    sys.stdout.flush()\n"
+    )
+    started = datetime.now(UTC)
+
+    result = execute_tool("run_python", {"code": code, "timeout": 20}, tmp_path)
+
+    assert (datetime.now(UTC) - started).total_seconds() < 10
+    assert result.startswith("status: error\nexit_code: ")
+    assert "timed out" not in result
+    assert "\nnote: output exceeded 200000 bytes; the process was killed\n" in result
+    assert result.index("note:") < result.index("stdout:")
+    spilled = list((tmp_path / ".shell").glob("*.txt"))
+    assert len(spilled) == 1
+    assert spilled[0].stat().st_size <= 200_000 + 65536 + 500
+    assert not tools.process._children
+
+
+def test_process_stdin_and_mixed_streams_are_collected(tmp_path):
+    code = (
+        "import sys\n"
+        "data = sys.stdin.read()\n"
+        "sys.stdout.write(data.upper())\n"
+        "sys.stderr.write('warn\\n')\n"
+        "sys.exit(3)\n"
+    )
+    result = execute_tool("run_python", {"code": code, "stdin": "abc\néß"}, tmp_path)
+    assert result == "status: error\nexit_code: 3\nstdout:\nABC\nÉSS\nstderr:\nwarn\n"
 
 
 def test_yolo_python_reads_outside_the_workspace(tmp_path):

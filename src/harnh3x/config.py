@@ -81,6 +81,9 @@ _SETTINGS = {
     "shell_max_timeout": _Setting(
         "SHELL_MAX_TIMEOUT", "HARNH3X_SHELL_MAX_TIMEOUT", 120, int
     ),
+    "shell_max_output": _Setting(
+        "SHELL_MAX_OUTPUT", "HARNH3X_SHELL_MAX_OUTPUT", 1_000_000, int
+    ),
     "list_files_max": _Setting("LIST_FILES_MAX", "HARNH3X_LIST_FILES_MAX", 200, int),
     "search_files_max": _Setting(
         "SEARCH_FILES_MAX", "HARNH3X_SEARCH_FILES_MAX", 100, int
@@ -369,6 +372,7 @@ SEARCH_MAX_RESULTS = _loaded["SEARCH_MAX_RESULTS"]
 FEED_MAX_ITEMS = _loaded["FEED_MAX_ITEMS"]
 SHELL_TIMEOUT = _loaded["SHELL_TIMEOUT"]
 SHELL_MAX_TIMEOUT = _loaded["SHELL_MAX_TIMEOUT"]
+SHELL_MAX_OUTPUT = _loaded["SHELL_MAX_OUTPUT"]
 LIST_FILES_MAX = _loaded["LIST_FILES_MAX"]
 SEARCH_FILES_MAX = _loaded["SEARCH_FILES_MAX"]
 PDF_MAX_PAGES = _loaded["PDF_MAX_PAGES"]

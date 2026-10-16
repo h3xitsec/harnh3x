@@ -7,7 +7,12 @@ import threading
 import uuid
 from pathlib import Path
 
-from harnh3x.config import MAX_TOOL_RESULT, SHELL_MAX_TIMEOUT, SHELL_TIMEOUT
+from harnh3x.config import (
+    MAX_TOOL_RESULT,
+    SHELL_MAX_OUTPUT,
+    SHELL_MAX_TIMEOUT,
+    SHELL_TIMEOUT,
+)
 from harnh3x.sandbox import sandboxed_argv
 from harnh3x.tools.files import edit_file, read_file, write_file
 from harnh3x.tools.paths import (
@@ -256,27 +261,34 @@ def _truncate_shell(text: str, workspace: Path) -> str:
     if len(text) <= MAX_TOOL_RESULT:
         return text
     path = _spill_shell(workspace, text)
-    lines = text.splitlines(keepends=True)
-    chosen = ""
+    # Keep whole lines while the kept text plus its marker fits the cap.
+    kept = 0
     marker = ""
-    for count in range(len(lines) + 1):
-        prefix = "".join(lines[:count])
-        omitted = len(text) - len(prefix)
+    consumed = 0
+    for count, line in enumerate(text.splitlines(keepends=True), start=1):
+        consumed += len(line)
+        omitted = len(text) - consumed
         candidate = (
             f"\n...[truncated, {omitted} chars omitted; {_shell_hint(path, count + 1)}]"
         )
-        if len(prefix) + len(candidate) > MAX_TOOL_RESULT:
+        if consumed + len(candidate) > MAX_TOOL_RESULT:
             break
-        chosen = prefix
+        kept = consumed
         marker = candidate
-    if chosen:
-        return chosen + marker
+    if kept:
+        return text[:kept] + marker
     return cap_result(text, hint=_shell_hint(path, 1))
 
 
-def _format_shell(exit_code: int, stdout: str, stderr: str, workspace: Path) -> str:
+def _format_shell(
+    exit_code: int, stdout: str, stderr: str, workspace: Path, note: str = ""
+) -> str:
     status = "success" if exit_code == 0 else "error"
-    text = f"status: {status}\nexit_code: {exit_code}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    head = f"status: {status}\nexit_code: {exit_code}\n"
+    if note:
+        # Before stdout so the truncation of a long output keeps it.
+        head += f"note: {note}\n"
+    text = f"{head}stdout:\n{stdout}\nstderr:\n{stderr}"
     return _truncate_shell(text, workspace)
 
 
@@ -327,6 +339,75 @@ def kill_children() -> None:
         _kill_group(proc)
 
 
+_READ_CHUNK = 65536
+
+
+class _OutputCollector:
+    """Drain a child's pipes on threads and kill it once output passes a cap.
+
+    Chunks past the cap are dropped but the pipes keep draining so the child,
+    or what is left of its process group, can exit.
+    """
+
+    def __init__(self, proc: subprocess.Popen, limit: int) -> None:
+        self._proc = proc
+        self._limit = limit
+        self._chunks: dict[str, list[bytes]] = {"stdout": [], "stderr": []}
+        self._total = 0
+        self._lock = threading.Lock()
+        self._threads: list[threading.Thread] = []
+        self.overflow = False
+
+    def start(self, stdin: str | None) -> None:
+        for name in ("stdout", "stderr"):
+            pipe = getattr(self._proc, name, None)
+            if pipe is not None:
+                self._spawn(self._read, name, pipe)
+        if self._proc.stdin is not None:
+            self._spawn(self._write, stdin or "")
+
+    def _spawn(self, target, *args) -> None:
+        thread = threading.Thread(target=target, args=args, daemon=True)
+        thread.start()
+        self._threads.append(thread)
+
+    def _read(self, name: str, pipe) -> None:
+        read = getattr(pipe, "read1", pipe.read)
+        with pipe:
+            while True:
+                chunk = read(_READ_CHUNK)
+                if not chunk:
+                    return
+                kill = False
+                with self._lock:
+                    if not self.overflow:
+                        self._chunks[name].append(chunk)
+                        self._total += len(chunk)
+                        if self._total > self._limit:
+                            self.overflow = True
+                            kill = True
+                if kill:
+                    _kill_group(self._proc)
+
+    def _write(self, text: str) -> None:
+        try:
+            with self._proc.stdin as pipe:
+                pipe.write(text.encode("utf-8"))
+        except OSError:
+            return
+
+    def join(self) -> None:
+        for thread in self._threads:
+            thread.join()
+
+    def text(self, name: str) -> str:
+        return b"".join(self._chunks[name]).decode("utf-8", errors="replace")
+
+
+def _overflow_note() -> str:
+    return f"output exceeded {SHELL_MAX_OUTPUT} bytes; the process was killed"
+
+
 def _run_process(
     argv: list[str], workspace: Path, timeout: int, stdin: str | None
 ) -> str:
@@ -348,22 +429,32 @@ def _run_process(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         stdin=subprocess.PIPE if stdin is not None else None,
-        text=True,
         start_new_session=True,
     )
     _track(proc)
+    output = _OutputCollector(proc, SHELL_MAX_OUTPUT)
+    output.start(stdin)
     try:
         try:
-            stdout, stderr = proc.communicate(input=stdin, timeout=timeout)
+            proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             _kill_group(proc)
-            stdout, stderr = proc.communicate()
+            proc.wait()
+            output.join()
             return _format_shell(
-                124, stdout or "", stderr or f"timed out after {timeout}s", workspace
+                124,
+                output.text("stdout"),
+                output.text("stderr") or f"timed out after {timeout}s",
+                workspace,
             )
-        return _format_shell(
-            proc.returncode or 0, stdout or "", stderr or "", workspace
-        )
+        output.join()
+        stdout = output.text("stdout")
+        stderr = output.text("stderr")
+        if output.overflow:
+            return _format_shell(
+                proc.returncode or 137, stdout, stderr, workspace, _overflow_note()
+            )
+        return _format_shell(proc.returncode or 0, stdout, stderr, workspace)
     finally:
         _untrack(proc)
 
