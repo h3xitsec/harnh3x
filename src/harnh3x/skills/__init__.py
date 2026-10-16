@@ -1,5 +1,6 @@
 import atexit
 import re
+import weakref
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -264,6 +265,24 @@ _META_TOOLS = (
     _meta_tool("unload_skill", "Unload a skill to free its tools"),
 )
 
+# Registries with MCP processes, closed once at exit. A new session builds a
+# new registry, so one handler over a weak set keeps handlers from piling up.
+_live_registries: weakref.WeakSet = weakref.WeakSet()
+_exit_registered = False
+
+
+def _register_for_exit(registry: "SkillRegistry") -> None:
+    global _exit_registered
+    _live_registries.add(registry)
+    if not _exit_registered:
+        atexit.register(_close_live_registries)
+        _exit_registered = True
+
+
+def _close_live_registries() -> None:
+    for registry in list(_live_registries):
+        registry.close()
+
 
 class SkillRegistry:
     def __init__(
@@ -298,7 +317,7 @@ class SkillRegistry:
         self._yolo = yolo
         self._project = project
         if self._clients:
-            atexit.register(self.close)
+            _register_for_exit(self)
 
     def skill_tools(self, name: str) -> tuple[str, ...] | None:
         skill = self._active.get(name) or self._catalog.get(name)
@@ -307,6 +326,7 @@ class SkillRegistry:
         return tuple(tool["function"]["name"] for tool in skill.tools)
 
     def close(self) -> None:
+        _live_registries.discard(self)
         for client in self._clients.values():
             client.close()
 

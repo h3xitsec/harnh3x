@@ -7153,6 +7153,33 @@ def test_unload_keeps_the_mcp_process_and_reset_stops_it(tmp_path, monkeypatch):
         session.skills.close()
 
 
+def test_one_exit_handler_closes_every_live_registry(monkeypatch):
+    registered = []
+    monkeypatch.setattr(skills.atexit, "register", registered.append)
+    monkeypatch.setattr(skills, "_exit_registered", False)
+    monkeypatch.setattr(skills, "_live_registries", skills.weakref.WeakSet())
+
+    first = SkillRegistry(servers=(_mcp_server(),))
+    second = SkillRegistry(servers=(_mcp_server(),))
+    try:
+        assert registered == [skills._close_live_registries]
+        assert set(skills._live_registries) == {first, second}
+        first.load_skill("caido")
+        second.load_skill("caido")
+        clients = [first._clients["caido"], second._clients["caido"]]
+        assert all(client.alive() for client in clients)
+
+        first.close()
+        assert set(skills._live_registries) == {second}
+
+        skills._close_live_registries()
+        assert not any(client.alive() for client in clients)
+        assert not skills._live_registries
+    finally:
+        first.close()
+        second.close()
+
+
 def test_missing_mcp_command_is_an_error(tmp_path):
     registry = SkillRegistry(
         servers=(_mcp_server(command="harnh3x-missing-mcp", args=()),)
