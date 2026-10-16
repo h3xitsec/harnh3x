@@ -5406,6 +5406,30 @@ def test_read_url_reads_a_pdf(tmp_path, monkeypatch):
     assert re.search(r"saved: downloads/\S+\.pdf", result)
 
 
+def test_read_url_stops_a_pdf_at_the_page_cap(tmp_path, monkeypatch):
+    pages = [f"Page {number} text" for number in range(1, PDF_MAX_PAGES + 3)]
+    monkeypatch.setattr(
+        tools.http,
+        "_http_get",
+        lambda url: (200, "application/pdf", _pdf_bytes(pages)),
+    )
+
+    result = execute_tool("read_url", {"url": "https://1.1.1.1/long"}, tmp_path)
+
+    assert f"Page {PDF_MAX_PAGES} text" in result
+    assert f"Page {PDF_MAX_PAGES + 1} text" not in result
+    marker = (
+        f"...[pages {PDF_MAX_PAGES + 1}-{PDF_MAX_PAGES + 2} remain; "
+        f"the PDF is saved at downloads/"
+    )
+    assert marker in result
+    assert f"call read_pdf with first_page={PDF_MAX_PAGES + 1}]" in result
+    text_file = re.search(r"text_file: (\S+)", result).group(1)
+    saved_text = (tmp_path / text_file).read_text(encoding="utf-8")
+    assert marker in saved_text
+    assert f"Page {PDF_MAX_PAGES + 1} text" not in saved_text
+
+
 def test_parse_html_full_mode_and_fallback_keep_non_article_text(tmp_path):
     page = (
         "<html><head><title>Docs</title></head><body><nav>Home</nav>"

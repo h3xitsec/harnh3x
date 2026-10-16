@@ -6,7 +6,7 @@ from pathlib import Path
 
 import trafilatura
 
-from harnh3x.config import MAX_TOOL_RESULT
+from harnh3x.config import MAX_TOOL_RESULT, PDF_MAX_PAGES
 from harnh3x.tools.documents import _pdf_page_text, _pdf_reader, _pdf_title
 from harnh3x.tools.http import HTML_TYPES, PDF_TYPE, _write_fetched
 from harnh3x.tools.paths import _path_param, cap_result, resolve_readable
@@ -189,10 +189,17 @@ def read_url(workspace: Path, args: dict) -> str:
     elif media == PDF_TYPE:
         reader = _pdf_reader(body)
         title = _pdf_title(reader)
-        pages = [_pdf_page_text(reader, i) for i in range(len(reader.pages))]
+        total = len(reader.pages)
+        shown_pages = min(total, PDF_MAX_PAGES)
+        pages = [_pdf_page_text(reader, i) for i in range(shown_pages)]
         text = "\n\n".join(page for page in pages if page)
         if not text:
             return f"Error: no text extracted; the PDF is saved at {saved}"
+        if total > shown_pages:
+            text += (
+                f"\n\n...[pages {shown_pages + 1}-{total} remain; the PDF is saved "
+                f"at {saved}; call read_pdf with first_page={shown_pages + 1}]"
+            )
     else:
         text = body.decode("utf-8", errors="replace").strip()
         if not text:
