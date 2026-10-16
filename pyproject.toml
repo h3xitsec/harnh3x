@@ -31,12 +31,12 @@ pytest-cov = "^7.1.0"
 ruff = "^0.17.0"
 
 [tool.pytest.ini_options]
-pythonpath = ["src/harnh3x"]
+pythonpath = ["src"]
 testpaths = ["tests"]
 addopts = [
-    "--cov=src",                 # Replace 'src' with your actual package name or folder
-    "--cov-report=html",         # Generate an interactive HTML report
-    "--cov-fail-under=80",       # Fail the build if total coverage drops below 80%
+    "--cov=src",
+    "--cov-report=html",
+    "--cov-fail-under=80",
 ]
 
 [tool.coverage.run]
