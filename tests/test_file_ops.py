@@ -297,3 +297,208 @@ def test_edit_file_reports_python_syntax(tmp_path):
         "Replaced 1 occurrence(s) in dice.py\nSyntax error: line 1:"
     )
     assert (tmp_path / "dice.py").read_text() == "def (\n"
+
+
+def test_outline_python_maps_classes_functions_and_line_spans(tmp_path):
+    (tmp_path / "store.py").write_text(
+        '"""notes"""\n'
+        "\n"
+        "class Store(Base, Mixin):\n"
+        "    def __init__(self, path: str) -> None:\n"
+        "        self.path = path\n"
+        "\n"
+        "    @property\n"
+        "    def get(self, key: str):\n"
+        "        return key\n"
+        "\n"
+        "    async def refresh(self):\n"
+        "        def helper():\n"
+        "            return 1\n"
+        "        return helper\n"
+        "\n"
+        "def load(path):\n"
+        "    return path\n"
+        "\n"
+        'if __name__ == "__main__":\n'
+        "    def main():\n"
+        "        return load(None)\n"
+    )
+
+    result = execute_tool("outline_python", {"path": "store.py"}, tmp_path)
+
+    assert result == (
+        "store.py\n"
+        "  class Store(Base, Mixin)  3-14\n"
+        "    def __init__(self, path: str) -> None  4-5\n"
+        "    def get(self, key: str)  7-9  @property\n"
+        "    async def refresh(self)  11-14\n"
+        "      def helper()  12-13\n"
+        "  def load(path)  16-17\n"
+        "  def main()  20-21"
+    )
+
+
+def test_outline_python_maps_a_directory_and_keeps_a_syntax_error(tmp_path):
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "ok.py").write_text("def alpha():\n    return 1\n")
+    (pkg / "broken.py").write_text("def (\n")
+    (pkg / "notes.txt").write_text("def not_python():\n    return 1\n")
+    cache = pkg / "__pycache__"
+    cache.mkdir()
+    (cache / "cached.py").write_text("def cached():\n    return 1\n")
+
+    result = execute_tool("outline_python", {"path": "pkg"}, tmp_path)
+
+    assert result == (
+        "pkg/broken.py\n"
+        "  syntax error: line 1: invalid syntax\n"
+        "pkg/ok.py\n"
+        "  def alpha()  1-2"
+    )
+    assert execute_tool("outline_python", {"path": "pkg/broken.py"}, tmp_path) == (
+        "Error: syntax error: line 1: invalid syntax"
+    )
+
+
+def test_outline_python_refuses_a_missing_or_non_python_path(tmp_path):
+    (tmp_path / "notes.txt").write_text("x")
+
+    assert execute_tool("outline_python", {"path": "missing.py"}, tmp_path) == (
+        "Error: not found"
+    )
+    assert execute_tool("outline_python", {"path": "notes.txt"}, tmp_path) == (
+        "Error: not a Python file"
+    )
+    assert "outside workspace" in execute_tool(
+        "outline_python", {"path": ".."}, tmp_path
+    )
+
+
+def test_outline_python_reads_outside_the_workspace_when_yolo(tmp_path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    outside = tmp_path / "secret.py"
+    outside.write_text("def secret():\n    return 1\n")
+
+    blocked = execute_tool("outline_python", {"path": str(outside)}, workspace)
+    opened = execute_tool(
+        "outline_python", {"path": str(outside)}, workspace, yolo=True
+    )
+
+    assert "outside workspace" in blocked
+    assert "def secret()  1-2" in opened
+
+
+def test_outline_python_names_how_to_narrow_past_the_file_cap(tmp_path, monkeypatch):
+    monkeypatch.setattr("harnh3x.tools.outline.OUTLINE_MAX_FILES", 1)
+    (tmp_path / "a.py").write_text("def a():\n    return 1\n")
+    (tmp_path / "b.py").write_text("def b():\n    return 1\n")
+
+    result = execute_tool("outline_python", {"path": "."}, tmp_path)
+
+    assert "def a()  1-2" in result
+    assert "b.py" not in result
+    assert "[1 more files; narrow path or lower max_depth]" in result
+
+
+def test_outline_python_names_a_file_with_no_definitions(tmp_path):
+    (tmp_path / "empty.py").write_text("import os\n")
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "notes.txt").write_text("hi")
+
+    assert execute_tool("outline_python", {"path": "empty.py"}, tmp_path) == (
+        "empty.py\n  no classes or functions"
+    )
+    assert execute_tool("outline_python", {"path": "pkg"}, tmp_path) == (
+        "No Python files found."
+    )
+
+
+def test_outline_python_stops_at_max_depth(tmp_path):
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "top.py").write_text("def top():\n    return 1\n")
+    nested = tmp_path / "pkg" / "sub"
+    nested.mkdir()
+    (nested / "deep.py").write_text("def deep():\n    return 1\n")
+
+    result = execute_tool("outline_python", {"path": "pkg", "max_depth": 1}, tmp_path)
+
+    assert "def top()  1-2" in result
+    assert "deep.py" not in result
+
+
+def test_outline_python_skips_a_large_or_non_utf8_file(tmp_path, monkeypatch):
+    monkeypatch.setattr("harnh3x.tools.outline.FETCH_MAX_BYTES", 4)
+    (tmp_path / "big.py").write_text("def big():\n    return 1\n")
+
+    assert execute_tool("outline_python", {"path": "big.py"}, tmp_path) == (
+        "big.py\n  skipped: larger than 4 bytes"
+    )
+
+    monkeypatch.setattr("harnh3x.tools.outline.FETCH_MAX_BYTES", 10_000_000)
+    (tmp_path / "bad.py").write_bytes(b"\xff\xfe")
+    assert execute_tool("outline_python", {"path": "bad.py"}, tmp_path) == (
+        "Error: not utf-8"
+    )
+    (tmp_path / "ok.py").write_text("def ok():\n    return 1\n")
+    listed = execute_tool("outline_python", {"path": "."}, tmp_path)
+    assert "bad.py\n  skipped: not utf-8" in listed
+    assert "def ok()  1-2" in listed
+
+
+def test_outline_python_keeps_defs_inside_try_and_match(tmp_path):
+    (tmp_path / "flow.py").write_text(
+        "class Bare:\n"
+        "    pass\n"
+        "\n"
+        "try:\n"
+        "    def in_try():\n"
+        "        return 1\n"
+        "except ValueError:\n"
+        "    def in_except():\n"
+        "        return 2\n"
+        "\n"
+        "def choose(value):\n"
+        "    match value:\n"
+        "        case 1:\n"
+        "            def in_case():\n"
+        "                return 3\n"
+    )
+
+    result = execute_tool("outline_python", {"path": "flow.py"}, tmp_path)
+
+    assert result == (
+        "flow.py\n"
+        "  class Bare  1-2\n"
+        "  def in_try()  5-6\n"
+        "  def in_except()  8-9\n"
+        "  def choose(value)  11-15\n"
+        "    def in_case()  14-15"
+    )
+
+
+def test_outline_python_notes_an_unreadable_file_in_a_directory(tmp_path):
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    blocked = pkg / "blocked.py"
+    blocked.write_text("def blocked():\n    return 1\n")
+    blocked.chmod(0)
+    (pkg / "ok.py").write_text("def ok():\n    return 1\n")
+    try:
+        result = execute_tool("outline_python", {"path": "pkg"}, tmp_path)
+    finally:
+        blocked.chmod(0o644)
+
+    assert "def ok()  1-2" in result
+    assert "blocked.py\n  skipped:" in result
+
+
+def test_outline_python_clips_a_long_signature(tmp_path):
+    (tmp_path / "long.py").write_text(f"def f({'a' * 100}):\n    return 1\n")
+
+    line = execute_tool("outline_python", {"path": "long.py"}, tmp_path).splitlines()[1]
+
+    assert line.endswith("  1-2")
+    assert len(line.removesuffix("  1-2").strip()) == 80
+    assert line.removesuffix("  1-2").strip().endswith("...")

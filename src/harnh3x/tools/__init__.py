@@ -16,6 +16,8 @@ from harnh3x.tools.http import get_json
 from harnh3x.tools.memory import FNS as _MEMORY_FNS
 from harnh3x.tools.memory import SCHEMAS as _MEMORY_SCHEMAS
 from harnh3x.tools.memory import memory_keys
+from harnh3x.tools.outline import FNS as _OUTLINE_FNS
+from harnh3x.tools.outline import SCHEMAS as _OUTLINE_SCHEMAS
 from harnh3x.tools.page import FNS as _PAGE_FNS
 from harnh3x.tools.page import SCHEMAS as _PAGE_SCHEMAS
 from harnh3x.tools.page import extract_page, strip_html
@@ -35,6 +37,7 @@ _SCHEMAS = {
     schema["function"]["name"]: schema
     for schema in (
         *_FILE_SCHEMAS,
+        *_OUTLINE_SCHEMAS,
         *_PROCESS_SCHEMAS,
         *_SEARCH_SCHEMAS,
         *_PAGE_SCHEMAS,
@@ -50,6 +53,7 @@ _SCHEMAS = {
 }
 _FNS = {
     **_FILE_FNS,
+    **_OUTLINE_FNS,
     **_PROCESS_FNS,
     **_SEARCH_FNS,
     **_PAGE_FNS,
@@ -71,6 +75,7 @@ _ORDER = (
     "move_file",
     "list_files",
     "search_files",
+    "outline_python",
     "run_shell",
     "run_python",
     "run_script",
