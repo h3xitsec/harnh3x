@@ -309,24 +309,32 @@ def test_research_skill_gates_web_search(tmp_path, monkeypatch):
     registry = SkillRegistry()
 
     blocked = registry.execute("web_search", {"query": "transit"}, tmp_path)
-    assert blocked == "Error: Tool 'web_search' not found. Is the skill loaded?"
+    assert blocked.startswith("Error: 'web_search' is not loaded.")
+    assert "hardware-diagnosis, research" in blocked
 
     loaded = registry.load_skill("research")
     assert loaded.startswith(
-        "Loaded skill 'research' with 5 tools: "
-        "web_search, read_url, fetch_url, parse_html, read_feed"
+        "Loaded skill 'research' with 7 tools: "
+        "web_search, read_url, fetch_url, parse_html, read_feed, read_file, read_pdf"
     )
-    assert "Snippets are not answers" in loaded
-    assert "[loaded: web_search, read_url, fetch_url, parse_html, read_feed]" in (
-        registry.get_menu()
+    assert "two or three results" in loaded
+    search = next(
+        schema
+        for schema in registry.schemas()
+        if schema["function"]["name"] == "web_search"
     )
+    assert "Snippets are not answers" in search["function"]["description"]
+    assert (
+        "[loaded: web_search, read_url, fetch_url, parse_html, read_feed, "
+        "read_file, read_pdf]"
+    ) in registry.get_menu()
 
     result = registry.execute("web_search", {"query": "transit"}, tmp_path)
     assert "url: https://1.1.1.1/alpha" in result
 
     assert registry.unload_skill("research") == "Unloaded skill 'research'."
     blocked_again = registry.execute("web_search", {"query": "transit"}, tmp_path)
-    assert blocked_again == "Error: Tool 'web_search' not found. Is the skill loaded?"
+    assert blocked_again == blocked
 
 
 def test_parse_html_truncates_long_article(tmp_path):

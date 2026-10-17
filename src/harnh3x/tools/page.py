@@ -18,7 +18,9 @@ SCHEMAS = [
             "name": "read_url",
             "description": (
                 "Fetch a web page, PDF, or text URL and return its readable text in one "
-                "step. Saves the raw file and the extracted text in the workspace."
+                "step. Saves the raw file and the extracted text in the workspace. A "
+                "long page is cut and names a text_file to continue with read_file; "
+                "a long PDF names the read_pdf first_page to continue."
             ),
             "parameters": {
                 "type": "object",
@@ -26,6 +28,7 @@ SCHEMAS = [
                     "url": {"type": "string", "description": "http or https URL"},
                     "mode": {
                         "type": "string",
+                        "enum": ["article", "full"],
                         "description": "article (default) keeps the main content; full keeps all page text",
                     },
                 },
@@ -37,15 +40,17 @@ SCHEMAS = [
         "type": "function",
         "function": {
             "name": "parse_html",
-            "description": "Read an HTML file already saved in the workspace and return its title and text. Does not download.",
+            "description": (
+                "Read an HTML file already saved, for example by fetch_url, and "
+                "return its title and text. Does not download."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": _path_param(
-                        "Workspace path to the HTML file saved by fetch_url"
-                    ),
+                    "path": _path_param("Path to the saved HTML file"),
                     "mode": {
                         "type": "string",
+                        "enum": ["article", "full"],
                         "description": "article (default) keeps the main content; full keeps all page text",
                     },
                 },

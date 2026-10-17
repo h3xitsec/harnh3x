@@ -215,3 +215,51 @@ def test_search_files_stops_at_the_match_cap(tmp_path):
 
     assert result.count("many.txt:") == SEARCH_FILES_MAX
     assert f"stopped at {SEARCH_FILES_MAX} matches" in result
+
+
+def test_write_file_checks_python_syntax(tmp_path):
+    written = execute_tool(
+        "write_file",
+        {"path": "dice.py", "content": "print(1 + 1)\n"},
+        tmp_path,
+    )
+    assert written.startswith("Wrote ")
+    assert "Syntax error" not in written
+    assert (tmp_path / "dice.py").read_text() == "print(1 + 1)\n"
+
+    note = execute_tool(
+        "write_file",
+        {"path": "src/broken.py", "content": "def (\n"},
+        tmp_path,
+    )
+    assert note.startswith("Wrote ")
+    assert "Syntax error: line 1:" in note
+    assert (tmp_path / "src" / "broken.py").read_text() == "def (\n"
+
+    text = execute_tool(
+        "write_file", {"path": "notes.md", "content": "def (\n"}, tmp_path
+    )
+    assert "Syntax error" not in text
+    assert (tmp_path / "notes.md").read_text() == "def (\n"
+
+
+def test_edit_file_reports_python_syntax(tmp_path):
+    (tmp_path / "dice.py").write_text("print(1)\n")
+
+    edited = execute_tool(
+        "edit_file",
+        {"path": "dice.py", "old_text": "print(1)", "new_text": "print(2)"},
+        tmp_path,
+    )
+    assert edited == "Replaced 1 occurrence(s) in dice.py"
+    assert (tmp_path / "dice.py").read_text() == "print(2)\n"
+
+    broken = execute_tool(
+        "edit_file",
+        {"path": "dice.py", "old_text": "print(2)", "new_text": "def ("},
+        tmp_path,
+    )
+    assert broken.startswith(
+        "Replaced 1 occurrence(s) in dice.py\nSyntax error: line 1:"
+    )
+    assert (tmp_path / "dice.py").read_text() == "def (\n"

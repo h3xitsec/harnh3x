@@ -1,13 +1,8 @@
 ---
 name: tasks
-description: Keep a checklist in plan.md for work that takes several steps.
+description: Keep a step checklist in plan.md for a job that needs three or more tool calls, or when the user asks for a plan or progress.
 allowed-tools: write_plan update_plan show_plan
 ---
-
-## When to Use
-
-- A request needs three or more tool calls across different skills
-- The user asks for a plan, a checklist, or progress on a longer job
 
 ## Conventions
 

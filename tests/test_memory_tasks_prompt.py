@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 from harnh3x import agent, tools
 from harnh3x.config import TRANSCRIPT_FILE
-from harnh3x.prompt import YOLO_NOTE, project_note, system_prompt
+from harnh3x.prompt import YOLO_NOTE, system_prompt
 from harnh3x.skills import SkillRegistry
 from harnh3x.tools import execute_tool
 
@@ -123,16 +123,11 @@ def test_system_prompt_mentions_yolo_only_when_enabled(tmp_path):
     assert "are blocked" not in yolo
     assert "localhost" in yolo
     assert yolo.endswith("MENU")
-    loaded = SkillRegistry(yolo=True).load_skill("shell")
-    assert loaded.endswith(YOLO_NOTE)
-    assert "are blocked" not in loaded
-    assert "`/bin/sh -c`" in loaded
-    assert "are blocked" in SkillRegistry().load_skill("shell")
-    assert YOLO_NOTE not in SkillRegistry(yolo=True).load_skill("memory")
-    assert YOLO_NOTE not in SkillRegistry().load_skill("shell")
-    for name in ("http", "research", "reference"):
-        assert SkillRegistry(yolo=True).load_skill(name).endswith(YOLO_NOTE)
-        assert "localhost" not in SkillRegistry().load_skill(name)
+    for registry in (SkillRegistry(), SkillRegistry(yolo=True)):
+        loaded = registry.load_skill("shell")
+        assert YOLO_NOTE not in loaded
+        assert "are blocked" not in loaded
+        assert "/bin/sh" not in loaded
 
     project = tmp_path / "proj"
     granted = system_prompt(tmp_path, "MENU", now=now, project=project)
@@ -147,7 +142,8 @@ def test_system_prompt_mentions_yolo_only_when_enabled(tmp_path):
     assert coding.startswith("You are a coding agent working in a granted project.")
     assert "When the user asks for a program" not in coding
     assert "Read the project before you change it" in coding
-    assert "Load the coding skill before you read or change source." in coding
+    assert "Load the coding skill before you read or change source;" in coding
+    assert "Load file-ops" not in coding
     assert "Make the smallest change that does the job." in coding
     assert "Always confirm what you changed, including the paths." in coding
     assert "RULES" in coding
@@ -155,15 +151,8 @@ def test_system_prompt_mentions_yolo_only_when_enabled(tmp_path):
     both = system_prompt(tmp_path, "MENU", now=now, yolo=True, project=project)
     assert f"or the project at {project}." in both
     loaded = SkillRegistry(project=project).load_skill("coding")
-    assert loaded.endswith(project_note(project))
-    assert project_note(project) not in SkillRegistry(project=project).load_skill(
-        "memory"
-    )
-    shell = SkillRegistry(yolo=True, project=project).load_skill("shell")
-    assert project_note(project) in shell
-    assert f"or the project at {project}." in shell
-    assert "are blocked" not in shell
-    assert "`/bin/sh -c`" in shell
+    assert str(project) not in loaded
+    assert "relative paths use the project" not in loaded
 
 
 def test_system_prompt_includes_date_listing_and_memory_index(tmp_path):

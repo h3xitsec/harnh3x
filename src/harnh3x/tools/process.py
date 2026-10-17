@@ -14,7 +14,6 @@ from harnh3x.config import (
     SHELL_TIMEOUT,
 )
 from harnh3x.sandbox import sandboxed_argv
-from harnh3x.tools.files import edit_file, read_file, write_file
 from harnh3x.tools.paths import (
     _count_arg,
     _path_param,
@@ -29,7 +28,10 @@ SCHEMAS = [
         "type": "function",
         "function": {
             "name": "run_shell",
-            "description": "Run a command in the workspace and return its exit code, stdout, and stderr",
+            "description": (
+                "Run a command and return its exit code, stdout, and stderr. Long "
+                "output is saved to a file the result names, to read with read_file."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -52,10 +54,9 @@ SCHEMAS = [
         "function": {
             "name": "run_python",
             "description": (
-                "Run a short Python snippet in the workspace with the standard library "
-                "and return its exit code, stdout, and stderr. Use it to compute a "
-                "number, date, or transformation. It does not save a file; to deliver "
-                "a program, use the coding skill."
+                "Run a short Python snippet with the standard library and return its "
+                "exit code, stdout, and stderr. Only printed output comes back. It "
+                "does not save a file."
             ),
             "parameters": {
                 "type": "object",
@@ -77,85 +78,11 @@ SCHEMAS = [
     {
         "type": "function",
         "function": {
-            "name": "read_source",
-            "description": (
-                "Read a source file inside the workspace. Long files are paged: the "
-                "result ends with the next offset to pass to continue reading."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": _path_param("Path to the source file"),
-                    "offset": {
-                        "type": "integer",
-                        "description": "First line to return, 1-based (default 1)",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Maximum number of lines to return",
-                    },
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "write_source",
-            "description": (
-                "Write a source file inside the workspace (creates or overwrites). "
-                "A .py file is checked for syntax; a syntax error is reported and "
-                "the file is still written."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": _path_param("Path to the source file"),
-                    "content": {"type": "string", "description": "Source to write"},
-                },
-                "required": ["path", "content"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "edit_source",
-            "description": (
-                "Replace an exact text fragment in a workspace source file. old_text "
-                "must match exactly once unless replace_all is true. A .py file is "
-                "checked for syntax after the edit."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": _path_param("Path to the source file"),
-                    "old_text": {
-                        "type": "string",
-                        "description": "Exact text to find",
-                    },
-                    "new_text": {
-                        "type": "string",
-                        "description": "Replacement text",
-                    },
-                    "replace_all": {
-                        "type": "boolean",
-                        "description": "Replace every match (default false)",
-                    },
-                },
-                "required": ["path", "old_text", "new_text"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "run_script",
             "description": (
-                "Run a .py file in the workspace with the standard library and return "
-                "its exit code, stdout, and stderr. Optional args are command-line "
-                "arguments, not a shell command."
+                "Run a .py file with the standard library and return its exit code, "
+                "stdout, and stderr. args are command-line strings passed to the "
+                "script; there is no shell."
             ),
             "parameters": {
                 "type": "object",
@@ -184,39 +111,6 @@ SCHEMAS = [
 DENIED_COMMANDS = {"rm", "mv", "chmod", "sudo"}
 # shell=False does not interpret these; refuse them so a model cannot smuggle a chain or redirect.
 SHELL_META = set("><|&;`$")
-
-
-def _python_syntax_note(path: Path) -> str:
-    if path.suffix != ".py":
-        return ""
-    try:
-        compile(path.read_text(encoding="utf-8"), path.name, "exec")
-    except SyntaxError as exc:
-        detail = exc.msg or "invalid syntax"
-        if exc.lineno:
-            detail = f"line {exc.lineno}: {detail}"
-        return f"\nSyntax error: {detail}"
-    return ""
-
-
-def read_source(workspace: Path, args: dict) -> str:
-    return read_file(workspace, args, tool_name="read_source")
-
-
-def write_source(workspace: Path, args: dict) -> str:
-    result = write_file(workspace, args)
-    if result.startswith("Error:"):
-        return result
-    path = resolve_in_workspace(workspace, args.get("path", ""))
-    return result + _python_syntax_note(path)
-
-
-def edit_source(workspace: Path, args: dict) -> str:
-    result = edit_file(workspace, args)
-    if result.startswith("Error:"):
-        return result
-    path = resolve_in_workspace(workspace, args.get("path", ""))
-    return result + _python_syntax_note(path)
 
 
 def prepare_shell(command: str, workspace: Path) -> list[str]:
@@ -507,8 +401,5 @@ def run_script(workspace: Path, args: dict) -> str:
 FNS = {
     "run_shell": run_shell,
     "run_python": run_python,
-    "read_source": read_source,
-    "write_source": write_source,
-    "edit_source": edit_source,
     "run_script": run_script,
 }

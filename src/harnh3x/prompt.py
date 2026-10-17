@@ -23,15 +23,6 @@ YOLO_NOTE = (
 )
 
 
-def project_note(project: Path) -> str:
-    return (
-        f"A project folder is granted at {project}. "
-        "Relative paths and the shell working directory use the project. "
-        "Absolute paths may also use the session workspace. "
-        "Downloads and plans stay in the workspace."
-    )
-
-
 def yolo_note(project: Path | None = None) -> str:
     if project is None:
         return YOLO_NOTE
@@ -81,7 +72,6 @@ def system_prompt(
 {workspace_listing(workspace)}
 {_memory_line(memory_keys())}"""
     skills = """Call load_skill before using a capability. Several skills can stay loaded at once; unload a skill only when you are sure you will not need it again.
-A skill name is not a tool. After loading a skill, call one of the tools listed for it.
 Use the tool interface. Do not write a tool call as JSON in your reply.
 If a tool returns an error, tell the user the error. Do not guess."""
     if coding:
@@ -89,7 +79,7 @@ If a tool returns an error, tell the user the error. Do not guess."""
 {header}
 Read the project before you change it, and match the code already there.
 {skills}
-Load the coding skill before you read or change source. Load file-ops to list or search, and shell to run a command in the project. Use the python skill only to compute an answer.
+Load the coding skill before you read or change source; it can list, search, edit, and run commands in the project. Use the python skill only to compute an answer.
 When a job takes several steps, load the tasks skill, write a plan, and work through it.
 Follow the project rules in this prompt. When a listed rule has no globs, read that .mdc file if its description matches the task.
 Make the smallest change that does the job. Prefer editing an existing file over rewriting it.

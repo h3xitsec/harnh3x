@@ -1,18 +1,11 @@
 ---
 name: documents
-description: Read PDF and Word documents in the workspace.
-allowed-tools: read_pdf read_docx
+description: Read, summarize, or quote PDF and Word (.docx) files, including PDFs saved by fetch_url.
+allowed-tools: read_pdf read_docx read_file
 ---
-
-## When to Use
-
-- The user asks to read, summarize, or quote a `.pdf` or `.docx` file in the workspace
-- A download saved by `fetch_url` is a PDF
 
 ## Conventions
 
-- Read the whole document before summarizing it. When `read_pdf` reports remaining pages, call it again with the next `first_page`.
-- A scanned PDF has no text layer and returns empty pages. Tell the user instead of guessing the content.
-- A truncated `read_docx` result names a `.txt` copy; use `read_file` from `file-ops` with `offset` to read the rest.
+- Read the pages the question needs. Before a full summary, read every page, continuing with the `first_page` the result names.
+- When a PDF has no text layer, tell the user instead of guessing the content.
 - Quote page numbers when you cite a PDF.
-- If a tool returns an error, tell the user the error. Do not guess.

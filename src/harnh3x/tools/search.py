@@ -30,6 +30,7 @@ SCHEMAS = [
                     },
                     "time": {
                         "type": "string",
+                        "enum": ["d", "w", "m", "y"],
                         "description": "Only return recent pages: d (day), w (week), m (month), y (year)",
                     },
                 },

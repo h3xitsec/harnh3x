@@ -19,11 +19,15 @@ SCHEMAS = [
         "type": "function",
         "function": {
             "name": "read_pdf",
-            "description": f"Extract text from a PDF in the workspace, up to {PDF_MAX_PAGES} pages per call",
+            "description": (
+                f"Extract text from a PDF, up to {PDF_MAX_PAGES} pages per call. When "
+                "pages remain, the result names the next first_page. A scanned PDF "
+                "has no text layer and returns empty pages."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": _path_param("Workspace path to the PDF"),
+                    "path": _path_param("Path to the PDF"),
                     "first_page": {
                         "type": "integer",
                         "description": "First page to read, 1-based (default 1)",
@@ -41,10 +45,13 @@ SCHEMAS = [
         "type": "function",
         "function": {
             "name": "read_docx",
-            "description": "Extract the paragraphs of a Word .docx file in the workspace",
+            "description": (
+                "Extract the paragraphs of a Word .docx file. A long result names a "
+                ".txt copy to continue with read_file."
+            ),
             "parameters": {
                 "type": "object",
-                "properties": {"path": _path_param("Workspace path to the .docx file")},
+                "properties": {"path": _path_param("Path to the .docx file")},
                 "required": ["path"],
             },
         },

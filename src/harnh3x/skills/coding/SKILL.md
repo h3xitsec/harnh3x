@@ -1,21 +1,15 @@
 ---
 name: coding
-description: Write a program to a workspace file, edit it, and run it.
-allowed-tools: read_source write_source edit_source run_script
+description: Write, edit, and run source files, or change code in the project. Use when the user wants a program, a script, or a code change.
+allowed-tools: read_file write_file edit_file list_files search_files run_script run_shell
 ---
-
-## When to Use
-
-- The user asks for a script, a program, or a change to existing code
-- You need to save source they can run again, not just print a result
 
 ## Conventions
 
-- A request for a script, program, or code change is a file in the workspace. Do not answer with only a code block.
-- Write the program with `write_source`, then run it with `run_script`. If it fails, fix it with `edit_source` and run it again.
-- Prefer `edit_source` over `write_source` for a small change to an existing file, so the rest of the file is untouched. Include enough surrounding text in `old_text` to match exactly once.
-- A `.py` syntax error is reported after the write or edit, and the file is still saved. Fix that error before running.
-- The script runs in the workspace, so relative paths point at workspace files. The kernel confines the process to that directory: it cannot read or write other paths, and it cannot open network connections. Only the standard library is available.
-- `args` are command-line strings. There is no shell.
-- The final answer names the path, what the program does, and the run result. Do not paste the full source unless the user asked to see it.
-- Load `file-ops` to list or search the workspace. A one-off calculation that should not leave a file stays on the `python` skill.
+- A request for a program, script, or code change is a file. Do not answer with only a code block.
+- Find the files involved with `list_files` and `search_files`, read the code around a change before editing it, and match its style.
+- Use `write_file` for a new file and `edit_file` for a change to an existing one.
+- Run what you wrote. `run_script` runs a `.py` file with only the standard library. Run project code that needs its own dependencies, or another language, through `run_shell` with the project's own tool, such as `pytest`, `npm test`, or `cargo test`.
+- Fix a reported syntax error before running. If a run fails, read the error, fix the file, and run it again.
+- The final answer names the paths, what changed, and the run result. Do not paste the full source unless the user asked to see it.
+- A one-off calculation that should not leave a file belongs to the `python` skill.

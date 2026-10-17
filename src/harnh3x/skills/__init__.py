@@ -9,20 +9,8 @@ import yaml
 
 from harnh3x.config import McpServer
 from harnh3x.mcp.client import McpClient, McpError, _guide, upstream_problem
-from harnh3x.prompt import project_note, yolo_note
 from harnh3x.tools import TOOLS, execute_tool
-
-_YOLO_SKILLS = {"file-ops", "shell", "python", "http", "research", "reference"}
-_PROJECT_SKILLS = {"file-ops", "shell", "python", "coding"}
-
-# Sandbox sentences in skills/shell/SKILL.md. A yolo load replaces them so the
-# model does not read a ban and a permission for the same syntax.
-_SHELL_SANDBOX = """- The working directory is the workspace. The kernel confines the process to that directory: it cannot read or write other paths, and it cannot use the network. A path the program builds itself is still confined.
-- One program per call. Pipes, redirects, `;`, `&&`, backticks, and `$` are blocked and return `Error:`; so are `rm`, `mv`, `chmod`, and `sudo`. Use `file-ops` to move or delete files, and `python` for anything that needs a pipeline.
-- Pass data to a program through `stdin` instead of a redirect."""
-
-_SHELL_OPEN = """- The working directory is the workspace, or the project when one is granted. The seatbelt is off: the command may read or write any path and may use the network.
-- `run_shell` is `/bin/sh -c`. Pipes, redirects, `;`, `&&`, backticks, and `$` run, including `rm`, `mv`, `chmod`, and `sudo`."""
+from harnh3x.tools.scope import scoped
 
 SKILLS_DIR = Path(__file__).resolve().parent
 
@@ -84,6 +72,14 @@ def _tool_schemas(names: tuple[str, ...], tools: list) -> tuple:
             raise RuntimeError(f"tool '{name}' is missing from TOOLS")
         chosen.append(schema)
     return tuple(chosen)
+
+
+def _tool_owners(catalog: dict[str, Skill]) -> dict[str, tuple[str, ...]]:
+    owners: dict[str, list[str]] = {}
+    for name, skill in catalog.items():
+        for tool in skill.tools:
+            owners.setdefault(tool["function"]["name"], []).append(name)
+    return {tool: tuple(names) for tool, names in owners.items()}
 
 
 def _skill_files(skills_dir: Path) -> list[Path]:
@@ -314,9 +310,11 @@ class SkillRegistry:
                 category="mcp",
             )
         self._catalog = _ordered(catalog)
+        self._owners = _tool_owners(self._catalog)
         self._active: dict[str, Skill] = {}
         self._yolo = yolo
         self._project = project
+        self._scoped_cache: dict[str, tuple[dict, dict]] = {}
         if self._clients:
             _register_for_exit(self)
 
@@ -378,19 +376,11 @@ class SkillRegistry:
             skill = loaded
         self._active[name] = skill
         tool_names = [tool["function"]["name"] for tool in skill.tools]
-        doc = skill.doc
-        if self._yolo and name == "shell":
-            doc = doc.replace(_SHELL_SANDBOX, _SHELL_OPEN, 1)
-        text = (
+        return (
             f"Loaded skill '{name}' with {len(skill.tools)} tools: "
             f"{', '.join(tool_names)}\n\n"
-            f"Documentation:\n{doc}"
+            f"Documentation:\n{skill.doc}"
         )
-        if self._yolo and name in _YOLO_SKILLS:
-            text += f"\n\n{yolo_note(self._project)}"
-        if self._project is not None and name in _PROJECT_SKILLS:
-            text += f"\n\n{project_note(self._project)}"
-        return text
 
     def unload_skill(self, name: str) -> str:
         if name not in self._active:
@@ -399,10 +389,22 @@ class SkillRegistry:
         return f"Unloaded skill '{name}'."
 
     def schemas(self) -> list[dict]:
-        active = []
+        # Skills may share a tool; the API rejects a tool name sent twice.
+        active: dict[str, dict] = {}
         for skill in self._active.values():
-            active.extend(skill.tools)
-        return list(_META_TOOLS) + active
+            for tool in skill.tools:
+                name = tool["function"]["name"]
+                if name not in active:
+                    active[name] = self._scoped(tool)
+        return list(_META_TOOLS) + list(active.values())
+
+    def _scoped(self, tool: dict) -> dict:
+        name = tool["function"]["name"]
+        cached = self._scoped_cache.get(name)
+        if cached is None or cached[0] is not tool:
+            cached = (tool, scoped(tool, yolo=self._yolo, project=self._project))
+            self._scoped_cache[name] = cached
+        return cached[1]
 
     def _skill_name(self, args: dict) -> str:
         name = args.get("name", "")
@@ -490,7 +492,18 @@ class SkillRegistry:
     def _unknown_tool(self, name: str, args: dict) -> str:
         tools = self.skill_tools(name)
         if tools is None:
-            return f"Error: Tool '{name}' not found. Is the skill loaded?"
+            owners = self._owners.get(name)
+            if not owners:
+                return f"Error: Tool '{name}' not found. Is the skill loaded?"
+            if len(owners) == 1:
+                return (
+                    f"Error: '{name}' is in skill '{owners[0]}', which is not loaded. "
+                    f"Call load_skill with name '{owners[0]}', then call {name} again."
+                )
+            return (
+                f"Error: '{name}' is not loaded. It is in skills: {', '.join(owners)}. "
+                f"Load the one that fits the task, then call {name} again."
+            )
         if not tools:
             return (
                 f"Error: '{name}' is a skill, not a tool. "

@@ -33,6 +33,7 @@ SCHEMAS = [
                     "step": {"type": "integer", "description": "Step number, 1-based"},
                     "status": {
                         "type": "string",
+                        "enum": ["done", "todo", "skipped"],
                         "description": "done, todo, or skipped",
                     },
                     "note": {

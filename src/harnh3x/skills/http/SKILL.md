@@ -1,22 +1,13 @@
 ---
 name: http
-description: Send HTTP requests and call JSON endpoints.
+description: Call public JSON APIs (weather, exchange rates, geocoding, GitHub) or send custom HTTP requests. Not for reading articles; use research.
 allowed-tools: http_get_json http_request
 ---
 
-## When to Use
-
-- The user asks for structured data that a free API serves, such as weather (Open-Meteo), exchange rates, geocoding, or a public GitHub endpoint
-- A page is awkward to read but the site offers a JSON endpoint
-- The call needs a method other than GET, a JSON or raw body, or the status and headers
-- To search the web or read an article, use `research` instead
-
 ## Conventions
 
-- Only http and https URLs on public hosts are allowed. Prefer keyless APIs. Headers may be set; do not invent credentials.
-- Put query parameters in `params` rather than hand-building the URL.
-- Pass `json_body` as an object or array, not a quoted JSON string. Example: `{"email": "a@b.c", "password": "secret"}`. Use `body` only for text that is not JSON. Do not set both.
-- Redirects are not followed unless `follow_redirects` is true.
+- Prefer keyless APIs such as Open-Meteo. Headers may be set; do not invent credentials.
+- A page that is awkward to read may have a JSON endpoint; try it.
 - Large responses are truncated. Narrow the request with `params`, or for a GET save the full response with `fetch_url` from `research` and inspect it with `inspect_json` from `data`.
 - Report the values you used and the URL you called. Do not invent fields the response did not contain.
-- If a tool returns an error, tell the user the error. Do not guess. An HTTP error status is a result, not a tool error: report the status and body.
+- Report an HTTP error status and its body to the user.

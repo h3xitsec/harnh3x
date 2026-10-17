@@ -19,7 +19,7 @@ def test_configured_mcp_server_stays_out_of_schemas_until_load(tmp_path):
         assert registry.available_counts() == (base_skills + 1, base_tools)
         menu = registry.get_menu()
         assert "mcp:\n- caido: Browse and replay HTTP traffic" in menu
-        assert menu.index("mcp:") < menu.index("web-testing:")
+        assert menu.index("- tasks:") < menu.index("mcp:")
         assert _tool_names(registry.schemas()) == ["load_skill", "unload_skill"]
 
         loaded = registry.load_skill("caido")

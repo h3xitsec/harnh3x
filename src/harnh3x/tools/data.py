@@ -16,11 +16,14 @@ SCHEMAS = [
         "type": "function",
         "function": {
             "name": "inspect_csv",
-            "description": "Describe a CSV file: delimiter, columns, row count, and the first rows",
+            "description": (
+                "Describe a CSV file: delimiter, columns, row count, and the first "
+                "rows. The preview is a sample, not the data."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": _path_param("Workspace path to the CSV file"),
+                    "path": _path_param("Path to the CSV file"),
                     "rows": {
                         "type": "integer",
                         "description": f"How many rows to preview (default {PREVIEW_ROWS}, max 50)",
@@ -42,7 +45,7 @@ SCHEMAS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": _path_param("Workspace path to the JSON file"),
+                    "path": _path_param("Path to the JSON file"),
                     "max_depth": {
                         "type": "integer",
                         "description": "How many nesting levels to describe (default 3, max 10)",

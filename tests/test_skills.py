@@ -25,10 +25,9 @@ def test_skill_menu_starts_unloaded():
         "data",
         "memory",
         "tasks",
+        "hardware-diagnosis",
     ):
         assert f"- {name}:" in menu
-    assert "web-testing:\n- sql-injection:" in menu
-    assert menu.index("- http:") < menu.index("web-testing:")
     assert "news:" not in menu
     assert "- search:" not in menu
     assert "[loaded" not in menu
@@ -42,7 +41,18 @@ def test_skill_load_unload_and_gated_execute(tmp_path):
     assert unknown == "Error: Unknown skill 'nope'. Check the skill menu."
 
     blocked = registry.execute("read_file", {"path": "a.txt"}, tmp_path)
-    assert blocked == "Error: Tool 'read_file' not found. Is the skill loaded?"
+    assert blocked == (
+        "Error: 'read_file' is not loaded. It is in skills: coding, documents, "
+        "file-ops, hardware-diagnosis, research. Load the one that fits the task, "
+        "then call read_file again."
+    )
+    single = registry.execute("delete_file", {"path": "a.txt"}, tmp_path)
+    assert single == (
+        "Error: 'delete_file' is in skill 'file-ops', which is not loaded. "
+        "Call load_skill with name 'file-ops', then call delete_file again."
+    )
+    missing = registry.execute("not_a_tool", {}, tmp_path)
+    assert missing == "Error: Tool 'not_a_tool' not found. Is the skill loaded?"
 
     loaded = registry.load_skill("file-ops")
     assert loaded.startswith("Loaded skill 'file-ops' with 8 tools: ")
@@ -277,7 +287,7 @@ def test_load_skill_returns_a_freeform_body(tmp_path):
     assert registry.get_menu().split("- http: ", 1)[1].startswith("Send requests.")
 
 
-def test_every_tool_belongs_to_exactly_one_skill():
+def test_every_tool_belongs_to_a_skill():
     assigned = [
         tool["function"]["name"]
         for skill in skills._CATALOG.values()
@@ -285,3 +295,67 @@ def test_every_tool_belongs_to_exactly_one_skill():
     ]
     assert set(assigned) == set(tools.TOOL_FNS)
     assert set(assigned) == {tool["function"]["name"] for tool in tools.TOOLS}
+
+
+def test_shipped_skills_have_no_when_to_use_section():
+    for path in skills._skill_files(skills.SKILLS_DIR):
+        assert "## when to use" not in path.read_text(encoding="utf-8").lower()
+
+
+def test_shared_tools_are_sent_once(tmp_path):
+    registry = SkillRegistry()
+    for name in ("file-ops", "hardware-diagnosis", "coding"):
+        registry.load_skill(name)
+
+    names = _tool_names(registry.schemas())
+
+    assert len(names) == len(set(names))
+    assert names.count("read_file") == 1
+    assert "system_info" in names
+
+    registry.unload_skill("file-ops")
+    (tmp_path / "a.txt").write_text("hi")
+    assert registry.execute("read_file", {"path": "a.txt"}, tmp_path) == "hi"
+    assert "delete_file" not in _tool_names(registry.schemas())
+
+
+def _description(registry: SkillRegistry, tool: str) -> str:
+    for schema in registry.schemas():
+        if schema["function"]["name"] == tool:
+            return schema["function"]["description"]
+    raise AssertionError(f"{tool} not sent")
+
+
+def test_schemas_carry_the_session_scope(tmp_path):
+    project = tmp_path / "proj"
+    sandbox = SkillRegistry()
+    yolo = SkillRegistry(yolo=True)
+    granted = SkillRegistry(project=project)
+    for registry in (sandbox, yolo, granted):
+        for name in ("file-ops", "shell", "http", "hardware-diagnosis"):
+            registry.load_skill(name)
+
+    shell = _description(sandbox, "run_shell")
+    assert "are blocked" in shell
+    assert "no network" in shell
+    open_shell = _description(yolo, "run_shell")
+    assert "/bin/sh -c" in open_shell
+    assert "are blocked" not in open_shell
+    assert "use the network" in open_shell
+
+    assert "Paths must be inside the workspace." in _description(sandbox, "read_file")
+    assert "Any path may be read." in _description(yolo, "read_file")
+    assert "Paths must be inside the workspace." in _description(yolo, "write_file")
+    project_read = _description(granted, "read_file")
+    assert "the project or the workspace; relative paths use the project" in (
+        project_read
+    )
+    assert "Runs in the project." in _description(granted, "run_shell")
+
+    assert "Public hosts only" in _description(sandbox, "http_request")
+    assert "localhost" in _description(yolo, "http_request")
+    assert "Paths must" not in _description(sandbox, "system_info")
+
+    base = {tool["function"]["name"]: tool for tool in tools.TOOLS}
+    assert "Paths must" not in base["read_file"]["function"]["description"]
+    assert "blocked" not in base["run_shell"]["function"]["description"]

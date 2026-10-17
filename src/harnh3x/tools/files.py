@@ -28,8 +28,8 @@ SCHEMAS = [
         "function": {
             "name": "read_file",
             "description": (
-                "Read a file inside the workspace. Long files are paged: the result "
-                "ends with the next offset to pass to continue reading."
+                "Read a text file. Long files are paged: the result ends with the "
+                "next offset to pass to continue reading."
             ),
             "parameters": {
                 "type": "object",
@@ -52,7 +52,11 @@ SCHEMAS = [
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": "Write content to a file inside the workspace (creates or overwrites)",
+            "description": (
+                "Write content to a file, creating parent directories, and replace "
+                "any existing content. A .py file is checked for syntax; a syntax "
+                "error is reported and the file is still written."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -68,8 +72,10 @@ SCHEMAS = [
         "function": {
             "name": "edit_file",
             "description": (
-                "Replace an exact text fragment in a workspace file. old_text must "
-                "match exactly once unless replace_all is true."
+                "Replace an exact text fragment in a file, leaving the rest untouched. "
+                "old_text must match exactly once unless replace_all is true, so "
+                "include enough surrounding text to make it unique. A .py file is "
+                "checked for syntax after the edit."
             ),
             "parameters": {
                 "type": "object",
@@ -96,7 +102,7 @@ SCHEMAS = [
         "type": "function",
         "function": {
             "name": "append_file",
-            "description": "Append content to the end of a workspace file (creates it if missing)",
+            "description": "Append content to the end of a file (creates it if missing)",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -111,7 +117,7 @@ SCHEMAS = [
         "type": "function",
         "function": {
             "name": "delete_file",
-            "description": "Delete a file inside the workspace",
+            "description": "Delete a file. Directories are refused.",
             "parameters": {
                 "type": "object",
                 "properties": {"path": _path_param("Path to the file")},
@@ -123,7 +129,7 @@ SCHEMAS = [
         "type": "function",
         "function": {
             "name": "move_file",
-            "description": "Move or rename a file inside the workspace. Does not overwrite.",
+            "description": "Move or rename a file. Fails if the destination exists.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -138,11 +144,14 @@ SCHEMAS = [
         "type": "function",
         "function": {
             "name": "list_files",
-            "description": "List files and directories in the workspace, with sizes",
+            "description": (
+                "List files and directories with sizes. Use it before guessing a "
+                "path. Skips .git, .venv, node_modules, and caches."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": _path_param("Directory to list (default: workspace root)"),
+                    "path": _path_param("Directory to list (default: the root)"),
                     "pattern": {
                         "type": "string",
                         "description": "Glob on file names, for example *.md",
@@ -159,7 +168,10 @@ SCHEMAS = [
         "type": "function",
         "function": {
             "name": "search_files",
-            "description": "Search text files in the workspace with a regular expression. Returns path:line: text.",
+            "description": (
+                "Search UTF-8 text files with a regular expression. Returns "
+                "path:line: text."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -167,9 +179,7 @@ SCHEMAS = [
                         "type": "string",
                         "description": "Regular expression to search for",
                     },
-                    "path": _path_param(
-                        "Directory to search (default: workspace root)"
-                    ),
+                    "path": _path_param("Directory to search (default: the root)"),
                     "glob": {
                         "type": "string",
                         "description": "Only search file names matching this glob, for example *.py",
@@ -189,7 +199,7 @@ SCHEMAS = [
 SKIP_DIRS = {".git", "__pycache__", ".venv", "node_modules", ".tmp"}
 
 
-def read_file(workspace: Path, args: dict, *, tool_name: str = "read_file") -> str:
+def read_file(workspace: Path, args: dict) -> str:
     path = resolve_readable(workspace, args.get("path", ""))
     if not path.exists():
         return "Error: not found"
@@ -210,7 +220,7 @@ def read_file(workspace: Path, args: dict, *, tool_name: str = "read_file") -> s
     def marker(last: int) -> str:
         return (
             f"\n...[showing lines {offset}-{last} of {total}; "
-            f"call {tool_name} with offset={last + 1} to continue]"
+            f"call read_file with offset={last + 1} to continue]"
         )
 
     if len(body) <= MAX_TOOL_RESULT:
@@ -234,6 +244,19 @@ def read_file(workspace: Path, args: dict, *, tool_name: str = "read_file") -> s
     )
 
 
+def _python_syntax_note(path: Path) -> str:
+    if path.suffix != ".py":
+        return ""
+    try:
+        compile(path.read_text(encoding="utf-8"), path.name, "exec")
+    except SyntaxError as exc:
+        detail = exc.msg or "invalid syntax"
+        if exc.lineno:
+            detail = f"line {exc.lineno}: {detail}"
+        return f"\nSyntax error: {detail}"
+    return ""
+
+
 def write_file(workspace: Path, args: dict) -> str:
     path = resolve_in_workspace(workspace, args.get("path", ""))
     content = args.get("content")
@@ -242,7 +265,7 @@ def write_file(workspace: Path, args: dict) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     data = content.encode("utf-8")
     path.write_bytes(data)
-    return f"Wrote {len(data)} bytes to {path}"
+    return f"Wrote {len(data)} bytes to {path}" + _python_syntax_note(path)
 
 
 def edit_file(workspace: Path, args: dict) -> str:
@@ -267,7 +290,7 @@ def edit_file(workspace: Path, args: dict) -> str:
     updated = text.replace(old, new) if replace_all else text.replace(old, new, 1)
     path.write_text(updated, encoding="utf-8")
     replaced = count if replace_all else 1
-    return f"Replaced {replaced} occurrence(s) in {shown}"
+    return f"Replaced {replaced} occurrence(s) in {shown}" + _python_syntax_note(path)
 
 
 def append_file(workspace: Path, args: dict) -> str:

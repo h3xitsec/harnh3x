@@ -18,8 +18,9 @@ SCHEMAS = [
         "function": {
             "name": "fetch_url",
             "description": (
-                "Download an http or https URL (HTML, text, JSON, XML, or PDF) into the "
-                "workspace. Returns the saved path, not the body."
+                "Download an http or https URL (HTML, text, CSV, JSON, XML, or PDF) "
+                "into the workspace. Returns the saved path, not the body; open it "
+                "with parse_html, read_pdf, inspect_json, or inspect_csv."
             ),
             "parameters": {
                 "type": "object",
@@ -38,7 +39,10 @@ SCHEMAS = [
         "type": "function",
         "function": {
             "name": "http_get_json",
-            "description": "GET a public JSON API and return the parsed response",
+            "description": (
+                "GET a JSON API and return the parsed response. Put query parameters "
+                "in params instead of building the URL by hand."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -58,9 +62,10 @@ SCHEMAS = [
             "name": "http_request",
             "description": (
                 "Send an HTTP request and return the status code, headers, and body. "
-                "Use for calling APIs. Response bodies are truncated, then the text "
-                "result is capped. Redirects are not followed unless follow_redirects "
-                "is true."
+                "An error status is a result, not a tool error. Use json_body for "
+                "JSON and body for other text, not both. Response bodies are "
+                "truncated, then the text result is capped. Redirects are not "
+                "followed unless follow_redirects is true."
             ),
             "parameters": {
                 "type": "object",
