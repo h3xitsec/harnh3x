@@ -40,83 +40,104 @@ def _complete(
     on_tool: Callable[[str, object], None] | None,
 ) -> str:
     api = client or api_client.get_client()
+    turn = 0
 
-    for turn in range(MAX_TURNS):
-        if session.abort.is_set():
-            return ""
-        write_log({"event": "turn", "turn": turn}, session.workspace)
-        _compact(session, api)
-        if session.abort.is_set():
-            return ""
-        _emit_debug(session)
-        try:
-            completed = _completion(session, api)
-        except APIConnectionError as exc:
-            return _close_with(session, _api_failure(exc))
-        except APIStatusError as exc:
-            return _close_with(session, status_message(exc))
-        except CompletionError as exc:
-            return _close_with(session, str(exc))
-        if completed is None or session.abort.is_set():
-            return ""
-        msg, usage = completed
-        stored = assistant_message(msg)
-        session.messages.append(stored)
-        _remember_context(session, usage, api)
-        write_log(
-            {"event": "model", "turn": turn, "message": _log_preview(stored)},
-            session.workspace,
-        )
-        if not msg.tool_calls:
-            _compact(session, api)
-            return _visible_answer(stored)
-
-        for position, tc in enumerate(msg.tool_calls):
+    while True:
+        for _ in range(MAX_TURNS):
             if session.abort.is_set():
-                _answer_interrupted(session, msg.tool_calls[position:])
                 return ""
-            if show_tools:
-                _show_tool(session, tc, on_tool)
-            args, result = _tool_result(
-                tc.function.name,
-                tc.function.arguments,
-                session.workspace,
-                session.skills,
-                yolo=session.yolo,
-                project=session.project,
-            )
-            if session.coding:
-                result = append_matching_rules(
-                    session.project, args, result, session.applied_rules
-                )
-            if tc.function.name in {"load_skill", "unload_skill"} and args is not None:
-                session.sync_prompt()
-            done = getattr(session, "on_tool_done", None)
-            if show_tools and done is not None:
-                done(tc.function.name, result)
+            write_log({"event": "turn", "turn": turn}, session.workspace)
+            _compact(session, api)
+            if session.abort.is_set():
+                return ""
+            _emit_debug(session)
+            try:
+                completed = _completion(session, api)
+            except APIConnectionError as exc:
+                return _close_with(session, _api_failure(exc))
+            except APIStatusError as exc:
+                return _close_with(session, status_message(exc))
+            except CompletionError as exc:
+                return _close_with(session, str(exc))
+            if completed is None or session.abort.is_set():
+                return ""
+            msg, usage = completed
+            stored = assistant_message(msg)
+            session.messages.append(stored)
+            _remember_context(session, usage, api)
             write_log(
-                {
-                    "event": "tool_call",
-                    "name": tc.function.name,
-                    "args": _log_preview(
-                        args if args is not None else tc.function.arguments
-                    ),
-                },
+                {"event": "model", "turn": turn, "message": _log_preview(stored)},
                 session.workspace,
             )
-            write_log(
-                {
-                    "event": "tool_result",
-                    "name": tc.function.name,
-                    "content": result,
-                },
-                session.workspace,
-            )
-            session.messages.append(
-                {"role": "tool", "tool_call_id": tc.id, "content": result}
-            )
+            if not msg.tool_calls:
+                _compact(session, api)
+                return _visible_answer(stored)
 
-    return _close_with(session, MAX_TURNS_REACHED, compact=api)
+            for position, tc in enumerate(msg.tool_calls):
+                if session.abort.is_set():
+                    _answer_interrupted(session, msg.tool_calls[position:])
+                    return ""
+                if show_tools:
+                    _show_tool(session, tc, on_tool)
+                args, result = _tool_result(
+                    tc.function.name,
+                    tc.function.arguments,
+                    session.workspace,
+                    session.skills,
+                    yolo=session.yolo,
+                    project=session.project,
+                )
+                if session.coding:
+                    result = append_matching_rules(
+                        session.project, args, result, session.applied_rules
+                    )
+                if (
+                    tc.function.name in {"load_skill", "unload_skill"}
+                    and args is not None
+                ):
+                    session.sync_prompt()
+                done = getattr(session, "on_tool_done", None)
+                if show_tools and done is not None:
+                    done(tc.function.name, result)
+                write_log(
+                    {
+                        "event": "tool_call",
+                        "name": tc.function.name,
+                        "args": _log_preview(
+                            args if args is not None else tc.function.arguments
+                        ),
+                    },
+                    session.workspace,
+                )
+                write_log(
+                    {
+                        "event": "tool_result",
+                        "name": tc.function.name,
+                        "content": result,
+                    },
+                    session.workspace,
+                )
+                session.messages.append(
+                    {"role": "tool", "tool_call_id": tc.id, "content": result}
+                )
+            turn += 1
+
+        if session.abort.is_set():
+            return ""
+        if _another_window(session):
+            if session.abort.is_set():
+                return ""
+            continue
+        if session.abort.is_set():
+            return ""
+        return _close_with(session, MAX_TURNS_REACHED, compact=api)
+
+
+def _another_window(session: Session) -> bool:
+    ask = getattr(session, "confirm_continue", None)
+    if not callable(ask) or session.abort.is_set():
+        return False
+    return ask() is True
 
 
 def _shown_args(arguments: object) -> object:

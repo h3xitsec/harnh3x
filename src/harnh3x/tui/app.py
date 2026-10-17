@@ -48,7 +48,12 @@ from harnh3x.tui.mentions import (
     mention_window,
     replace_mention_query,
 )
-from harnh3x.tui.modals import ExportPathScreen, HelpScreen, WarningScreen
+from harnh3x.tui.modals import (
+    ContinueScreen,
+    ExportPathScreen,
+    HelpScreen,
+    WarningScreen,
+)
 from harnh3x.tui.panels import (
     AgentAnswer,
     Composer,
@@ -76,6 +81,7 @@ from harnh3x.tui.transcript import (
 
 WAITING = "Waiting for the model…"
 STOPPING = "Stopping…"
+MAX_TURNS_PHASE = "Max turns reached"
 _CONTEXT_STYLES = {"warn": "ansi_yellow", "over": "bold ansi_red"}
 
 
@@ -407,7 +413,13 @@ class HarnessApp(App):
     def _anchor_transcript(self) -> None:
         self.query_one("#transcript").anchor()
 
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        # One-shot binds Enter to close. That binding is priority, so it is
+        # checked before the modal; leave Enter for the continue prompt.
+        return not (action == "close" and isinstance(self.screen, ContinueScreen))
+
     def on_mount(self) -> None:
+        self.session.confirm_continue = self._confirm_continue
         self._refresh_status()
         self._load_context_limit()
         self._anchor_transcript()
@@ -638,9 +650,9 @@ class HarnessApp(App):
         if not self._busy:
             bar.add_class("hidden")
             return
-        stoppable = (
-            getattr(self.session, "abort", None) is not None and self._phase != STOPPING
-        )
+        stoppable = getattr(
+            self.session, "abort", None
+        ) is not None and self._phase not in {STOPPING, MAX_TURNS_PHASE}
         bar.update(
             activity_text(
                 self._frame,
@@ -1029,6 +1041,34 @@ class HarnessApp(App):
                 self.tools = None
                 for name, args in payload:
                     self._append_tool(name, args)
+
+    def _confirm_continue(self) -> bool:
+        # Posted to the app thread. Waiting on the screen here would deadlock,
+        # because call_from_thread holds that thread until this returns.
+        if self._quitting or self._aborted():
+            return False
+        done = threading.Event()
+        choice = {"yes": False}
+
+        def ask() -> None:
+            if self._quitting or self._aborted():
+                done.set()
+                return
+            self._set_phase(MAX_TURNS_PHASE)
+
+            def chosen(yes: bool | None) -> None:
+                choice["yes"] = yes is True
+                if self._phase == MAX_TURNS_PHASE and not self._quitting:
+                    self._set_phase(WAITING)
+                done.set()
+
+            self.push_screen(ContinueScreen(), chosen)
+
+        self._from_thread(ask)
+        while not done.wait(0.1):
+            if self._quitting or self._aborted():
+                return False
+        return choice["yes"] and not self._aborted() and not self._quitting
 
     def _turn(self, text: str) -> None:
         start = len(getattr(self.session, "messages", []) or [])

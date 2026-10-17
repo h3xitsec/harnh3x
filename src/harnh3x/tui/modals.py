@@ -1,4 +1,4 @@
-"""Modal overlays: the export path prompt, the help box, and warning details."""
+"""Modal overlays: the export path prompt, the max-turns prompt, the help box, and warning details."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Input, Static
 
 from harnh3x.commands import help_lines
+from harnh3x.config import MAX_TURNS
 
 _HOTKEYS = """\
 Hotkeys
@@ -121,6 +122,36 @@ class ExportPathScreen(ModalScreen[str | None]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+
+class ContinueScreen(ModalScreen[bool]):
+    """Ask whether to grant another MAX_TURNS window. Enter continues; Escape stops."""
+
+    BINDINGS: ClassVar[list[Binding]] = [
+        Binding("enter", "continue_turns", "Continue", priority=True),
+        Binding("escape", "stop", "Stop", priority=True),
+    ]
+    DEFAULT_CSS = _FRAME_CSS.format(
+        screen="ContinueScreen", frame="continue-frame", border="$accent"
+    )
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="continue-frame"):
+            yield Static(
+                f"Max turns reached. Continue for another {MAX_TURNS} turns?",
+                id="continue-prompt",
+                markup=False,
+            )
+            yield Static("Enter to continue, Escape to stop", markup=False)
+
+    def on_mount(self) -> None:
+        self.query_one("#continue-frame", Vertical).border_title = "Max turns"
+
+    def action_continue_turns(self) -> None:
+        self.dismiss(True)
+
+    def action_stop(self) -> None:
+        self.dismiss(False)
 
 
 class HelpScreen(ModalScreen):

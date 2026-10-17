@@ -147,6 +147,8 @@ Web and API tools run in the parent process. They accept only public `http` and 
 
 When context use reaches half the model's limit, older turns are summarized into one note. The system prompt, the current user message, and the latest unanswered tool result or finished answer stay put. `/compact` forces that summary.
 
+An interactive session that uses up `max_turns` asks before stopping, and each yes grants another window of that many completions. Declining, or a run that is not interactive, ends with `Max turns reached.`
+
 `~/.harnh3x/` (or `base_dir`) holds:
 
 | Path | Role |

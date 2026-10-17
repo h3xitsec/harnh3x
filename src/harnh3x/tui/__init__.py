@@ -34,6 +34,7 @@ from harnh3x.tui.mentions import (
     replace_mention_query,
 )
 from harnh3x.tui.modals import (
+    ContinueScreen,
     ExportPathScreen,
     HelpScreen,
     WarningScreen,
@@ -109,6 +110,7 @@ __all__ = [
     "CollapsiblePanel",
     "Compaction",
     "Composer",
+    "ContinueScreen",
     "CopyAnswer",
     "DebugBox",
     "ExportAnswer",

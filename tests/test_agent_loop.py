@@ -612,6 +612,113 @@ def test_max_turns_closes_with_an_assistant_message(tmp_path, monkeypatch):
     assert events == ["turn", "model", "tool_call", "tool_result", "model"]
 
 
+def _tool_call_client(scripts):
+    calls = {"n": 0}
+
+    def create(**kwargs):
+        calls["n"] += 1
+        step = scripts[calls["n"] - 1]
+        if step == "answer":
+            message = SimpleNamespace(content="finished", tool_calls=None)
+        else:
+            message = SimpleNamespace(
+                content="",
+                tool_calls=[
+                    SimpleNamespace(
+                        id=f"call_{calls['n']}",
+                        function=SimpleNamespace(
+                            name="read_file", arguments='{"path": "missing.txt"}'
+                        ),
+                    )
+                ],
+            )
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    return client, calls
+
+
+def test_confirm_continue_grants_another_window(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_loop, "MAX_TURNS", 1)
+    client, calls = _tool_call_client(["tool", "answer"])
+    session = agent.Session(workspace=tmp_path)
+    asked = {"n": 0}
+
+    def confirm():
+        asked["n"] += 1
+        return True
+
+    session.confirm_continue = confirm
+
+    text = agent.run("read missing.txt", session, client=client)
+
+    assert text == "finished"
+    assert asked["n"] == 1
+    assert calls["n"] == 2
+    assert all(
+        message.get("content") != "Max turns reached." for message in session.messages
+    )
+    events = [
+        json.loads(line) for line in (tmp_path / "session.log").read_text().splitlines()
+    ]
+    assert [event["turn"] for event in events if event["event"] == "turn"] == [0, 1]
+
+
+def test_declining_another_window_closes_after_two(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_loop, "MAX_TURNS", 1)
+    client, calls = _tool_call_client(["tool", "tool"])
+    session = agent.Session(workspace=tmp_path)
+    answers = iter([True, False])
+    session.confirm_continue = lambda: next(answers)
+
+    text = agent.run("read missing.txt", session, client=client)
+
+    assert text == "Max turns reached."
+    assert calls["n"] == 2
+    assert session.messages[-1] == {
+        "role": "assistant",
+        "content": "Max turns reached.",
+    }
+    assert session.messages[-2]["role"] == "tool"
+    events = [
+        json.loads(line) for line in (tmp_path / "session.log").read_text().splitlines()
+    ]
+    assert [event["turn"] for event in events if event["event"] == "turn"] == [0, 1]
+    assert [event["event"] for event in events] == [
+        "turn",
+        "model",
+        "tool_call",
+        "tool_result",
+        "turn",
+        "model",
+        "tool_call",
+        "tool_result",
+        "model",
+    ]
+
+
+def test_abort_during_confirm_continue_does_not_close(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_loop, "MAX_TURNS", 1)
+    client, _calls = _tool_call_client(["tool"])
+    session = agent.Session(workspace=tmp_path)
+
+    def confirm():
+        session.abort.set()
+        return True
+
+    session.confirm_continue = confirm
+
+    text = agent.run("read missing.txt", session, client=client)
+
+    assert text == ""
+    assert session.messages[-1]["role"] == "tool"
+    assert all(
+        message.get("content") != "Max turns reached." for message in session.messages
+    )
+
+
 def test_run_sends_skill_schemas_after_load(tmp_path):
     seen = []
     calls = {"n": 0}

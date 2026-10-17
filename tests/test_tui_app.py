@@ -12,6 +12,7 @@ from harnh3x.tui import (
     EXPORT_USAGE,
     AgentAnswer,
     Composer,
+    ContinueScreen,
     CopyAnswer,
     DebugBox,
     ExportAnswer,
@@ -20,6 +21,7 @@ from harnh3x.tui import (
     HarnessApp,
     HarnessScreen,
     HelpScreen,
+    OneShotApp,
     ResumeOptions,
     ResumeScreen,
     ReviewApp,
@@ -1353,6 +1355,77 @@ def test_escape_stops_a_turn_and_keeps_the_app():
             await pilot.press(*"next", "enter")
             await _wait_for(
                 pilot, lambda: "Agent: quick answer" in app.transcript_plain()
+            )
+
+    asyncio.run(drive())
+
+
+def test_enter_continues_past_max_turns():
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+
+    def fake_run(message, active, show_tools=True, on_tool=None):
+        assert active.confirm_continue() is True
+        return "kept going"
+
+    app = HarnessApp(session, fake_run, show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press(*"go", "enter")
+            await _wait_for(pilot, lambda: isinstance(app.screen, ContinueScreen))
+            shown = str(app.screen.query_one("#continue-prompt").content)
+            assert "Continue for another" in shown
+            assert "turns?" in shown
+            activity = str(app.query_one("#activity").content)
+            assert "Max turns reached" in activity
+            assert "Esc to stop" not in activity
+            await pilot.press("enter")
+            await _wait_for(
+                pilot, lambda: "Agent: kept going" in app.transcript_plain()
+            )
+            assert not isinstance(app.screen, ContinueScreen)
+
+    asyncio.run(drive())
+
+
+def test_escape_stops_at_max_turns():
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+
+    def fake_run(message, active, show_tools=True, on_tool=None):
+        assert active.confirm_continue() is False
+        return "Max turns reached."
+
+    app = HarnessApp(session, fake_run, show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press(*"go", "enter")
+            await _wait_for(pilot, lambda: isinstance(app.screen, ContinueScreen))
+            await pilot.press("escape")
+            await _wait_for(
+                pilot, lambda: "Agent: Max turns reached." in app.transcript_plain()
+            )
+            assert not isinstance(app.screen, ContinueScreen)
+            assert app.query_one(AgentAnswer).has_class("error")
+
+    asyncio.run(drive())
+
+
+def test_one_shot_enter_continues_past_max_turns():
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+
+    def fake_run(message, active, show_tools=True, on_tool=None):
+        assert active.confirm_continue() is True
+        return "kept going"
+
+    app = OneShotApp(session, fake_run, show_tools=True, initial="go")
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await _wait_for(pilot, lambda: isinstance(app.screen, ContinueScreen))
+            await pilot.press("enter")
+            await _wait_for(
+                pilot, lambda: "Agent: kept going" in app.transcript_plain()
             )
 
     asyncio.run(drive())
