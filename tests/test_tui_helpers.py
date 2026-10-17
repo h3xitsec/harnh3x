@@ -7,16 +7,99 @@ from types import SimpleNamespace
 import pytest
 from helpers import _export_messages
 
+from harnh3x import is_failure_answer, matching_commands
 from harnh3x.tui import (
     ModelApp,
+    activity_text,
+    context_level,
     context_line,
     conversation_turns,
+    elapsed_text,
     export_base,
+    export_filename,
     exportable_answers,
+    format_call,
     render_export,
+    slash_hint,
     transcript_items,
+    translate_legacy_key,
     write_export,
 )
+
+
+def test_translate_legacy_key_maps_terminal_app_sequences():
+    apple = "Apple_Terminal"
+    assert translate_legacy_key("backspace", "\x08", apple) == "ctrl+h"
+    assert translate_legacy_key("ctrl+w", None, apple) == "alt+backspace"
+    assert translate_legacy_key("backspace", "\x7f", apple) == "backspace"
+    assert translate_legacy_key("ctrl+w", "\x17", apple) == "ctrl+w"
+    assert translate_legacy_key("enter", "\r", apple) == "enter"
+    for other in ("iTerm.app", "vscode", None):
+        assert translate_legacy_key("backspace", "\x08", other) == "backspace"
+        assert translate_legacy_key("ctrl+w", None, other) == "ctrl+w"
+
+
+def test_format_call_shows_readable_arguments():
+    assert format_call("read_file", {"path": "a.txt"}) == "read_file  path=a.txt"
+    assert (
+        format_call("run_shell", {"command": "ls -la", "timeout": 5})
+        == 'run_shell  command="ls -la"  timeout=5'
+    )
+    assert format_call("write_file", {"content": "a\nb"}) == (
+        'write_file  content="a\\nb"'
+    )
+    long = format_call("write_file", {"content": "x" * 200})
+    assert len(long) < 120
+    assert long.endswith("…")
+    whole = format_call("write_file", {"content": "x" * 200}, limit=None)
+    assert whole == "write_file  content=" + "x" * 200
+    assert format_call("unload_skill", {}) == "unload_skill"
+    assert format_call("broken", "{not json") == "broken  {not json"
+
+
+def test_context_level_warns_before_compaction():
+    assert context_level(None, 1000, 0.5) is None
+    assert context_level(100, None, 0.5) is None
+    assert context_level(399, 1000, 0.5) is None
+    assert context_level(400, 1000, 0.5) == "warn"
+    assert context_level(499, 1000, 0.5) == "warn"
+    assert context_level(500, 1000, 0.5) == "over"
+
+
+def test_activity_text_shows_phase_time_and_stop_hint():
+    assert elapsed_text(3.9) == "3s"
+    assert elapsed_text(65) == "1m 05s"
+    text = activity_text(0, "Thinking…", 12.4, stoppable=True)
+    assert text.endswith("Thinking… · 12s · Esc to stop")
+    assert "Esc" not in activity_text(1, "Stopping…", 1, stoppable=False)
+
+
+def test_slash_hint_lists_matching_commands():
+    assert [command.name for command in matching_commands("/e")] == [
+        "export",
+        "exit",
+    ]
+    assert matching_commands("/export path") == []
+    assert matching_commands("hello") == []
+    assert matching_commands("/a\nb") == []
+    assert slash_hint(matching_commands("/e")) == "/export  /exit · Tab completes"
+    assert slash_hint(matching_commands("/det")).startswith("/details  hide or show")
+
+
+def test_failure_answers_are_recognized():
+    assert is_failure_answer("Could not reach the API.")
+    assert is_failure_answer("The API request timed out.")
+    assert is_failure_answer("The API rejected the request: bad model")
+    assert is_failure_answer("Max turns reached.")
+    assert is_failure_answer("The model returned an empty answer.")
+    assert not is_failure_answer("All done.")
+    assert not is_failure_answer(None)
+
+
+def test_export_filename_uses_the_time():
+    from datetime import datetime
+
+    assert export_filename(datetime(2026, 10, 16, 23, 5)) == "answer-20261016-2305.md"
 
 
 def _run(app, keys: list[str]):
@@ -48,7 +131,8 @@ def test_model_screen_accepts_arrows_or_a_number():
 
 
 def test_context_line_formats_used_and_limit():
-    assert context_line(1234, 8192) == "Context: 1,234 / 8,192"
+    assert context_line(1234, 8192) == "Context: 1,234 / 8,192 (15%)"
+    assert context_line(0, 8192) == "Context: 0 / 8,192 (0%)"
     assert context_line(None, 8192) == "Context: — / 8,192"
     assert context_line(50, None) == "Context: 50"
     assert context_line(None, None) is None

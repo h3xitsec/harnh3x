@@ -12,7 +12,7 @@ from harnh3x.agent import (
     run,
     session_label,
 )
-from harnh3x.commands import NO_EXPORT, dispatch, help_lines
+from harnh3x.commands import DETAILS_PLAIN, NO_EXPORT, dispatch, help_lines
 from harnh3x.config import MODEL, require_api_settings
 from harnh3x.tui import (
     YOLO_PLAIN,
@@ -237,6 +237,11 @@ def _resume_session(session, *, answer_only: bool) -> None:
     _print_turns(session, answer_only=answer_only)
 
 
+def _new_session(session, *, answer_only: bool) -> None:
+    session.reset()
+    _print_session(session, answer_only=answer_only)
+
+
 def _choose_export(answers: list[str]) -> list[str] | None:
     if len(answers) == 1:
         return answers
@@ -275,9 +280,11 @@ def _handle_command(session, name: str, rest: str, *, answer_only: bool) -> bool
     """Run one slash command at the plain prompt. True means quit."""
     handlers = {
         "help": lambda _rest: print(_PLAIN_HELP),
+        "new": lambda _rest: _new_session(session, answer_only=answer_only),
         "resume": lambda _rest: _resume_session(session, answer_only=answer_only),
         "compact": lambda _rest: print(compact_session(session)),
         "export": lambda rest: _export_answers(session, rest),
+        "details": lambda _rest: print(DETAILS_PLAIN),
         "exit": lambda _rest: True,
     }
     return dispatch(name, rest, handlers, print) is True

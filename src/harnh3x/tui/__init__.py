@@ -5,6 +5,7 @@ from harnh3x.tui.app import (
     HarnessScreen,
     OneShotApp,
     ReviewApp,
+    StatusBar,
     run_interactive,
     run_review,
 )
@@ -18,7 +19,12 @@ from harnh3x.tui.export import (
     render_export,
     write_export,
 )
-from harnh3x.tui.modals import ExportPathScreen, HelpScreen, WarningScreen
+from harnh3x.tui.modals import (
+    ExportPathScreen,
+    HelpScreen,
+    WarningScreen,
+    export_filename,
+)
 from harnh3x.tui.panels import (
     AgentAnswer,
     AnswerIcon,
@@ -30,6 +36,8 @@ from harnh3x.tui.panels import (
     ExportRow,
     Thinking,
     ToolBox,
+    ToolEntry,
+    UserMessage,
 )
 from harnh3x.tui.pickers import (
     ExportOptions,
@@ -44,17 +52,24 @@ from harnh3x.tui.pickers import (
     pick_model,
 )
 from harnh3x.tui.text import (
+    APPLE_TERMINAL,
     THINKING_ROWS,
     YOLO_PLAIN,
+    activity_text,
+    context_level,
     context_line,
     debug_text,
     displayed_args,
+    elapsed_text,
+    format_call,
     line_limit,
     reply_reasoning,
+    slash_hint,
     thinking_hint,
     thinking_overflows,
     thinking_shown,
     thinking_text,
+    translate_legacy_key,
     wrap_lines,
 )
 from harnh3x.tui.transcript import (
@@ -68,6 +83,7 @@ from harnh3x.tui.transcript import (
 )
 
 __all__ = [
+    "APPLE_TERMINAL",
     "EXPORT_USAGE",
     "NO_EXPORT",
     "THINKING_ROWS",
@@ -96,32 +112,42 @@ __all__ = [
     "ResumeOptions",
     "ResumeScreen",
     "ReviewApp",
+    "StatusBar",
     "Thinking",
     "ToolBox",
+    "ToolEntry",
     "Turn",
+    "UserMessage",
     "WarningScreen",
+    "activity_text",
     "answer_preview",
     "compact_change",
     "compact_label",
     "compact_summary",
+    "context_level",
     "context_line",
     "conversation_turns",
     "copy_response",
     "debug_text",
     "displayed_args",
+    "elapsed_text",
     "export_base",
+    "export_filename",
     "exportable_answers",
+    "format_call",
     "line_limit",
     "pick_model",
     "render_export",
     "reply_reasoning",
     "run_interactive",
     "run_review",
+    "slash_hint",
     "thinking_hint",
     "thinking_overflows",
     "thinking_shown",
     "thinking_text",
     "transcript_items",
+    "translate_legacy_key",
     "wrap_lines",
     "write_export",
 ]

@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
+import os
 import threading
+import time
 from collections.abc import Callable
 from typing import ClassVar
 
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalGroup, VerticalScroll
 from textual.content import Content
 from textual.geometry import Offset
 from textual.screen import Screen
+from textual.timer import Timer
 from textual.widget import Widget
-from textual.widgets import Static
+from textual.widgets import Static, TextArea
 
 from harnh3x import __version__
 from harnh3x.agent import (
@@ -22,7 +26,9 @@ from harnh3x.agent import (
     model_context_limit,
     parse_command,
 )
-from harnh3x.commands import NO_EXPORT, dispatch
+from harnh3x.commands import NO_EXPORT, dispatch, matching_commands
+from harnh3x.config import COMPACT_AT
+from harnh3x.failures import is_failure_answer
 from harnh3x.tools.process import kill_children
 from harnh3x.tui.export import (
     export_base,
@@ -31,15 +37,34 @@ from harnh3x.tui.export import (
     write_export,
 )
 from harnh3x.tui.modals import ExportPathScreen, HelpScreen, WarningScreen
-from harnh3x.tui.panels import AgentAnswer, Composer, DebugBox, Thinking, ToolBox
+from harnh3x.tui.panels import (
+    AgentAnswer,
+    Composer,
+    DebugBox,
+    Thinking,
+    ToolBox,
+    UserMessage,
+)
 from harnh3x.tui.pickers import ExportScreen, ResumeScreen
-from harnh3x.tui.text import context_line, reply_reasoning
+from harnh3x.tui.text import (
+    activity_text,
+    context_level,
+    context_line,
+    reply_reasoning,
+    slash_hint,
+    translate_legacy_key,
+)
 from harnh3x.tui.transcript import (
     Compaction,
     _static_text,
     compact_change,
+    conversation_turns,
     transcript_items,
 )
+
+WAITING = "Waiting for the model…"
+STOPPING = "Stopping…"
+_CONTEXT_STYLES = {"warn": "ansi_yellow", "over": "bold ansi_red"}
 
 
 class HarnessScreen(Screen):
@@ -54,12 +79,21 @@ class HarnessScreen(Screen):
         return widget, offset
 
 
+class StatusBar(Static):
+    def on_click(self, event: events.Click) -> None:
+        event.stop()
+        action = getattr(self.app, "action_warnings", None)
+        if callable(action):
+            action()
+
+
 class HarnessApp(App):
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("ctrl+q", "quit", "Quit", priority=True),
         Binding("ctrl+h", "toggle_trace", "Details", priority=True),
         Binding("ctrl+w", "warnings", "Warnings", priority=True),
         Binding("ctrl+n", "new_session", "New session", priority=True),
+        Binding("escape", "stop_turn", "Stop", show=False),
     ]
     CSS = """
     #banner {
@@ -95,7 +129,22 @@ class HarnessApp(App):
         padding: 0 1;
     }
     #composer {
-        height: 5;
+        height: auto;
+        min-height: 3;
+        max-height: 10;
+    }
+    #activity {
+        height: 1;
+        padding: 0 1;
+        color: $accent;
+    }
+    #slash-hint {
+        height: 1;
+        padding: 0 1;
+        color: $text-muted;
+    }
+    #activity.hidden, #slash-hint.hidden {
+        display: none;
     }
     .panel {
         border: round ansi_bright_black;
@@ -104,6 +153,9 @@ class HarnessApp(App):
         color: $text-muted;
         height: auto;
     }
+    .panel:focus {
+        border: round $accent;
+    }
     #transcript.details-hidden .trace {
         display: none;
     }
@@ -111,9 +163,35 @@ class HarnessApp(App):
         color: ansi_cyan;
         border: round ansi_cyan;
     }
+    .user {
+        height: auto;
+        margin: 1 0 0 0;
+        padding: 0 1;
+        border-left: thick $accent;
+        background: $boost;
+    }
+    .agent-label {
+        text-style: bold;
+        color: $accent;
+    }
     AgentAnswer {
         height: auto;
-        margin-bottom: 1;
+        margin: 1 0;
+    }
+    AgentAnswer.error {
+        border-left: thick $error;
+        padding-left: 1;
+    }
+    AgentAnswer.error .agent-label {
+        color: $error;
+    }
+    .note {
+        color: $text-muted;
+        text-style: italic;
+    }
+    .note.error {
+        color: $error;
+        text-style: none;
     }
     """
 
@@ -140,7 +218,21 @@ class HarnessApp(App):
         self.tools: ToolBox | None = None
         self._hold_close = False
         self._quitting = False
+        self._busy = False
+        self._phase = WAITING
+        self._busy_since = 0.0
+        self._frame = 0
+        self._activity_timer: Timer | None = None
         self._reset_live()
+
+    async def on_event(self, event: events.Event) -> None:
+        if isinstance(event, events.Key) and not event.is_forwarded:
+            key = translate_legacy_key(
+                event.key, event.character, os.environ.get("TERM_PROGRAM")
+            )
+            if key != event.key:
+                event = events.Key(key, event.character if key == "ctrl+h" else None)
+        await super().on_event(event)
 
     def _yolo(self) -> bool:
         return bool(getattr(self.session, "yolo", False))
@@ -201,12 +293,11 @@ class HarnessApp(App):
         model = getattr(self.session, "model", None)
         if isinstance(model, str) and model:
             add(f"Model: {model}")
-        context = context_line(
-            getattr(self.session, "context_tokens", None),
-            getattr(self.session, "context_limit", None),
-        )
+        used = getattr(self.session, "context_tokens", None)
+        limit = getattr(self.session, "context_limit", None)
+        context = context_line(used, limit)
         if context is not None:
-            add(context)
+            add(context, _CONTEXT_STYLES.get(context_level(used, limit, COMPACT_AT)))
         counts = self._available_counts()
         if counts is not None:
             skills, tools, servers, mcp_tools = counts
@@ -279,10 +370,12 @@ class HarnessApp(App):
         yield Static(self._banner(), id="banner", markup=False)
         yield VerticalScroll(id="transcript")
         with VerticalGroup(id="bottom"):
+            yield Static("", id="activity", classes="hidden", markup=False)
             if self.review is None and self.initial is None:
+                yield Static("", id="slash-hint", classes="hidden", markup=False)
                 yield Composer()
             with Horizontal(id="status-line"):
-                yield Static(self._status(), id="status", markup=False)
+                yield StatusBar(self._status(), id="status", markup=False)
                 yield Static(__version__, id="version", markup=False)
 
     def _anchor_transcript(self) -> None:
@@ -302,11 +395,118 @@ class HarnessApp(App):
         self.session.on_delta = self._queue_delta
         self.session.on_compact = self._on_compact
         self.session.on_debug = self._queue_debug
+        if self.show_tools:
+            self.session.on_tool_done = self._queue_tool_done
         if self.initial:
             self._append_user(self.initial)
+            self._begin_busy()
             self._spawn(lambda: self._turn(self.initial))
             return
+        self._seed_history()
         self.query_one(Composer).focus()
+
+    def _seed_history(self) -> None:
+        composers = list(self.query(Composer))
+        if not composers:
+            return
+        messages = getattr(self.session, "messages", None) or []
+        composers[0].set_prompts([turn.user for turn in conversation_turns(messages)])
+
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        if isinstance(event.text_area, Composer):
+            self._refresh_slash_hint(event.text_area.text)
+
+    def _refresh_slash_hint(self, text: str) -> None:
+        hints = list(self.query("#slash-hint"))
+        if not hints:
+            return
+        matches = matching_commands(text)
+        hint = hints[0]
+        if matches:
+            hint.update(slash_hint(matches))
+        hint.set_class(not matches, "hidden")
+
+    def _begin_busy(self, phase: str = WAITING) -> None:
+        self._busy = True
+        self._phase = phase
+        self._busy_since = time.monotonic()
+        self._frame = 0
+        if self._activity_timer is None:
+            self._activity_timer = self.set_interval(0.1, self._tick_activity)
+        else:
+            self._activity_timer.resume()
+        self._render_activity()
+
+    def _end_busy(self) -> None:
+        self._busy = False
+        if self._activity_timer is not None:
+            self._activity_timer.pause()
+        self._render_activity()
+
+    def _set_phase(self, phase: str) -> None:
+        if not self._busy or self._phase == STOPPING or self._phase == phase:
+            return
+        self._phase = phase
+        self._render_activity()
+
+    def _tick_activity(self) -> None:
+        if not self._busy:
+            return
+        self._frame += 1
+        self._render_activity()
+
+    def _render_activity(self) -> None:
+        bars = list(self.query("#activity"))
+        if not bars:
+            return
+        bar = bars[0]
+        if not self._busy:
+            bar.add_class("hidden")
+            return
+        stoppable = (
+            getattr(self.session, "abort", None) is not None and self._phase != STOPPING
+        )
+        bar.update(
+            activity_text(
+                self._frame,
+                self._phase,
+                time.monotonic() - self._busy_since,
+                stoppable=stoppable,
+            )
+        )
+        bar.remove_class("hidden")
+
+    def _aborted(self) -> bool:
+        abort = getattr(self.session, "abort", None)
+        return abort is not None and abort.is_set()
+
+    def action_stop_turn(self) -> None:
+        if not self._busy or self._quitting or len(self.screen_stack) > 1:
+            return
+        abort = getattr(self.session, "abort", None)
+        if abort is None or abort.is_set():
+            return
+        abort.set()
+        kill_children()
+        self._phase = STOPPING
+        self._render_activity()
+
+    def _after_stop(self) -> None:
+        abort = getattr(self.session, "abort", None)
+        if abort is not None:
+            abort.clear()
+        if self.tools is not None:
+            self.tools.stop_running()
+        self._mount_new_compactions()
+        self._end_busy()
+        self._note("Stopped.")
+        self._refresh_banner()
+        if self.initial is not None:
+            self.exit()
+            return
+        composer = self.query_one(Composer)
+        composer.disabled = False
+        composer.focus()
 
     def action_warnings(self) -> None:
         warnings = self._warnings()
@@ -350,31 +550,38 @@ class HarnessApp(App):
         text = composer.text.strip()
         if not text:
             return
+        composer.remember(text)
         command = parse_command(text)
         if command is not None:
             composer.load_text("")
+            self._refresh_slash_hint("")
             self._command(*command)
             return
         composer.load_text("")
+        self._refresh_slash_hint("")
         composer.disabled = True
         self._append_user(text)
+        self._begin_busy()
         self._spawn(lambda: self._turn(text))
 
     def _command(self, name: str, rest: str) -> None:
         handlers = {
             "help": lambda _rest: self.push_screen(HelpScreen()),
+            "new": lambda _rest: self.call_later(self.action_new_session),
             "resume": lambda _rest: self.push_screen(
                 ResumeScreen(list_sessions()), self._on_resume
             ),
             "compact": lambda _rest: self._start_compact(),
             "export": self._start_export,
+            "details": lambda _rest: self.action_toggle_trace(),
             "exit": lambda _rest: self.action_quit(),
         }
-        dispatch(name, rest, handlers, self._note)
+        dispatch(name, rest, handlers, self._error_note)
 
     def _start_compact(self) -> None:
         composer = self.query_one(Composer)
         composer.disabled = True
+        self._begin_busy("Compacting context…")
         self._spawn(self._compact_now)
 
     def _focus_composer(self) -> None:
@@ -389,15 +596,15 @@ class HarnessApp(App):
                 raw, render_export(answers), base=export_base(self.session)
             )
         except ValueError as exc:
-            self._note(str(exc))
+            self.notify(str(exc), severity="error")
             return
-        self._note(f"Exported to {path}")
+        self.notify(f"Exported to {path}")
 
     def _start_export(self, raw: str) -> None:
         messages = getattr(self.session, "messages", None) or []
         answers = exportable_answers(messages)
         if not answers:
-            self._note(NO_EXPORT)
+            self.notify(NO_EXPORT, severity="warning")
             return
         if len(answers) == 1:
             self._write_export(raw, answers)
@@ -419,13 +626,7 @@ class HarnessApp(App):
                 self._write_export(path, [source])
             self._focus_composer()
 
-        self.push_screen(ExportPathScreen(), chosen)
-
-    def _stopping(self) -> bool:
-        if self._quitting:
-            return True
-        abort = getattr(self.session, "abort", None)
-        return abort is not None and abort.is_set()
+        self.push_screen(ExportPathScreen(export_base(self.session)), chosen)
 
     def action_quit(self) -> None:
         if not self._quitting:
@@ -450,12 +651,12 @@ class HarnessApp(App):
         threading.Thread(target=target, daemon=True).start()
 
     def _worker_error(self, exc: Exception) -> None:
-        if self._stopping():
+        if self._quitting:
             return
         self._handle_exception(exc)
 
     def _from_thread(self, callback: Callable, *args) -> None:
-        if self._stopping() or self._loop is None or not self._running:
+        if self._quitting or self._loop is None or not self._running:
             return
         try:
             self.call_from_thread(callback, *args)
@@ -469,6 +670,7 @@ class HarnessApp(App):
             self._from_thread(self._hide_compacting)
 
     def _show_compacting(self) -> None:
+        self._set_phase("Compacting context…")
         if self._compacting is not None:
             return
         block = Static("Compacting context…", markup=False, classes="panel trace")
@@ -477,6 +679,7 @@ class HarnessApp(App):
         self.query_one("#transcript").mount(block)
 
     def _hide_compacting(self) -> None:
+        self._set_phase(WAITING)
         block = self._compacting
         self._compacting = None
         if block is not None and block.parent is not None:
@@ -484,10 +687,16 @@ class HarnessApp(App):
 
     def _compact_now(self) -> None:
         status = compact_session(self.session)
+        if self._quitting:
+            return
+        if self._aborted():
+            self._from_thread(self._after_stop)
+            return
         self._from_thread(self._after_compact, status)
 
     def _after_compact(self, status: str) -> None:
         self._mount_new_compactions()
+        self._end_busy()
         self._refresh_banner()
         if status != "Context compacted.":
             self._note(status)
@@ -495,10 +704,14 @@ class HarnessApp(App):
         composer.disabled = False
         composer.focus()
 
-    def _note(self, text: str) -> None:
+    def _note(self, text: str, *, error: bool = False) -> None:
         transcript = self.query_one("#transcript")
-        transcript.mount(Static(text, markup=False))
+        classes = "note error" if error else "note"
+        transcript.mount(Static(text, markup=False, classes=classes))
         transcript.anchor()
+
+    def _error_note(self, text: str) -> None:
+        self._note(text, error=True)
 
     async def _on_resume(self, chosen) -> None:
         composer = self.query_one(Composer)
@@ -508,7 +721,7 @@ class HarnessApp(App):
         try:
             self.session.resume(chosen.workspace)
         except ValueError as exc:
-            self._note(str(exc))
+            self._error_note(str(exc))
             composer.focus()
             return
         self.tools = None
@@ -517,6 +730,7 @@ class HarnessApp(App):
         self._anchor_transcript()
         self._render_history()
         self._load_context_limit()
+        self._seed_history()
         composer.disabled = False
         composer.focus()
 
@@ -565,6 +779,8 @@ class HarnessApp(App):
         for child in self.query_one("#transcript").children:
             if isinstance(child, AgentAnswer):
                 parts.append(f"Agent: {child.source}")
+            elif isinstance(child, UserMessage):
+                parts.append(f"You: {child.source}")
             elif isinstance(child, Thinking):
                 parts.append(child.plain)
             elif isinstance(child, Static):
@@ -598,6 +814,7 @@ class HarnessApp(App):
             return
         self._streamed = True
         self._tools_open = False
+        self._set_phase("Thinking…" if kind == "reasoning" else "Writing…")
         transcript = self.query_one("#transcript")
         if kind == "reasoning":
             if not self._reasoning_open:
@@ -628,7 +845,7 @@ class HarnessApp(App):
             if kind == "thinking":
                 transcript.mount(Thinking(payload, hold=False))
             elif kind == "answer":
-                transcript.mount(AgentAnswer(payload))
+                transcript.mount(AgentAnswer(payload, error=is_failure_answer(payload)))
             elif kind == "tools":
                 self.tools = None
                 for name, args in payload:
@@ -639,7 +856,7 @@ class HarnessApp(App):
         self._reset_live()
 
         def on_tool(name: str, args: object) -> None:
-            self._from_thread(self._append_tool, name, args)
+            self._from_thread(self._append_tool, name, args, "running")
 
         assert self._run is not None
         answer = self._run(
@@ -648,15 +865,28 @@ class HarnessApp(App):
             show_tools=self.show_tools,
             on_tool=on_tool if self.show_tools else None,
         )
-        if self._stopping():
+        if self._quitting:
+            return
+        if self._aborted():
+            self._from_thread(self._after_stop)
             return
         self._from_thread(self._after_turn, answer, start)
 
+    def _queue_tool_done(self, name: str, result: str) -> None:
+        self._from_thread(self._tool_done, name, result)
+
+    def _tool_done(self, name: str, result: str) -> None:
+        if self.tools is not None:
+            self.tools.finish(name, result)
+        self._set_phase(WAITING)
+
     def _append_user(self, text: str) -> None:
         self.tools = None
-        self.query_one("#transcript").mount(Static(f"You: {text}", markup=False))
+        self.query_one("#transcript").mount(UserMessage(text))
 
-    def _append_tool(self, name: str, args: object) -> None:
+    def _append_tool(self, name: str, args: object, state: str | None = None) -> None:
+        if state == "running":
+            self._set_phase(f"Running {name}…")
         self._mount_new_compactions()
         if not self._rendering and not self._tools_open:
             self.tools = None
@@ -671,16 +901,22 @@ class HarnessApp(App):
         if self.tools is None:
             self.tools = ToolBox()
             transcript.mount(self.tools)
-        self.tools.add(name, args)
+        self.tools.add(name, args, state=state)
         self._refresh_banner()
+
+    def _settle_tools(self) -> None:
+        for box in self.query(ToolBox):
+            box.settle()
 
     def _finish(self, answer: str | None, reasoning: str, refocus: bool = True) -> None:
         self._mount_new_compactions()
+        self._settle_tools()
+        self._end_busy()
         transcript = self.query_one("#transcript")
         if reasoning:
             transcript.mount(Thinking(reasoning, hold=self.review is not None))
         if answer is not None:
-            transcript.mount(AgentAnswer(answer))
+            transcript.mount(AgentAnswer(answer, error=is_failure_answer(answer)))
         self._refresh_banner()
         if refocus and self.review is None and self.initial is None:
             composer = self.query_one(Composer)
@@ -697,6 +933,8 @@ class HarnessApp(App):
             return
         transcript = self.query_one("#transcript")
         self._mount_new_compactions()
+        self._settle_tools()
+        self._end_busy()
         promoted = (
             not self._msg_content
             and bool(self._msg_reasoning)
@@ -709,7 +947,7 @@ class HarnessApp(App):
             self._live_thinking = None
             transcript.mount(AgentAnswer(answer))
         elif answer and answer != self._msg_content:
-            transcript.mount(AgentAnswer(answer))
+            transcript.mount(AgentAnswer(answer, error=is_failure_answer(answer)))
         self._refresh_banner()
         if self.initial is None and self.review is None:
             composer = self.query_one(Composer)

@@ -2,31 +2,44 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import ClassVar
 
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.content import Content
 from textual.events import Click, Key
 from textual.widgets import Markdown, Static, TextArea
 from textual.widgets.markdown import MarkdownStream
 
+from harnh3x.commands import matching_commands
 from harnh3x.tui.export import copy_response
 from harnh3x.tui.text import (
+    _clip,
     _panel_inner_width,
+    format_call,
     thinking_hint,
     thinking_overflows,
     thinking_shown,
 )
 
 
-class CollapsiblePanel(Static):
+class CollapsiblePanel(Static, can_focus=True):
     """A bordered panel that keeps its last rows until a click expands it.
 
-    Subclasses set ``title`` and return the full text from ``body()``; the
-    panel wraps it, decides whether it overflows, and keeps the hint in the
-    border subtitle current.
+    Subclasses set ``title`` and return the text from ``body()``; the panel
+    wraps it, decides whether it overflows, and keeps the hint in the border
+    subtitle current. A subclass whose collapsed text is shortened returns
+    the whole text from ``full_body()``, and that difference alone makes the
+    panel expandable. Enter or Space toggles a focused panel; a click toggles
+    it without taking focus from the composer.
     """
+
+    FOCUS_ON_CLICK = False
+    BINDINGS: ClassVar[list[Binding]] = [
+        Binding("enter,space", "toggle_panel", "Toggle", show=False),
+    ]
 
     title = ""
 
@@ -40,10 +53,16 @@ class CollapsiblePanel(Static):
     def body(self) -> str:
         raise NotImplementedError
 
+    def full_body(self) -> str:
+        return self.body()
+
     def on_click(self, event: Click) -> None:
         event.stop()
         if self.text_selection is not None:
             return
+        self.toggle()
+
+    def action_toggle_panel(self) -> None:
         self.toggle()
 
     def on_mount(self) -> None:
@@ -63,8 +82,9 @@ class CollapsiblePanel(Static):
 
     def _sync(self, width: int) -> None:
         text = self.body()
+        full = self.full_body()
         inner = _panel_inner_width(self, width)
-        self._expandable = thinking_overflows(text, width=inner)
+        self._expandable = full != text or thinking_overflows(text, width=inner)
         if not self._expandable:
             self.expanded = False
         self.border_title = self.title
@@ -76,8 +96,9 @@ class CollapsiblePanel(Static):
             self.border_subtitle = "enter to close"
         else:
             self.border_subtitle = ""
+        shown = full if self.expanded else text
         self.plain = "\n".join(
-            thinking_shown(text, expanded=self.expanded, width=inner)
+            thinking_shown(shown, expanded=self.expanded, width=inner)
         )
         self.update(self.plain)
 
@@ -96,6 +117,12 @@ class Thinking(CollapsiblePanel):
     def append(self, text: str) -> None:
         self.reasoning += text
         self.refresh_body()
+
+
+class UserMessage(Static):
+    def __init__(self, text: str) -> None:
+        self.source = text
+        super().__init__(Content.assemble(("You", "bold"), "\n", text), classes="user")
 
 
 class AnswerIcon(Static, can_focus=True):
@@ -143,6 +170,7 @@ class CopyAnswer(AnswerIcon):
         if answer is None:
             return
         copy_response(self.app, answer.source)
+        self.app.notify("Copied to the clipboard.", timeout=2)
 
 
 class ExportAnswer(AnswerIcon):
@@ -185,7 +213,9 @@ class ExportRow(Horizontal):
 
 
 class AgentAnswer(Vertical):
-    def __init__(self, source: str, *, stream: bool = False) -> None:
+    def __init__(
+        self, source: str, *, stream: bool = False, error: bool = False
+    ) -> None:
         # Set before super(), which composes children from this source.
         self.source = source
         self._live = stream
@@ -193,10 +223,10 @@ class AgentAnswer(Vertical):
         self._pumping = False
         self._closed = False
         self._stream: MarkdownStream | None = None
-        super().__init__()
+        super().__init__(classes="error" if error else "")
 
     def compose(self) -> ComposeResult:
-        yield Static("Agent", markup=False)
+        yield Static("Agent", markup=False, classes="agent-label")
         # A live answer starts empty. Markdown mounts by replacing every
         # block, so the stream appends instead of rebuilding on each token.
         yield Markdown(None if self._live else self.source, open_links=False)
@@ -266,35 +296,177 @@ class DebugBox(CollapsiblePanel):
         return self.source
 
 
+TOOL_DETAIL_LIMIT = 120
+_TOOL_MARKS = {"running": "…", "ok": "✓", "error": "✗", "stopped": "✗"}
+
+
+@dataclass
+class ToolEntry:
+    name: str
+    args: object
+    state: str | None = None
+    detail: str = ""
+
+
+def _first_line(text: str) -> str:
+    for line in text.splitlines():
+        if line.strip():
+            return line.strip()
+    return ""
+
+
 class ToolBox(CollapsiblePanel):
+    """One model round's tool calls.
+
+    A live call starts as ``running`` and becomes ``ok`` or ``error`` when its
+    result arrives; a replayed call has no state and no mark.
+    """
+
     title = "Tools"
 
     def __init__(self) -> None:
         super().__init__()
-        self.lines: list[str] = []
+        self.entries: list[ToolEntry] = []
         self._sync(80)
 
     def body(self) -> str:
-        return "\n".join(self.lines)
+        return self._call_lines(clip=True)
 
-    def add(self, name: str, args: object) -> None:
-        self.lines.append(f"🔧 {name}({args})")
+    def full_body(self) -> str:
+        return self._call_lines(clip=False)
+
+    def _call_lines(self, *, clip: bool) -> str:
+        lines = []
+        for entry in self.entries:
+            if clip:
+                call = format_call(entry.name, entry.args)
+                detail = _clip(entry.detail, TOOL_DETAIL_LIMIT)
+            else:
+                call = format_call(entry.name, entry.args, limit=None)
+                detail = entry.detail
+            mark = _TOOL_MARKS.get(entry.state or "")
+            lines.append(f"{mark} {call}" if mark else call)
+            if detail:
+                lines.append(f"  {detail}")
+        return "\n".join(lines)
+
+    def add(self, name: str, args: object, *, state: str | None = None) -> None:
+        self.entries.append(ToolEntry(name, args, state))
         self.refresh_body()
+
+    def finish(self, name: str, result: object) -> None:
+        for entry in reversed(self.entries):
+            if entry.state == "running" and entry.name == name:
+                text = result if isinstance(result, str) else str(result)
+                if text.lstrip().startswith("Error"):
+                    entry.state = "error"
+                    entry.detail = _first_line(text)
+                else:
+                    entry.state = "ok"
+                self.refresh_body()
+                return
+
+    def settle(self) -> None:
+        """Drop the mark on calls whose result never arrived."""
+        changed = False
+        for entry in self.entries:
+            if entry.state == "running":
+                entry.state = None
+                changed = True
+        if changed:
+            self.refresh_body()
+
+    def stop_running(self) -> None:
+        changed = False
+        for entry in self.entries:
+            if entry.state == "running":
+                entry.state = "stopped"
+                entry.detail = "Stopped."
+                changed = True
+        if changed:
+            self.refresh_body()
 
 
 class Composer(TextArea):
+    """The message box: Enter sends, Shift+Enter or Ctrl+J adds a newline.
+
+    Up on the first row and Down on the last row walk ``prompts`` (TextArea
+    already uses ``history`` for undo); Tab completes a slash command while
+    one matches.
+    """
+
     def __init__(self) -> None:
-        super().__init__(id="composer", placeholder="You")
+        super().__init__(
+            id="composer",
+            placeholder="Message · Enter to send · Shift+Enter for newline · /help",
+        )
+        self.prompts: list[str] = []
+        self._prompt_index: int | None = None
+        self._prompt_draft = ""
+
+    def set_prompts(self, items: list[str]) -> None:
+        self.prompts = list(items)
+        self._prompt_index = None
+
+    def remember(self, text: str) -> None:
+        if text and (not self.prompts or self.prompts[-1] != text):
+            self.prompts.append(text)
+        self._prompt_index = None
+
+    def _load(self, text: str) -> None:
+        self.load_text(text)
+        self.move_cursor(self.document.end)
+
+    def _recall(self, step: int) -> bool:
+        if not self.prompts:
+            return False
+        if self._prompt_index is None:
+            if step > 0:
+                return False
+            self._prompt_draft = self.text
+            index = len(self.prompts) - 1
+        else:
+            index = self._prompt_index + step
+        if index < 0:
+            return True
+        if index >= len(self.prompts):
+            self._prompt_index = None
+            self._load(self._prompt_draft)
+            return True
+        self._prompt_index = index
+        self._load(self.prompts[index])
+        return True
+
+    def _complete_command(self) -> bool:
+        matches = matching_commands(self.text)
+        if not matches:
+            return False
+        command = matches[0]
+        text = f"/{command.name}" + (" " if command.takes_argument else "")
+        self._load(text)
+        return True
 
     async def _on_key(self, event: Key) -> None:
+        handled = False
         if event.key == "enter":
-            event.stop()
-            event.prevent_default()
             self.app.action_submit()
-            return
-        if event.key == "shift+enter":
+            handled = True
+        elif event.key in ("shift+enter", "ctrl+j"):
+            self.insert("\n")
+            handled = True
+        elif event.key == "up" and self.cursor_location[0] == 0:
+            handled = self._recall(-1)
+        elif (
+            event.key == "down"
+            and self.cursor_location[0] == self.document.line_count - 1
+        ):
+            handled = self._recall(1)
+        elif event.key == "tab":
+            handled = self._complete_command()
+        if handled:
             event.stop()
             event.prevent_default()
-            self.insert("\n")
             return
+        if event.key not in ("up", "down"):
+            self._prompt_index = None
         await super()._on_key(event)

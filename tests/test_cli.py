@@ -9,6 +9,7 @@ from helpers import _delta, _export_messages, _load_cli, _past_workspace, _unrea
 
 import harnh3x.agent.client as agent_client
 from harnh3x import agent
+from harnh3x.commands import DETAILS_PLAIN
 from harnh3x.config import MODEL
 from harnh3x.tui import EXPORT_USAGE, NO_EXPORT, YOLO_PLAIN
 
@@ -241,6 +242,32 @@ def test_plain_help_lists_commands(monkeypatch, capsys, tmp_path):
     assert "/exit" in output
     assert "Usage: /help" in output
     assert "Usage: /exit" in output
+
+
+def test_plain_details_and_new_commands(monkeypatch, capsys, tmp_path):
+    cli = _load_cli()
+    monkeypatch.setattr(cli, "_tty", lambda: False)
+    session = SimpleNamespace(workspace=tmp_path / "first", model="m", messages=[])
+    resets = []
+
+    def reset():
+        resets.append(True)
+        session.workspace = tmp_path / "second"
+
+    session.reset = reset
+    monkeypatch.setattr(cli, "Session", lambda **kwargs: session)
+    answers = iter(["/details", "/new", "/new extra", "/help", "/exit"])
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
+
+    cli.main([])
+
+    output = capsys.readouterr().out
+    assert DETAILS_PLAIN in output
+    assert resets == [True]
+    assert f"Workspace: {tmp_path / 'second'}" in output
+    assert "Usage: /new" in output
+    assert "/details" in output
+    assert "/new" in output
 
 
 def test_thinking_panel_keeps_the_tail_until_expanded():

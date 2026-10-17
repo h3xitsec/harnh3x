@@ -1,3 +1,4 @@
+import json
 from collections.abc import Callable
 
 from openai import APIConnectionError, APIStatusError, OpenAI
@@ -11,6 +12,7 @@ from harnh3x.agent.session import Session
 from harnh3x.agent.transcript import _save_transcript, write_log
 from harnh3x.anthropic_api import AnthropicClient, CompletionError, status_message
 from harnh3x.config import MAX_TURNS
+from harnh3x.failures import MAX_TURNS_REACHED
 from harnh3x.rules import append_matching_rules
 from harnh3x.tools import _tool_result
 
@@ -73,6 +75,8 @@ def _complete(
             if session.abort.is_set():
                 _answer_interrupted(session, msg.tool_calls[position:])
                 return ""
+            if show_tools:
+                _show_tool(session, tc, on_tool)
             args, result = _tool_result(
                 tc.function.name,
                 tc.function.arguments,
@@ -87,15 +91,9 @@ def _complete(
                 )
             if tc.function.name in {"load_skill", "unload_skill"} and args is not None:
                 session.sync_prompt()
-            if show_tools:
-                shown = args if args is not None else tc.function.arguments
-                if on_tool is not None:
-                    on_tool(tc.function.name, shown)
-                else:
-                    if getattr(session, "_delta_open_line", False):
-                        print()
-                        session._delta_open_line = False
-                    print(f"  🔧 {tc.function.name}({shown})")
+            done = getattr(session, "on_tool_done", None)
+            if show_tools and done is not None:
+                done(tc.function.name, result)
             write_log(
                 {
                     "event": "tool_call",
@@ -118,7 +116,28 @@ def _complete(
                 {"role": "tool", "tool_call_id": tc.id, "content": result}
             )
 
-    return _close_with(session, "Max turns reached.", compact=api)
+    return _close_with(session, MAX_TURNS_REACHED, compact=api)
+
+
+def _shown_args(arguments: object) -> object:
+    if not isinstance(arguments, str):
+        return arguments
+    try:
+        parsed = json.loads(arguments)
+    except json.JSONDecodeError:
+        return arguments
+    return parsed if isinstance(parsed, dict) else arguments
+
+
+def _show_tool(session: Session, tc, on_tool) -> None:
+    shown = _shown_args(tc.function.arguments)
+    if on_tool is not None:
+        on_tool(tc.function.name, shown)
+        return
+    if getattr(session, "_delta_open_line", False):
+        print()
+        session._delta_open_line = False
+    print(f"  🔧 {tc.function.name}({shown})")
 
 
 INTERRUPTED_RESULT = "Error: interrupted before this tool ran"

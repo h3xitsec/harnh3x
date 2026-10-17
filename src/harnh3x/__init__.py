@@ -10,7 +10,13 @@ from harnh3x.agent import (
     run,
     session_label,
 )
-from harnh3x.commands import COMMANDS, Command, dispatch, help_lines
+from harnh3x.commands import (
+    COMMANDS,
+    Command,
+    dispatch,
+    help_lines,
+    matching_commands,
+)
 from harnh3x.config import (
     API_KEY,
     API_URL,
@@ -39,6 +45,7 @@ from harnh3x.config import (
     TRANSCRIPT_FILE,
     WIKIPEDIA_LANG,
 )
+from harnh3x.failures import is_failure_answer
 from harnh3x.prompt import system_prompt
 from harnh3x.skills import SkillRegistry
 from harnh3x.tools import (
@@ -94,8 +101,10 @@ __all__ = [
     "extract_page",
     "get_json",
     "help_lines",
+    "is_failure_answer",
     "list_models",
     "list_sessions",
+    "matching_commands",
     "memory_keys",
     "model_context_limit",
     "parse_command",

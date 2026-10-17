@@ -724,6 +724,46 @@ def test_on_tool_receives_the_call_instead_of_printing(tmp_path, capsys):
     assert capsys.readouterr().out == ""
 
 
+def test_on_tool_fires_before_the_tool_runs_and_on_tool_done_gets_the_result(
+    tmp_path, monkeypatch
+):
+    session = agent.Session(workspace=tmp_path)
+    client = _tool_client("read_file", '{"path": "missing.txt"}', "done")
+    order = []
+    real = agent_loop._tool_result
+
+    def tracked(name, arguments, *args, **kwargs):
+        order.append(("run", name))
+        return real(name, arguments, *args, **kwargs)
+
+    monkeypatch.setattr(agent_loop, "_tool_result", tracked)
+    session.on_tool_done = lambda name, result: order.append(("done", name, result))
+
+    text = agent.run(
+        "read",
+        session,
+        client=client,
+        on_tool=lambda name, args: order.append(("start", name, args)),
+    )
+
+    assert text == "done"
+    assert [step[0] for step in order] == ["start", "run", "done"]
+    assert order[0] == ("start", "read_file", {"path": "missing.txt"})
+    assert order[2][1] == "read_file"
+    assert order[2][2] == session.messages[-2]["content"]
+    assert session.messages[-2]["role"] == "tool"
+
+
+def test_on_tool_done_is_skipped_when_tools_are_hidden(tmp_path):
+    session = agent.Session(workspace=tmp_path)
+    client = _tool_client("load_skill", '{"name": "file-ops"}', "loaded")
+    seen = []
+    session.on_tool_done = lambda name, result: seen.append(name)
+
+    assert agent.run("load", session, client=client, show_tools=False) == "loaded"
+    assert seen == []
+
+
 def test_run_uses_the_session_model(tmp_path):
     seen = {}
 

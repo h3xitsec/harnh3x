@@ -79,7 +79,102 @@ def context_line(used: int | None, limit: int | None) -> str | None:
     used_text = f"{used:,}" if used is not None else "—"
     if limit is None:
         return f"Context: {used_text}"
-    return f"Context: {used_text} / {limit:,}"
+    line = f"Context: {used_text} / {limit:,}"
+    if used is not None and limit > 0:
+        line += f" ({round(used * 100 / limit)}%)"
+    return line
+
+
+CONTEXT_WARN_SHARE = 0.8
+
+
+def context_level(used: int | None, limit: int | None, compact_at: float) -> str | None:
+    """`warn` near the compaction point, `over` at or past it, else None."""
+    if used is None or not limit or limit <= 0 or compact_at <= 0:
+        return None
+    threshold = limit * compact_at
+    if used >= threshold:
+        return "over"
+    if used >= threshold * CONTEXT_WARN_SHARE:
+        return "warn"
+    return None
+
+
+APPLE_TERMINAL = "Apple_Terminal"
+
+
+def translate_legacy_key(
+    key: str, character: str | None, term_program: str | None
+) -> str:
+    """The key a Terminal.app byte sequence stands for.
+
+    Terminal.app has no kitty keyboard protocol, so Ctrl+H arrives as
+    Backspace carrying ``\\x08`` and Option+Backspace (with Meta on) as Ctrl+W
+    with no character. A kitty terminal sends a real Ctrl+W with no character
+    too, so other terminals pass through unchanged.
+    """
+    if term_program != APPLE_TERMINAL:
+        return key
+    if key == "backspace" and character == "\x08":
+        return "ctrl+h"
+    if key == "ctrl+w" and character is None:
+        return "alt+backspace"
+    return key
+
+
+ARG_VALUE_LIMIT = 80
+
+
+def _clip(text: str, limit: int | None) -> str:
+    if limit is None or len(text) <= limit:
+        return text
+    return text[: limit - 1] + "…"
+
+
+def _arg_value(value: object, limit: int | None) -> str:
+    if isinstance(value, str) and value and not any(ch.isspace() for ch in value):
+        text = value
+    else:
+        text = json.dumps(value, ensure_ascii=False, default=str)
+    return _clip(text, limit)
+
+
+def format_call(name: str, args: object, *, limit: int | None = ARG_VALUE_LIMIT) -> str:
+    """One call as ``name  key=value``; ``limit=None`` keeps every value whole."""
+    if isinstance(args, dict):
+        parts = [f"{key}={_arg_value(value, limit)}" for key, value in args.items()]
+    elif args is None or args == "":
+        parts = []
+    else:
+        text = args if isinstance(args, str) else repr(args)
+        parts = [_clip(" ".join(text.split()), limit)]
+    return "  ".join([name, *parts])
+
+
+def slash_hint(matches: list) -> str:
+    if len(matches) == 1:
+        command = matches[0]
+        return f"/{command.name}  {command.summary} · Tab completes"
+    names = "  ".join(f"/{command.name}" for command in matches)
+    return f"{names} · Tab completes"
+
+
+SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
+def elapsed_text(seconds: float) -> str:
+    whole = max(int(seconds), 0)
+    if whole < 60:
+        return f"{whole}s"
+    minutes, rest = divmod(whole, 60)
+    return f"{minutes}m {rest:02d}s"
+
+
+def activity_text(frame: int, phase: str, seconds: float, *, stoppable: bool) -> str:
+    parts = [f"{SPINNER[frame % len(SPINNER)]} {phase}", elapsed_text(seconds)]
+    if stoppable:
+        parts.append("Esc to stop")
+    return " · ".join(parts)
 
 
 def displayed_args(arguments: object) -> object:

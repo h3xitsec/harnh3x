@@ -4,12 +4,14 @@ import asyncio
 import threading
 from types import SimpleNamespace
 
-from helpers import _export_messages, _past_workspace
+from helpers import _export_messages, _past_workspace, _write_transcript
+from textual import events
 
 from harnh3x import __version__, agent
 from harnh3x.tui import (
     EXPORT_USAGE,
     AgentAnswer,
+    Composer,
     CopyAnswer,
     DebugBox,
     ExportAnswer,
@@ -23,6 +25,8 @@ from harnh3x.tui import (
     ReviewApp,
     Thinking,
     ToolBox,
+    UserMessage,
+    WarningScreen,
 )
 
 
@@ -136,13 +140,13 @@ def test_banner_shows_context_and_updates_after_a_turn():
             assert "Context:" not in banner
             assert "Model:" not in banner
             status = str(app.query_one("#status").content)
-            assert status == "Model: m · Context: 1,234 / 8,192"
+            assert status == "Model: m · Context: 1,234 / 8,192 (15%)"
             await pilot.press(*"hi", "enter")
             await _wait_for(pilot, lambda: "Agent: done" in app.transcript_plain())
             banner = str(app.query_one("#banner").content)
             assert "Context:" not in banner
             status = str(app.query_one("#status").content)
-            assert status == "Model: m · Context: 5,000 / 8,192"
+            assert status == "Model: m · Context: 5,000 / 8,192 (61%)"
             assert "Shift+Enter" not in banner
             assert "/resume" not in banner
 
@@ -170,6 +174,16 @@ def test_help_command_lists_commands_and_hotkeys():
             assert "Ctrl+W" in shown
             assert "open warning details" in shown
             assert "Ctrl+Q" in shown
+            assert "Ctrl+J" in shown
+            assert "Esc          stop the running request" in shown
+            assert "/details" in shown
+            assert "/new" in shown
+            assert "Use Option as Meta key" in shown
+            frame = app.screen.query_one("#help-frame")
+            assert frame.border_subtitle == "Escape to close"
+            assert frame.region.width > 60
+            assert frame.region.bottom <= app.size.height
+            assert frame.max_scroll_y > 0
             await pilot.press("escape")
             await pilot.pause()
             assert not isinstance(app.screen, HelpScreen)
@@ -188,6 +202,7 @@ def test_export_command_writes_the_chosen_response(tmp_path):
         project=None,
     )
     app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+    toasts = _record_toasts(app)
     dest = tmp_path / "chosen.md"
 
     async def drive():
@@ -199,7 +214,8 @@ def test_export_command_writes_the_chosen_response(tmp_path):
             await pilot.press("down", "enter")
             await pilot.pause()
             assert dest.read_text(encoding="utf-8") == "beta answer\n"
-            assert "Exported to" in app.transcript_plain()
+            assert toasts[-1] == (f"Exported to {dest.resolve()}", "information")
+            assert "Exported to" not in app.transcript_plain()
             assert "secret thinking" not in dest.read_text(encoding="utf-8")
             await pilot.press(*f"/export {dest}", "enter")
             await pilot.pause()
@@ -229,6 +245,7 @@ def test_export_icon_writes_the_clicked_response(tmp_path):
         project=None,
     )
     app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+    toasts = _record_toasts(app)
     dest = tmp_path / "clicked.md"
 
     async def drive():
@@ -253,11 +270,17 @@ def test_export_icon_writes_the_clicked_response(tmp_path):
             await pilot.click(copy)
             await pilot.pause()
             assert app.clipboard == "draft"
+            assert toasts == [("Copied to the clipboard.", "information")]
             button.scroll_visible()
             await pilot.pause()
             await pilot.click(button)
             await pilot.pause()
             assert isinstance(app.screen, ExportPathScreen)
+            path_input = app.screen.query_one("#export-path")
+            assert path_input.value.startswith("answer-")
+            assert path_input.value.endswith(".md")
+            base = str(app.screen.query_one("#export-base").content)
+            assert base.startswith("Relative paths go to ")
             await pilot.press("escape")
             await pilot.pause()
             assert not isinstance(app.screen, ExportPathScreen)
@@ -623,6 +646,16 @@ def test_ctrl_n_starts_a_new_session(tmp_path, monkeypatch):
     assert session.messages[-1]["content"] == "next"
 
 
+def _record_toasts(app):
+    toasts = []
+
+    def notify(message, *, severity="information", **_kwargs):
+        toasts.append((str(message), severity))
+
+    app.notify = notify
+    return toasts
+
+
 def _wait_for(pilot, predicate):
     async def wait():
         for _ in range(40):
@@ -687,7 +720,8 @@ def test_resume_restores_the_transcript(tmp_path, monkeypatch):
             await _wait_for(pilot, lambda: bool(seen))
 
     asyncio.run(drive())
-    assert "🔧 load_skill({'name': 'file-ops'})" in captured["plain"]
+    assert "load_skill  name=file-ops" in captured["plain"]
+    assert "✓" not in captured["plain"]
     assert seen == [("next", ["fix the notes"])]
 
 
@@ -931,6 +965,31 @@ def test_short_tool_box_hides_the_expand_hint():
     asyncio.run(drive())
 
 
+def test_clipped_tool_call_expands_to_its_full_arguments():
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+    app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+    tools = ToolBox()
+    body = "line one\n" * 40 + "the very end"
+    tools.add("write_file", {"path": "notes.md", "content": body})
+
+    async def drive():
+        async with app.run_test(size=(100, 30)) as pilot:
+            app.query_one("#transcript").mount(tools)
+            await pilot.pause()
+            assert "…" in tools.plain
+            assert "the very end" not in tools.plain
+            assert "click to expand" in (tools.border_subtitle or "")
+            await pilot.click(tools, offset=(3, 1))
+            assert tools.expanded
+            assert "theveryend" in "".join(tools.plain.split())
+            assert "click to collapse" in (tools.border_subtitle or "")
+            await pilot.click(tools, offset=(3, 1))
+            assert not tools.expanded
+            assert "the very end" not in tools.plain
+
+    asyncio.run(drive())
+
+
 def test_expanded_tool_box_keeps_a_new_call():
     session = SimpleNamespace(workspace="ws", model="m", messages=[])
     app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
@@ -974,7 +1033,7 @@ def test_tool_callback_line_shows_in_the_transcript():
             captured["plain"] = app.transcript_plain()
 
     asyncio.run(drive())
-    assert "🔧 load_skill({'name': 'file-ops'})" in captured["plain"]
+    assert "load_skill  name=file-ops" in captured["plain"]
 
 
 def test_deltas_show_before_the_turn_returns():
@@ -1163,5 +1222,355 @@ def test_agent_answer_renders_markdown():
             assert app.query_one("MarkdownBulletList")
             assert app.query_one("MarkdownTable")
             assert answer in app.transcript_plain()
+
+    asyncio.run(drive())
+
+
+def _warned_session(**fields):
+    skills = SimpleNamespace(warnings=[("caido", "connection refused")])
+    return SimpleNamespace(
+        workspace="ws", model="m", messages=[], skills=skills, **fields
+    )
+
+
+def test_terminal_app_ctrl_h_and_option_backspace(monkeypatch):
+    monkeypatch.setenv("TERM_PROGRAM", "Apple_Terminal")
+    app = HarnessApp(_warned_session(), lambda *args, **kwargs: "", show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            composer = app.query_one(Composer)
+            transcript = app.query_one("#transcript")
+            composer.load_text("hello world")
+            composer.move_cursor(composer.document.end)
+            app.post_message(events.Key("ctrl+w", None))
+            await pilot.pause()
+            assert composer.text == "hello "
+            assert not isinstance(app.screen, WarningScreen)
+            app.post_message(events.Key("backspace", "\x08"))
+            await pilot.pause()
+            assert "details-hidden" in transcript.classes
+            assert composer.text == "hello "
+            app.post_message(events.Key("backspace", "\x7f"))
+            await pilot.pause()
+            assert composer.text == "hello"
+            assert "details-hidden" in transcript.classes
+            app.post_message(events.Key("ctrl+w", "\x17"))
+            await pilot.pause()
+            assert isinstance(app.screen, WarningScreen)
+
+    asyncio.run(drive())
+
+
+def test_other_terminals_keep_ctrl_w_for_warnings(monkeypatch):
+    monkeypatch.setenv("TERM_PROGRAM", "iTerm.app")
+    app = HarnessApp(_warned_session(), lambda *args, **kwargs: "", show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            composer = app.query_one(Composer)
+            composer.load_text("hello world")
+            composer.move_cursor(composer.document.end)
+            app.post_message(events.Key("ctrl+w", None))
+            await pilot.pause()
+            assert isinstance(app.screen, WarningScreen)
+            assert composer.text == "hello world"
+            frame = app.screen.query_one("#warning-frame")
+            assert frame.border_subtitle == "Escape to close"
+            assert "connection refused" in str(
+                app.screen.query_one("#warning-box").content
+            )
+
+    asyncio.run(drive())
+
+
+def test_clicking_the_status_warning_opens_details():
+    app = HarnessApp(_warned_session(), lambda *args, **kwargs: "", show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(100, 24)) as pilot:
+            await pilot.click("#status")
+            await pilot.pause()
+            assert isinstance(app.screen, WarningScreen)
+            await pilot.press("escape")
+            await pilot.pause()
+            assert not isinstance(app.screen, WarningScreen)
+
+    asyncio.run(drive())
+
+
+def test_ctrl_j_adds_a_newline():
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+    app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press("a", "ctrl+j", "b")
+            assert app.query_one(Composer).text == "a\nb"
+
+    asyncio.run(drive())
+
+
+def test_escape_stops_a_turn_and_keeps_the_app():
+    started = threading.Event()
+    session = SimpleNamespace(
+        workspace="ws", model="m", messages=[], abort=threading.Event()
+    )
+
+    def fake_run(message, active, show_tools=True, on_tool=None):
+        if message == "slow":
+            on_tool("run_shell", {"command": "sleep 100"})
+            started.set()
+            assert active.abort.wait(timeout=2)
+            return ""
+        return "quick answer"
+
+    app = HarnessApp(session, fake_run, show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            activity = app.query_one("#activity")
+            assert not activity.display
+            await pilot.press(*"slow", "enter")
+            await _wait_for(pilot, started.is_set)
+            await pilot.pause()
+            assert activity.display
+            shown = str(activity.content)
+            assert "Running run_shell…" in shown
+            assert "Esc to stop" in shown
+            await pilot.press("escape")
+            await _wait_for(pilot, lambda: "Stopped." in app.transcript_plain())
+            plain = app.transcript_plain()
+            assert "✗ run_shell" in plain
+            assert not app._exit
+            assert not session.abort.is_set()
+            assert not app.query_one(Composer).disabled
+            assert not activity.display
+            await pilot.press(*"next", "enter")
+            await _wait_for(
+                pilot, lambda: "Agent: quick answer" in app.transcript_plain()
+            )
+
+    asyncio.run(drive())
+
+
+def test_tool_results_mark_each_call():
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+
+    def fake_run(message, active, show_tools=True, on_tool=None):
+        on_tool("read_file", {"path": "a.txt"})
+        active.on_tool_done("read_file", "contents")
+        on_tool("run_shell", {"command": "false"})
+        active.on_tool_done("run_shell", "Error: exit 1\nmore detail")
+        return "done"
+
+    app = HarnessApp(session, fake_run, show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.press(*"go", "enter")
+            await _wait_for(pilot, lambda: "Agent: done" in app.transcript_plain())
+            box = app.query_one(ToolBox)
+            box.toggle()
+            plain = app.transcript_plain()
+            assert "✓ read_file  path=a.txt" in plain
+            assert "✗ run_shell  command=false" in plain
+            assert "Error: exit 1" in plain
+            assert "more detail" not in plain
+
+    asyncio.run(drive())
+
+
+def test_failure_answers_and_user_messages_are_styled():
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+    answers = iter(["Could not reach the API.", "fine"])
+    app = HarnessApp(session, lambda *args, **kwargs: next(answers), show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press(*"one", "enter")
+            await _wait_for(pilot, lambda: len(app.query(AgentAnswer)) == 1)
+            await pilot.press(*"two", "enter")
+            await _wait_for(pilot, lambda: len(app.query(AgentAnswer)) == 2)
+            failed, ok = list(app.query(AgentAnswer))
+            assert failed.has_class("error")
+            assert not ok.has_class("error")
+            users = list(app.query(UserMessage))
+            assert [user.source for user in users] == ["one", "two"]
+            assert all(user.has_class("user") for user in users)
+            await pilot.press(*"/nope", "enter")
+            notes = list(app.query(".note.error"))
+            assert [str(note.content) for note in notes] == ["Unknown command: /nope"]
+
+    asyncio.run(drive())
+
+
+def test_up_and_down_recall_prompts():
+    session = SimpleNamespace(
+        workspace="ws",
+        model="m",
+        messages=[
+            {"role": "user", "content": "older"},
+            {"role": "assistant", "content": "x"},
+        ],
+    )
+    app = HarnessApp(session, lambda *args, **kwargs: "ok", show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press(*"newer", "enter")
+            await _wait_for(pilot, lambda: "Agent: ok" in app.transcript_plain())
+            composer = app.query_one(Composer)
+            await pilot.press("d", "r")
+            await pilot.press("up")
+            assert composer.text == "newer"
+            await pilot.press("up")
+            assert composer.text == "older"
+            await pilot.press("up")
+            assert composer.text == "older"
+            await pilot.press("down")
+            assert composer.text == "newer"
+            await pilot.press("down")
+            assert composer.text == "dr"
+
+    asyncio.run(drive())
+
+
+def test_slash_hint_and_tab_completion():
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+    app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            hint = app.query_one("#slash-hint")
+            composer = app.query_one(Composer)
+            assert not hint.display
+            await pilot.press("/", "e")
+            assert hint.display
+            assert str(hint.content) == "/export  /exit · Tab completes"
+            await pilot.press("tab")
+            assert composer.text == "/export "
+            assert not hint.display
+            composer.load_text("")
+            await pilot.press("/", "d", "e", "tab")
+            assert composer.text == "/details"
+            await pilot.press("enter")
+            assert "details-hidden" in app.query_one("#transcript").classes
+            assert not hint.display
+
+    asyncio.run(drive())
+
+
+def test_new_command_starts_a_new_session(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("WORKSPACE", raising=False)
+    session = agent.Session(workspace=tmp_path / "first", model="custom-model")
+    previous = session.workspace
+    app = HarnessApp(session, lambda *args, **kwargs: "done", show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press(*"hello", "enter")
+            await _wait_for(pilot, lambda: "Agent: done" in app.transcript_plain())
+            await pilot.press(*"/new", "enter")
+            await _wait_for(pilot, lambda: session.workspace != previous)
+            await pilot.pause()
+            assert app.transcript_plain() == ""
+            assert f"Workspace: {session.workspace}" in str(
+                app.query_one("#banner").content
+            )
+
+    asyncio.run(drive())
+
+
+def test_resume_filter_narrows_the_list(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("WORKSPACE", raising=False)
+    _past_workspace(tmp_path)
+    trip = tmp_path / "workspaces" / "abcdef02-0000-0000-0000-000000000002"
+    _write_transcript(
+        trip,
+        "saved-model",
+        [
+            {"role": "system", "content": "stale"},
+            {"role": "user", "content": "plan the trip"},
+            {"role": "assistant", "content": "trip planned"},
+        ],
+    )
+    session = agent.Session(workspace=tmp_path / "current", model="custom-model")
+    app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(100, 24)) as pilot:
+            await pilot.press(*"/resume", "enter")
+            assert isinstance(app.screen, ResumeScreen)
+            options = app.screen.query_one(ResumeOptions)
+            assert options.option_count == 2
+            await pilot.press(*"trip")
+            assert options.option_count == 1
+            assert "plan the trip" in str(options.get_option_at_index(0).prompt)
+            status = str(app.screen.query_one("#status").content)
+            assert status.startswith("Filter: trip · 1 match")
+            await pilot.press("backspace", "backspace", "backspace", "backspace")
+            assert options.option_count == 2
+            await pilot.press(*"trip", "enter")
+            await _wait_for(pilot, lambda: "trip planned" in app.transcript_plain())
+
+    asyncio.run(drive())
+    assert session.workspace == trip.resolve()
+
+
+def test_context_warning_colors(monkeypatch):
+    monkeypatch.setattr("harnh3x.tui.app.COMPACT_AT", 0.5)
+    session = SimpleNamespace(
+        workspace="ws",
+        model="m",
+        messages=[],
+        context_tokens=450,
+        context_limit=1000,
+    )
+    app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+
+    def styled(content, style):
+        text = str(content)
+        return [
+            text[span.start : span.end] for span in content.spans if span.style == style
+        ]
+
+    async def drive():
+        async with app.run_test(size=(100, 24)) as pilot:
+            content = app.query_one("#status").content
+            assert styled(content, "ansi_yellow") == ["Context: 450 / 1,000 (45%)"]
+            session.context_tokens = 600
+            app._refresh_status()
+            await pilot.pause()
+            content = app.query_one("#status").content
+            assert styled(content, "bold ansi_red") == ["Context: 600 / 1,000 (60%)"]
+            session.context_tokens = 100
+            app._refresh_status()
+            await pilot.pause()
+            assert app.query_one("#status").content.spans == []
+
+    asyncio.run(drive())
+
+
+def test_panels_toggle_from_the_keyboard_and_clicks_keep_focus():
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+    app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+    thinking = Thinking("alpha\nbeta\ngamma\ndelta", hold=False)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            app.query_one("#transcript").mount(thinking)
+            await pilot.pause()
+            composer = app.query_one(Composer)
+            await pilot.click(thinking, offset=(2, 2))
+            assert thinking.expanded
+            assert app.focused is composer
+            thinking.focus()
+            await pilot.press("enter")
+            assert not thinking.expanded
+            await pilot.press("space")
+            assert thinking.expanded
 
     asyncio.run(drive())

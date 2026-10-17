@@ -49,6 +49,7 @@ class Session:
         self.context_tokens: int | None = None
         self.context_limit: int | None = None
         self.on_compact: Callable[[str], None] | None = None
+        self.on_tool_done: Callable[[str, str], None] | None = None
         self.abort = threading.Event()
         self.messages: list[dict] = [self._system_message()]
 

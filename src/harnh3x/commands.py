@@ -29,6 +29,7 @@ class Command:
 
 COMMANDS: tuple[Command, ...] = (
     Command("help", "show commands"),
+    Command("new", "start a new session"),
     Command("resume", "resume a past session"),
     Command("compact", "compact context"),
     Command(
@@ -37,8 +38,11 @@ COMMANDS: tuple[Command, ...] = (
         takes_argument=True,
         usage=EXPORT_USAGE,
     ),
+    Command("details", "hide or show thinking, tool, debug, and compaction boxes"),
     Command("exit", "quit"),
 )
+
+DETAILS_PLAIN = "/details applies only to the full-screen view."
 
 _BY_NAME = {command.name: command for command in COMMANDS}
 
@@ -57,6 +61,17 @@ def help_lines(*, hotkeys: bool = False) -> list[str]:
             summary = f"{summary} and hotkeys"
         lines.append(f"  /{command.name:<{width}}{summary}")
     return lines
+
+
+def matching_commands(text: str) -> list[Command]:
+    """Commands whose name starts with what follows the slash.
+
+    Only a single-line `/name` prefix with no argument yet matches.
+    """
+    if not text.startswith("/") or "\n" in text or " " in text:
+        return []
+    prefix = text[1:]
+    return [command for command in COMMANDS if command.name.startswith(prefix)]
 
 
 def dispatch(
