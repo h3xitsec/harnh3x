@@ -474,6 +474,51 @@ def test_project_rules_skip_escapes_and_sessions_without_a_project(tmp_path):
     assert "LATER-RULE" in session.messages[0]["content"]
 
 
+def test_project_rules_skip_bad_frontmatter(tmp_path):
+    project = tmp_path / "proj"
+    rules_dir = project / ".cursor" / "rules"
+    rules_dir.mkdir(parents=True)
+    (rules_dir / "open.mdc").write_text(
+        "---\ndescription: open\nalwaysApply: false\n", encoding="utf-8"
+    )
+    (rules_dir / "fold.mdc").write_text(
+        "---\n"
+        "# note\n"
+        "\n"
+        "description: >\n"
+        "  Folded\n"
+        "  text\n"
+        "alwaysApply: false\n"
+        "globs: [*.py, tests/**/*.py]\n"
+        "extra: ignored\n"
+        "---\n"
+        "FOLDED-BODY\n",
+        encoding="utf-8",
+    )
+    (rules_dir / "badglob.mdc").write_text(
+        "---\n"
+        "description: bad\n"
+        "globs:\n"
+        '  - "*.py"\n'
+        "  nope\n"
+        "alwaysApply: false\n"
+        "---\n"
+        "BAD-GLOB\n",
+        encoding="utf-8",
+    )
+    (rules_dir / "badbool.mdc").write_text(
+        "---\ndescription: bad bool\nalwaysApply: maybe\n---\nBAD-BOOL\n",
+        encoding="utf-8",
+    )
+
+    loaded = rules.load_project_rules(project)
+
+    assert [rule.path for rule in loaded] == [".cursor/rules/fold.mdc"]
+    assert loaded[0].description == "Folded text"
+    assert loaded[0].globs == ("*.py", "tests/**/*.py")
+    assert loaded[0].body.strip() == "FOLDED-BODY"
+
+
 def test_rule_globs_accept_a_yaml_list(tmp_path):
     project = tmp_path / "proj"
     path = project / ".cursor/rules/view.mdc"

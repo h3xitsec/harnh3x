@@ -8,6 +8,7 @@ import sys
 from helpers import _FAKE_MCP, _mcp_server, _tool_names
 
 from harnh3x import agent, config, skills
+from harnh3x.mcp.client import upstream_problem
 from harnh3x.skills import SkillRegistry
 from harnh3x.tui import HarnessApp, WarningScreen
 
@@ -318,3 +319,73 @@ def test_status_bar_counts_mcp_servers_and_tools_apart(tmp_path):
             assert expected in status
 
     asyncio.run(drive())
+
+
+def test_mcp_content_length_frames_and_server_requests(tmp_path):
+    framed = SkillRegistry(servers=(_mcp_server(env={"FAKE_MCP": "framed"}),))
+    try:
+        framed.load_skill("caido")
+        assert framed.execute("caido_list_requests", {}, tmp_path) == "alpha\nbeta"
+    finally:
+        framed.close()
+
+    asked = SkillRegistry(servers=(_mcp_server(env={"FAKE_MCP": "server-request"}),))
+    try:
+        asked.load_skill("caido")
+        assert asked.execute("caido_list_requests", {}, tmp_path) == "alpha\nbeta"
+    finally:
+        asked.close()
+
+
+def test_mcp_rejects_bad_frames_and_a_non_list_page(tmp_path):
+    length = SkillRegistry(servers=(_mcp_server(env={"FAKE_MCP": "bad-length"}),))
+    try:
+        assert length.warnings == [("caido", "MCP server sent a bad Content-Length")]
+        assert "caido" not in length.get_menu()
+    finally:
+        length.close()
+
+    shape = SkillRegistry(servers=(_mcp_server(env={"FAKE_MCP": "non-object"}),))
+    try:
+        assert shape.warnings == [("caido", "MCP server sent a non-object message")]
+    finally:
+        shape.close()
+
+    page = SkillRegistry(servers=(_mcp_server(env={"FAKE_MCP": "bad-tools"}),))
+    try:
+        assert page.warnings == [("caido", "tools/list returned no list")]
+    finally:
+        page.close()
+
+
+def test_mcp_keeps_resource_text_and_names_unsupported_blocks(tmp_path):
+    registry = SkillRegistry(servers=(_mcp_server(env={"FAKE_MCP": "bundle"}),))
+    try:
+        registry.load_skill("caido")
+        assert registry.execute("caido_list_requests", {}, tmp_path) == (
+            "inside\nUnsupported content type: resource, unknown"
+        )
+    finally:
+        registry.close()
+
+
+def test_mcp_closed_message_includes_stderr(tmp_path):
+    registry = SkillRegistry(servers=(_mcp_server(env={"FAKE_MCP": "stderr"}),))
+    try:
+        registry.load_skill("caido")
+        dead = registry.execute("die", {}, tmp_path)
+        assert dead == "Error: MCP server closed: boom on stderr"
+    finally:
+        registry.close()
+
+
+def test_upstream_problem_reports_a_bad_url_without_connecting():
+    server = _mcp_server(
+        env={"BARE": "http://", "COUNT": 1, "PORT": "https://example.com:99999"}
+    )
+
+    problem = upstream_problem(server)
+
+    assert problem == (
+        "not accepting connections: invalid URL, https://example.com (invalid port)"
+    )

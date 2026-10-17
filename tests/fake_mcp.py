@@ -6,8 +6,14 @@ import sys
 
 
 def emit(message: dict) -> None:
-    sys.stdout.write(json.dumps(message) + "\n")
-    sys.stdout.flush()
+    body = json.dumps(message).encode()
+    if os.environ.get("FAKE_MCP") == "framed":
+        frame = f"Content-Length: {len(body)}\r\n\r\n".encode() + body
+        sys.stdout.buffer.write(frame)
+        sys.stdout.buffer.flush()
+        return
+    sys.stdout.buffer.write(body + b"\n")
+    sys.stdout.buffer.flush()
 
 
 def tool(name: str, description: str) -> dict:
@@ -22,6 +28,8 @@ def tool(name: str, description: str) -> dict:
 
 
 def tool_page(cursor: str | None) -> dict:
+    if os.environ.get("FAKE_MCP") == "bad-tools":
+        return {"tools": {"name": "nope"}}
     if os.environ.get("FAKE_MCP") == "collide":
         return {"tools": [tool("read_file", "collides")]}
     if not cursor:
@@ -45,6 +53,14 @@ def call_result(name: str) -> dict:
     if name == "die":
         sys.stdout.flush()
         os._exit(0)
+    if name == "caido_list_requests" and os.environ.get("FAKE_MCP") == "bundle":
+        return {
+            "content": [
+                {"type": "resource", "resource": {"text": "inside"}},
+                {"type": "resource"},
+                "nope",
+            ]
+        }
     if name == "boom":
         return {
             "isError": True,
@@ -75,8 +91,34 @@ def handle(message: dict) -> None:
     if "id" not in message:
         return
     method = message.get("method")
+    if not method:
+        return
     pending = message["id"]
     params = message.get("params") or {}
+    if method == "initialize" and os.environ.get("FAKE_MCP") == "bad-length":
+        sys.stdout.buffer.write(b"Content-Length: nope\r\n\r\n")
+        sys.stdout.buffer.flush()
+        return
+    if method == "initialize" and os.environ.get("FAKE_MCP") == "non-object":
+        sys.stdout.buffer.write(b"Content-Length: 2\r\n\r\n[]")
+        sys.stdout.buffer.flush()
+        return
+    if method == "initialize" and os.environ.get("FAKE_MCP") == "server-request":
+        emit({"jsonrpc": "2.0", "id": "from-server", "method": "roots/list"})
+        reply = json.loads(sys.stdin.readline())
+        error = reply.get("error") or {}
+        if reply.get("id") != "from-server" or error.get("code") != -32601:
+            emit(
+                {
+                    "jsonrpc": "2.0",
+                    "id": pending,
+                    "error": {
+                        "code": -32603,
+                        "message": "client did not reject the server request",
+                    },
+                }
+            )
+            return
     if method == "initialize":
         mode = os.environ.get("FAKE_MCP")
         result = {
@@ -154,6 +196,9 @@ def handle(message: dict) -> None:
 
 
 def main() -> None:
+    if os.environ.get("FAKE_MCP") == "stderr":
+        sys.stderr.write("boom on stderr\n")
+        sys.stderr.flush()
     for line in sys.stdin:
         text = line.strip()
         if not text:

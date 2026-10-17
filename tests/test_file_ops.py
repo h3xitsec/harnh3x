@@ -177,6 +177,40 @@ def test_list_files_shows_tree_with_sizes_and_filters(tmp_path):
     assert execute_tool("list_files", {"path": "empty"}, tmp_path) == "No files found."
 
 
+def test_delete_file_removes_a_file_and_refuses_a_directory(tmp_path):
+    (tmp_path / "gone.txt").write_text("x")
+
+    removed = execute_tool("delete_file", {"path": "gone.txt"}, tmp_path)
+
+    assert removed.startswith("Deleted ")
+    assert removed.endswith("gone.txt")
+    assert not (tmp_path / "gone.txt").exists()
+    assert (
+        execute_tool("delete_file", {"path": "gone.txt"}, tmp_path)
+        == "Error: not found"
+    )
+    (tmp_path / "dir").mkdir()
+    assert execute_tool("delete_file", {"path": "dir"}, tmp_path) == (
+        "Error: is a directory"
+    )
+
+
+def test_list_files_rejects_a_bad_pattern_and_names_the_overflow(tmp_path, monkeypatch):
+    monkeypatch.setattr("harnh3x.tools.files.LIST_FILES_MAX", 2)
+    for name in ("a.txt", "b.txt", "c.txt"):
+        (tmp_path / name).write_text("x")
+
+    assert (
+        execute_tool("list_files", {"pattern": 1}, tmp_path)
+        == "Error: pattern must be a string"
+    )
+    listing = execute_tool("list_files", {}, tmp_path)
+    assert "a.txt" in listing
+    assert "b.txt" in listing
+    assert "c.txt" not in listing
+    assert "[1 more entries; narrow with path or pattern]" in listing
+
+
 def test_search_files_reports_path_line_and_text(tmp_path):
     (tmp_path / "a.py").write_text("import os\nTODO: fix\n")
     (tmp_path / "b.txt").write_text("todo later\n")

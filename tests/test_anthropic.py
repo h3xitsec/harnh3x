@@ -469,3 +469,21 @@ def test_get_client_builds_an_anthropic_client(monkeypatch):
         "base_url": "https://api.anthropic.com",
     }
     assert agent.get_client() is client
+
+
+def test_status_message_reads_nested_and_top_level_text():
+    import httpx2
+    from anthropic import BadRequestError
+
+    nested = _anthropic_rejected("credit\nbalance")
+    assert anthropic_api.status_message(nested) == (
+        "The API rejected the request: credit balance"
+    )
+
+    body = {"message": "  top\nlevel "}
+    request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+    response = httpx2.Response(400, json=body, request=request)
+    exc = BadRequestError("Error code: 400", response=response, body=body)
+    assert anthropic_api.status_message(exc) == (
+        "The API rejected the request: top level"
+    )

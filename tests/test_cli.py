@@ -595,3 +595,14 @@ def test_plain_export_cancel_and_usage(monkeypatch, capsys, tmp_path):
     output = capsys.readouterr().out
     assert NO_EXPORT in output
     assert not (tmp_path / "nowhere.md").exists()
+
+
+def test_module_main_calls_cli_main(monkeypatch):
+    import runpy
+
+    calls = []
+    monkeypatch.setattr("harnh3x.cli.main", lambda: calls.append(True))
+
+    runpy.run_module("harnh3x", run_name="__main__")
+
+    assert calls == [True]

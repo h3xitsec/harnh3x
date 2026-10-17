@@ -333,6 +333,32 @@ def test_mcp_instructions_come_from_the_server_block():
         config.parse_config(bad, path)
 
 
+def test_mcp_block_rejects_bad_shapes():
+    path = Path("demo.yaml")
+    cases = (
+        ("mcp: [a]\n", r"demo.yaml: mcp: expected a mapping"),
+        (
+            "mcp:\n  Bad:\n    command: x\n",
+            r"demo.yaml: mcp\.Bad: invalid server name",
+        ),
+        (
+            "mcp:\n  caido:\n    command: x\n    timeout: 0\n",
+            r"demo.yaml: mcp\.caido: timeout must be a positive integer",
+        ),
+        (
+            "mcp:\n  caido:\n    command: x\n    description: 1\n",
+            r"demo.yaml: mcp\.caido: description must be a string",
+        ),
+        (
+            "mcp:\n  caido:\n    command: x\n    env:\n      TOKEN: 1\n",
+            r"demo.yaml: mcp\.caido: env must be a mapping of strings",
+        ),
+    )
+    for text, match in cases:
+        with pytest.raises(SystemExit, match=match):
+            config.parse_config(text, path)
+
+
 def test_mcp_server_name_cannot_match_a_built_in_skill():
     with pytest.raises(RuntimeError, match="matches a built-in skill"):
         SkillRegistry(servers=(_mcp_server("file-ops"),))

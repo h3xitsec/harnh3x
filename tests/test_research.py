@@ -2,7 +2,9 @@
 
 import re
 import urllib.parse
+import xml.etree.ElementTree as ET
 
+import pytest
 from helpers import _pdf_bytes
 
 from harnh3x import tools
@@ -250,6 +252,33 @@ def test_web_search_caps_results_and_rejects_bad_input(tmp_path, monkeypatch):
     )
     assert bad_limit == "Error: max_results must be a positive integer"
     assert calls["n"] == 0
+
+
+def test_search_html_posts_the_query_and_rejects_a_bad_page(monkeypatch):
+    seen = {}
+
+    def open_request(request):
+        seen["body"] = request.data
+        return 200, "text/html", b"<html></html>"
+
+    monkeypatch.setattr(tools.search, "validate_url", lambda url: None)
+    monkeypatch.setattr(tools.search, "_open_request", open_request)
+
+    assert tools.search._search_html("transit", "w") == "<html></html>"
+    fields = urllib.parse.parse_qs(seen["body"].decode())
+    assert fields == {"q": ["transit"], "df": ["w"]}
+
+    monkeypatch.setattr(
+        tools.search, "_open_request", lambda request: (200, "application/json", b"{}")
+    )
+    with pytest.raises(ValueError, match="unsupported content type"):
+        tools.search._search_html("transit")
+
+    monkeypatch.setattr(
+        tools.search, "_open_request", lambda request: (500, "text/html", b"no")
+    )
+    with pytest.raises(ValueError, match="http status 500"):
+        tools.search._search_html("transit")
 
 
 def test_web_search_errors_when_nothing_parseable(tmp_path, monkeypatch):
@@ -526,3 +555,29 @@ def test_read_feed_rejects_bad_xml_and_entities(tmp_path, monkeypatch):
     assert "blocked" in execute_tool(
         "read_feed", {"url": "http://127.0.0.1/feed"}, tmp_path
     )
+
+
+def test_read_feed_uses_link_fallbacks(tmp_path, monkeypatch):
+    feed = b"""<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom"><title>Links</title>
+<!-- note -->
+<entry><title>File</title>
+<link rel="enclosure" href="https://1.1.1.1/file"/>
+<link rel="related" href="https://1.1.1.1/related"/>
+</entry>
+<entry><title>Text</title>
+<link>https://1.1.1.1/text-link</link>
+</entry>
+</feed>
+"""
+    monkeypatch.setattr(
+        tools.http, "_http_get", lambda url: (200, "application/atom+xml", feed)
+    )
+
+    result = execute_tool("read_feed", {"url": "https://1.1.1.1/atom"}, tmp_path)
+
+    assert "link: https://1.1.1.1/file" in result
+    assert "related" not in result
+    assert "link: https://1.1.1.1/text-link" in result
+    element = ET.fromstring('<item><link href="https://1.1.1.1/h"></link></item>')
+    assert tools.feed._child_text(element, "link") == "https://1.1.1.1/h"

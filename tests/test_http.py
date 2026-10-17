@@ -3,6 +3,7 @@
 import http.client
 import json
 import socket
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -10,6 +11,7 @@ import pytest
 
 from harnh3x import tools
 from harnh3x.tools import execute_tool
+from harnh3x.tools.http import validate_url
 
 
 def _json_get(payloads):
@@ -28,6 +30,25 @@ def _json_get(payloads):
 
     return fake_get, seen
 
+def test_validate_url_without_url_raises_error():
+    with pytest.raises(ValueError, match="url is required"):
+        validate_url(None)
+    with pytest.raises(ValueError, match="url is required"):
+        validate_url("")
+    with pytest.raises(ValueError, match="url is required"):
+        validate_url(123)
+    with pytest.raises(ValueError, match="url is required"):
+        validate_url(True)
+
+def test_validate_url_with_invalid_url_raises_error():
+    with pytest.raises(ValueError, match="url host is required"):
+        validate_url("https://:80/path")
+    with pytest.raises(ValueError, match="blocked url scheme"):
+        validate_url("file:///etc/passwd")
+    with pytest.raises(ValueError, match="blocked url scheme"):
+        validate_url("ftp://127.0.0.1/path")
+    with pytest.raises(ValueError, match="blocked url credentials"):
+        validate_url("http://user:pass@1.1.1.1/path")
 
 def test_wikipedia_search_lists_titles_with_urls(tmp_path, monkeypatch):
     payload = {
@@ -61,6 +82,27 @@ def test_wikipedia_search_lists_titles_with_urls(tmp_path, monkeypatch):
     )
 
 
+def test_wikipedia_search_skips_hits_without_a_title(tmp_path, monkeypatch):
+    payload = {
+        "query": {
+            "search": [
+                "skip",
+                {"title": "  ", "snippet": "blank"},
+                {"title": "Ada Lovelace", "snippet": "math"},
+            ]
+        }
+    }
+    fake_get, _seen = _json_get([("https://en.wikipedia.org/w/api.php", payload)])
+    monkeypatch.setattr(tools.http, "_http_get", fake_get)
+
+    result = execute_tool("wikipedia_search", {"query": "ada"}, tmp_path)
+
+    assert "3. Ada Lovelace\n" in result
+    assert "snippet: math" in result
+    assert "snippet: blank" not in result
+    assert "\n1. " not in result
+
+
 def test_wikipedia_summary_returns_extract_and_flags_missing(tmp_path, monkeypatch):
     payload = {
         "title": "Ada Lovelace",
@@ -91,6 +133,36 @@ def test_wikipedia_summary_returns_extract_and_flags_missing(tmp_path, monkeypat
         "Error: no Wikipedia article named 'Nope Nope'"
     )
     assert execute_tool("wikipedia_summary", {}, tmp_path) == "Error: title is required"
+
+    monkeypatch.setattr(
+        tools.http, "_http_get", lambda url: (200, "application/json", b"[]")
+    )
+    assert (
+        execute_tool("wikipedia_summary", {"title": "Ada"}, tmp_path)
+        == "Error: unexpected response"
+    )
+
+    monkeypatch.setattr(
+        tools.http,
+        "_http_get",
+        lambda url: (200, "application/json", b'{"title": "Bare", "extract": "  "}'),
+    )
+    assert execute_tool("wikipedia_summary", {"title": "Bare"}, tmp_path) == (
+        "Error: no summary for 'Bare'"
+    )
+
+    monkeypatch.setattr(
+        tools.http,
+        "_http_get",
+        lambda url: (
+            200,
+            "application/json",
+            b'{"title": "Mercury", "extract": "Many things.", "type": "disambiguation"}',
+        ),
+    )
+    ambiguous = execute_tool("wikipedia_summary", {"title": "Mercury"}, tmp_path)
+    assert "summary:\nMany things." in ambiguous
+    assert "note: this title is a disambiguation page" in ambiguous
 
 
 def test_http_get_json_adds_params_and_rejects_non_json(tmp_path, monkeypatch):
@@ -221,6 +293,42 @@ def test_http_request_blocks_targets_and_bad_arguments(tmp_path):
             tmp_path,
         )
         == "Error: json_body and body cannot both be set"
+    )
+    assert (
+        execute_tool("http_request", {"url": "http://1.1.1.1/"}, tmp_path)
+        == "Error: method is required"
+    )
+    assert (
+        execute_tool(
+            "http_request",
+            {"method": "GET", "url": "http://1.1.1.1/", "follow_redirects": "yes"},
+            tmp_path,
+        )
+        == "Error: follow_redirects must be a boolean"
+    )
+
+
+def test_http_request_maps_timeout_and_resolution_failure(tmp_path, monkeypatch):
+    def timed_out(self, request, timeout=None):
+        raise urllib.error.URLError(TimeoutError())
+
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", timed_out)
+    assert (
+        execute_tool(
+            "http_request", {"method": "GET", "url": "http://1.1.1.1/"}, tmp_path
+        )
+        == "Error: timed out"
+    )
+
+    def unresolvable(*args, **kwargs):
+        raise socket.gaierror(8, "nodename nor servname provided")
+
+    monkeypatch.setattr(tools.http.socket, "getaddrinfo", unresolvable)
+    assert (
+        execute_tool(
+            "http_request", {"method": "GET", "url": "http://example.com/"}, tmp_path
+        )
+        == "Error: could not resolve host"
     )
 
 

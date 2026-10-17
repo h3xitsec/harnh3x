@@ -5,6 +5,7 @@ import json
 import zipfile
 
 from helpers import _pdf_bytes
+from pypdf import PdfWriter
 
 from harnh3x import tools
 from harnh3x.config import MAX_TOOL_RESULT, PDF_MAX_PAGES
@@ -54,6 +55,27 @@ def test_read_pdf_pages_through_the_document(tmp_path):
     )
 
 
+def test_read_pdf_rejects_encrypted_and_empty_documents(tmp_path):
+    empty = io.BytesIO()
+    PdfWriter().write(empty)
+    (tmp_path / "empty.pdf").write_bytes(empty.getvalue())
+    assert (
+        execute_tool("read_pdf", {"path": "empty.pdf"}, tmp_path)
+        == "Error: PDF has no pages"
+    )
+
+    locked = io.BytesIO()
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    writer.encrypt("secret")
+    writer.write(locked)
+    (tmp_path / "locked.pdf").write_bytes(locked.getvalue())
+    assert (
+        execute_tool("read_pdf", {"path": "locked.pdf"}, tmp_path)
+        == "Error: PDF is encrypted"
+    )
+
+
 def _docx_bytes(paragraphs):
     ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
     body = "".join(f"<w:p><w:r><w:t>{text}</w:t></w:r></w:p>" for text in paragraphs)
@@ -63,6 +85,36 @@ def _docx_bytes(paragraphs):
         archive.writestr("[Content_Types].xml", "<Types/>")
         archive.writestr("word/document.xml", document)
     return out.getvalue()
+
+
+def _docx_document(body: str) -> bytes:
+    ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    document = (
+        f'<?xml version="1.0"?><w:document xmlns:w="{ns}">'
+        f"<w:body>{body}</w:body></w:document>"
+    )
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w") as archive:
+        archive.writestr("[Content_Types].xml", "<Types/>")
+        archive.writestr("word/document.xml", document)
+    return out.getvalue()
+
+
+def test_read_docx_keeps_tabs_and_breaks_and_rejects_empty_text(tmp_path):
+    body = (
+        "<w:p><w:r><w:t>Hello</w:t><w:tab/><w:t>there</w:t>"
+        "<w:br/><w:t>next</w:t></w:r></w:p>"
+    )
+    (tmp_path / "memo.docx").write_bytes(_docx_document(body))
+
+    result = execute_tool("read_docx", {"path": "memo.docx"}, tmp_path)
+
+    assert result == "file: memo.docx\nparagraphs: 1\ntext:\nHello\tthere\nnext"
+    (tmp_path / "empty.docx").write_bytes(_docx_document("<w:p></w:p>"))
+    assert (
+        execute_tool("read_docx", {"path": "empty.docx"}, tmp_path)
+        == "Error: no text extracted"
+    )
 
 
 def test_read_docx_returns_paragraphs(tmp_path):
