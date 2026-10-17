@@ -28,6 +28,7 @@ _SERVER_FIELDS = {
     "env",
     "timeout",
     "description",
+    "instructions",
     "include",
     "exclude",
 }
@@ -42,6 +43,7 @@ class McpServer:
     env: Mapping[str, str]
     timeout: int = _DEFAULT_MCP_TIMEOUT
     description: str = ""
+    instructions: str = ""
     include: tuple[str, ...] | None = None
     exclude: tuple[str, ...] = ()
 
@@ -313,6 +315,9 @@ def _parse_mcp(raw: object, path: Path) -> list[McpServer]:
         description = block.get("description", "")
         if not isinstance(description, str):
             raise SystemExit(f"{origin}: description must be a string")
+        instructions = block.get("instructions", "")
+        if not isinstance(instructions, str):
+            raise SystemExit(f"{origin}: instructions must be a string")
         include = None
         if "include" in block:
             include = tuple(_string_list(block.get("include"), origin, "include"))
@@ -325,6 +330,7 @@ def _parse_mcp(raw: object, path: Path) -> list[McpServer]:
                 env=env,
                 timeout=timeout,
                 description=description,
+                instructions=instructions,
                 include=include,
                 exclude=exclude,
             )

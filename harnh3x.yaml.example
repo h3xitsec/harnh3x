@@ -36,4 +36,13 @@ model: qwen3.5-128k
 #     # Leave CAIDO_ALLOW_SENSITIVE_HEADERS unset unless an engagement
 #     # needs real Authorization, Cookie, and API key values in tool output.
 #     # timeout: 60
-#     # include: [caido_list_requests]
+#     include: [caido_list_requests]
+#     # Without description, the menu line comes from the server.
+#     # description: Browse and replay HTTP traffic in the local Caido proxy.
+#     # instructions: |
+#     #   Search history with HTTPQL, then fetch one request by id.
+#     #   Replay with caido_send_request or caido_edit_request so the request
+#     #   shows up in the project.
+#     #   Check scope before testing a host. Record confirmed issues as findings.
+#     #   Do not invent cookie or token values the tool did not return.
+#     #   To call a public JSON API with no proxy, use the http skill.

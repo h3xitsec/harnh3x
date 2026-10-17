@@ -313,6 +313,26 @@ def test_mcp_server_block_names_the_file_and_key():
         config.parse_config(text, path)
 
 
+def test_mcp_instructions_come_from_the_server_block():
+    path = Path("demo.yaml")
+    text = (
+        "mcp:\n"
+        "  caido:\n"
+        "    command: caido-mcp-server\n"
+        "    instructions: |\n"
+        "      Check scope first.\n"
+        "      Replay through Caido.\n"
+    )
+    _, servers = config.parse_config(text, path)
+    assert servers[0].instructions == "Check scope first.\nReplay through Caido.\n"
+
+    bad = "mcp:\n  caido:\n    command: caido-mcp-server\n    instructions: [a]\n"
+    with pytest.raises(
+        SystemExit, match=r"demo.yaml: mcp.caido: instructions must be a string"
+    ):
+        config.parse_config(bad, path)
+
+
 def test_mcp_server_name_cannot_match_a_built_in_skill():
     with pytest.raises(RuntimeError, match="matches a built-in skill"):
         SkillRegistry(servers=(_mcp_server("file-ops"),))

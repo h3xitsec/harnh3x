@@ -12,27 +12,37 @@ from harnh3x.skills import SkillRegistry
 from harnh3x.tui import HarnessApp, WarningScreen
 
 
-def test_configured_mcp_server_stays_out_of_schemas_until_load(tmp_path):
-    registry = SkillRegistry(servers=(_mcp_server(),))
+def test_mcp_handshake_at_start_keeps_schemas_out_until_load(tmp_path):
+    server = _mcp_server(
+        description="Browse and replay HTTP traffic in Caido.",
+        instructions="Check scope first.\n",
+    )
+    registry = SkillRegistry(servers=(server,))
     try:
+        client = registry._clients["caido"]
+        assert client.alive()
         base_skills, base_tools = SkillRegistry().available_counts()
-        assert registry.available_counts() == (base_skills + 1, base_tools)
+        assert registry.available_counts() == (base_skills + 1, base_tools + 8)
         menu = registry.get_menu()
-        assert "mcp:\n- caido: Browse and replay HTTP traffic" in menu
+        assert "mcp:\n- caido: Browse and replay HTTP traffic in Caido." in menu
         assert menu.index("- tasks:") < menu.index("mcp:")
         assert _tool_names(registry.schemas()) == ["load_skill", "unload_skill"]
 
         loaded = registry.load_skill("caido")
 
+        assert registry._clients["caido"] is client
         names = _tool_names(registry.schemas())
         assert names[0:2] == ["load_skill", "unload_skill"]
         assert "caido_list_requests" in names
         assert "caido_send_request" in names
         assert "caido_read_resource" in names
         assert registry.available_counts() == (base_skills + 1, base_tools + 8)
-        assert "local Caido proxy" in loaded
-        assert "Use HTTPQL." in loaded
-        assert "caido://project: Current project" in loaded
+        assert loaded.index("Browse and replay HTTP traffic in Caido.") < (
+            loaded.index("Check scope first.\n\n# Fake\nUse HTTPQL.")
+        )
+        assert loaded.index("Use HTTPQL.") < loaded.index(
+            "caido://project: Current project"
+        )
         assert "[loaded: caido_list_requests" in registry.get_menu()
     finally:
         registry.close()
@@ -55,7 +65,7 @@ def test_mcp_tool_call_joins_text_and_reports_errors(tmp_path, monkeypatch):
         assert picture == "Unsupported content type: image"
         wide = registry.execute("wide", {}, tmp_path)
         assert "truncated" in wide
-        assert "bodyLimit" in wide
+        assert "narrow the request and call the tool again" in wide
         assert (
             registry.execute(
                 "caido_read_resource", {"uri": "caido://project"}, tmp_path
@@ -74,7 +84,7 @@ def test_mcp_tool_call_joins_text_and_reports_errors(tmp_path, monkeypatch):
         registry.close()
 
 
-def test_mcp_include_filters_schemas_and_collision_fails_the_load(tmp_path):
+def test_mcp_include_filters_schemas_and_collision_drops_the_server(tmp_path):
     included = SkillRegistry(servers=(_mcp_server(include=("caido_list_requests",)),))
     try:
         included.load_skill("caido")
@@ -87,16 +97,44 @@ def test_mcp_include_filters_schemas_and_collision_fails_the_load(tmp_path):
 
     colliding = SkillRegistry(servers=(_mcp_server(env={"FAKE_MCP": "collide"}),))
     try:
+        assert "caido" not in colliding.get_menu()
+        assert "caido" not in colliding._clients
+        assert colliding.warnings == [
+            ("caido", "tool 'read_file' from 'caido' collides with an existing tool")
+        ]
         failed = colliding.load_skill("caido")
-        assert failed == (
-            "Error: tool 'read_file' from 'caido' collides with an existing tool"
-        )
-        assert "caido" not in colliding.loaded_names()
+        assert failed == "Error: Unknown skill 'caido'. Check the skill menu."
     finally:
         colliding.close()
 
 
-def test_other_mcp_servers_skip_the_caido_guide(tmp_path):
+def test_mcp_menu_line_comes_from_the_server_without_a_description(tmp_path):
+    def menu_line(mode):
+        registry = SkillRegistry(servers=(_mcp_server(env={"FAKE_MCP": mode}),))
+        try:
+            menu = registry.get_menu()
+            loaded = registry.load_skill("caido")
+        finally:
+            registry.close()
+        line = next(row for row in menu.splitlines() if row.startswith("- caido:"))
+        return line, loaded
+
+    described, loaded = menu_line("described")
+    assert described == "- caido: Fake proxy traffic."
+    assert "Use HTTPQL." in loaded
+    assert "Caido" not in loaded
+
+    instructed, _ = menu_line("")
+    assert instructed == "- caido: Use HTTPQL."
+
+    quiet, _ = menu_line("quiet")
+    assert quiet == (
+        "- caido: fake 1, 8 tools: caido_list_requests, caido_send_request, "
+        "echo_env, boom, die, ..."
+    )
+
+
+def test_mcp_description_without_resources(tmp_path):
     registry = SkillRegistry(
         servers=(
             _mcp_server(
@@ -109,7 +147,6 @@ def test_other_mcp_servers_skip_the_caido_guide(tmp_path):
     try:
         loaded = registry.load_skill("widgets")
         assert "Widgets from the bench." in loaded
-        assert "local Caido proxy" not in loaded
         assert "widgets_read_resource" not in _tool_names(registry.schemas())
         assert "caido_list_requests" in _tool_names(registry.schemas())
     finally:
@@ -160,23 +197,33 @@ def test_one_exit_handler_closes_every_live_registry(monkeypatch):
         second.close()
 
 
-def test_missing_mcp_command_is_an_error(tmp_path):
+def test_missing_mcp_command_is_dropped_at_start(tmp_path):
     registry = SkillRegistry(
         servers=(_mcp_server(command="harnh3x-missing-mcp", args=()),)
     )
     try:
-        failed = registry.load_skill("caido")
-        assert failed == (
-            "Error: command not found: harnh3x-missing-mcp "
-            "Skill 'caido' is no longer available."
-        )
-        assert "caido" not in registry.loaded_names()
         assert "caido" not in registry.get_menu()
         assert registry.warnings == [
             ("caido", "command not found: harnh3x-missing-mcp")
         ]
         again = registry.load_skill("caido")
         assert again == "Error: Unknown skill 'caido'. Check the skill menu."
+    finally:
+        registry.close()
+
+
+def test_server_that_cannot_restart_on_load_is_dropped(tmp_path):
+    registry = SkillRegistry(servers=(_mcp_server(),))
+    try:
+        client = registry._clients["caido"]
+        client.close()
+        client.argv = ("harnh3x-missing-mcp",)
+        failed = registry.load_skill("caido")
+        assert failed.startswith("Error: command not found: ")
+        assert failed.endswith("Skill 'caido' is no longer available.")
+        assert "caido" not in registry.loaded_names()
+        assert "caido" not in registry.get_menu()
+        assert registry.warnings[0][0] == "caido"
     finally:
         registry.close()
 
@@ -205,7 +252,7 @@ def test_unreachable_mcp_url_is_omitted_and_a_server_without_one_stays(tmp_path)
     try:
         assert "- caido: Widgets." in plain.get_menu()
         assert plain.warnings == []
-        assert plain.available_counts() == (base_skills + 1, base_tools)
+        assert plain.available_counts() == (base_skills + 1, base_tools + 8)
     finally:
         plain.close()
 

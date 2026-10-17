@@ -12,7 +12,6 @@ package-mode = true
 packages = [{include = "harnh3x", from = "src"}]
 include = [
     {path = "src/harnh3x/skills/**/SKILL.md", format = ["sdist", "wheel"]},
-    {path = "src/harnh3x/mcp/guides/*.md", format = ["sdist", "wheel"]},
 ]
 
 [tool.poetry.dependencies]

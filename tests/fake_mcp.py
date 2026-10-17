@@ -78,18 +78,17 @@ def handle(message: dict) -> None:
     pending = message["id"]
     params = message.get("params") or {}
     if method == "initialize":
-        emit(
-            {
-                "jsonrpc": "2.0",
-                "id": pending,
-                "result": {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {},
-                    "serverInfo": {"name": "fake", "version": "1"},
-                    "instructions": "Use HTTPQL.",
-                },
-            }
-        )
+        mode = os.environ.get("FAKE_MCP")
+        result = {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "serverInfo": {"name": "fake", "version": "1"},
+        }
+        if mode == "described":
+            result["serverInfo"]["description"] = "Fake proxy traffic.\nMore."
+        if mode != "quiet":
+            result["instructions"] = "# Fake\nUse HTTPQL."
+        emit({"jsonrpc": "2.0", "id": pending, "result": result})
         return
     if method == "tools/list":
         emit(

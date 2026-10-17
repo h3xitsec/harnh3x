@@ -13,12 +13,10 @@ from harnh3x.tools.paths import cap_result
 
 _PROTOCOL = "2024-11-05"
 _BASE_ENV = ("PATH", "HOME", "USER", "LANG", "TMPDIR")
-_RESULT_HINT = (
-    "narrow the request (limit, bodyLimit, or HTTPQL) and call the tool again"
-)
+_RESULT_HINT = "narrow the request and call the tool again"
 _PAGE_LIMIT = 20
 _PROBE_TIMEOUT = 1.0
-GUIDES = {"caido": "caido.md"}
+_SUMMARY_TOOLS = 5
 
 
 class McpError(Exception):
@@ -82,6 +80,16 @@ def _port_open(parsed, timeout: float) -> bool:
         return False
 
 
+def _first_line(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    for line in value.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            return stripped
+    return ""
+
+
 def child_env(extra: Mapping[str, str]) -> dict[str, str]:
     env = {}
     for key in _BASE_ENV:
@@ -90,15 +98,6 @@ def child_env(extra: Mapping[str, str]) -> dict[str, str]:
             env[key] = value
     env.update(extra)
     return env
-
-
-def _guide(name: str) -> str:
-    filename = GUIDES.get(name)
-    if filename is None:
-        return ""
-    path = os.path.join(os.path.dirname(__file__), "guides", filename)
-    with open(path, encoding="utf-8") as handle:
-        return handle.read()
 
 
 class McpClient:
@@ -110,6 +109,7 @@ class McpClient:
         self._stderr: list[str] = []
         self._stderr_lock = threading.Lock()
         self._next_id = 0
+        self.server_info: dict = {}
         self.instructions = ""
         self.tools: list[dict] = []
         self.resources: list[dict] = []
@@ -120,6 +120,7 @@ class McpClient:
     def connect(self) -> None:
         self.close()
         self._buf = bytearray()
+        self.server_info = {}
         self.instructions = ""
         self.tools = []
         self.resources = []
@@ -137,6 +138,9 @@ class McpClient:
                 instructions = result.get("instructions")
                 if isinstance(instructions, str):
                     self.instructions = instructions
+                info = result.get("serverInfo")
+                if isinstance(info, dict):
+                    self.server_info = info
             self._notify("notifications/initialized")
             self.tools = self._pages("tools/list", "tools")
             try:
@@ -167,11 +171,10 @@ class McpClient:
 
     def documentation(self) -> str:
         parts = []
-        guide = _guide(self.server.name).strip()
-        if guide:
-            parts.append(guide)
-        elif self.server.description:
+        if self.server.description:
             parts.append(self.server.description)
+        if self.server.instructions.strip():
+            parts.append(self.server.instructions.strip())
         if self.instructions:
             parts.append(self.instructions)
         if self.resources:
@@ -190,6 +193,29 @@ class McpClient:
             if len(lines) > 1:
                 parts.append("\n".join(lines))
         return "\n\n".join(parts)
+
+    def summary(self) -> str:
+        line = _first_line(self.server_info.get("description"))
+        if line:
+            return line
+        line = _first_line(self.instructions)
+        if line:
+            return line
+        label = (
+            _first_line(self.server_info.get("title"))
+            or _first_line(self.server_info.get("name"))
+            or self.server.name
+        )
+        version = _first_line(self.server_info.get("version"))
+        if version:
+            label = f"{label} {version}"
+        names = [schema["function"]["name"] for schema in self.schemas()]
+        if not names:
+            return label
+        shown = ", ".join(names[:_SUMMARY_TOOLS])
+        if len(names) > _SUMMARY_TOOLS:
+            shown += ", ..."
+        return f"{label}, {len(names)} tools: {shown}"
 
     def schemas(self) -> list[dict]:
         chosen = []

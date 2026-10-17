@@ -8,7 +8,7 @@ from pathlib import Path
 import yaml
 
 from harnh3x.config import McpServer
-from harnh3x.mcp.client import McpClient, McpError, _guide, upstream_problem
+from harnh3x.mcp.client import McpClient, McpError, upstream_problem
 from harnh3x.tools import TOOLS, execute_tool
 from harnh3x.tools.scope import scoped
 
@@ -43,24 +43,6 @@ def _ordered(found: dict[str, Skill]) -> dict[str, Skill]:
         key=lambda skill: (bool(skill.category), skill.category, skill.name),
     )
     return {skill.name: skill for skill in ordered}
-
-
-def _mcp_description(server: McpServer) -> str:
-    if server.description:
-        return server.description
-    guide = _guide(server.name).strip()
-    if guide:
-        return _blurb(guide)
-    return "MCP server"
-
-
-def _blurb(doc: str) -> str:
-    for line in doc.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        return stripped
-    return ""
 
 
 def _tool_schemas(names: tuple[str, ...], tools: list) -> tuple:
@@ -291,32 +273,50 @@ class SkillRegistry:
     ):
         catalog = dict(_CATALOG)
         self._clients: dict[str, McpClient] = {}
+        self._active: dict[str, Skill] = {}
         self.warnings: list[tuple[str, str]] = []
         for server in servers:
             if server.name in catalog or server.name in {"load_skill", "unload_skill"}:
                 raise RuntimeError(
                     f"mcp server '{server.name}' matches a built-in skill"
                 )
-            problem = upstream_problem(server)
-            if problem is not None:
-                self.warnings.append((server.name, problem))
-                continue
-            self._clients[server.name] = McpClient(server)
-            catalog[server.name] = Skill(
-                name=server.name,
-                description=_mcp_description(server),
-                doc="",
-                tools=(),
-                category="mcp",
-            )
+        for server in servers:
+            skill = self._handshake(server)
+            if skill is not None:
+                catalog[server.name] = skill
         self._catalog = _ordered(catalog)
         self._owners = _tool_owners(self._catalog)
-        self._active: dict[str, Skill] = {}
         self._yolo = yolo
         self._project = project
         self._scoped_cache: dict[str, tuple[dict, dict]] = {}
         if self._clients:
             _register_for_exit(self)
+
+    def _handshake(self, server: McpServer) -> Skill | None:
+        problem = upstream_problem(server)
+        if problem is not None:
+            self.warnings.append((server.name, problem))
+            return None
+        client = McpClient(server)
+        try:
+            client.connect()
+        except McpError as exc:
+            self.warnings.append((server.name, str(exc)))
+            return None
+        schemas = client.schemas()
+        collision = self._collision(server.name, schemas)
+        if collision is not None:
+            client.close()
+            self.warnings.append((server.name, collision.removeprefix("Error: ")))
+            return None
+        self._clients[server.name] = client
+        return Skill(
+            name=server.name,
+            description=server.description or client.summary(),
+            doc=client.documentation(),
+            tools=tuple(schemas),
+            category="mcp",
+        )
 
     def skill_tools(self, name: str) -> tuple[str, ...] | None:
         skill = self._active.get(name) or self._catalog.get(name)
