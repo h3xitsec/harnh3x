@@ -157,7 +157,7 @@ class HarnessApp(App):
             lines.append("Coding")
         return Content("\n".join(lines))
 
-    def _available_counts(self) -> tuple[int, int] | None:
+    def _available_counts(self) -> tuple[int, int, int, int] | None:
         skills = getattr(self.session, "skills", None)
         counts = getattr(skills, "available_counts", None)
         if not callable(counts):
@@ -165,7 +165,7 @@ class HarnessApp(App):
         found = counts()
         if (
             isinstance(found, tuple)
-            and len(found) == 2
+            and len(found) == 4
             and all(
                 isinstance(item, int) and not isinstance(item, bool) for item in found
             )
@@ -209,9 +209,20 @@ class HarnessApp(App):
             add(context)
         counts = self._available_counts()
         if counts is not None:
-            skills, tools = counts
+            skills, tools, servers, mcp_tools = counts
             add(f"{skills} skill" if skills == 1 else f"{skills} skills")
             add(f"{tools} tool" if tools == 1 else f"{tools} tools")
+            if servers:
+                add(
+                    f"{servers} MCP server"
+                    if servers == 1
+                    else f"{servers} MCP servers"
+                )
+                add(
+                    f"{mcp_tools} MCP tool"
+                    if mcp_tools == 1
+                    else f"{mcp_tools} MCP tools"
+                )
         if self._yolo():
             add("YOLO", "bold ansi_bright_yellow")
         if getattr(self.session, "debug", False):

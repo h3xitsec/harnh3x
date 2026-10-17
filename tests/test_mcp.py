@@ -21,8 +21,9 @@ def test_mcp_handshake_at_start_keeps_schemas_out_until_load(tmp_path):
     try:
         client = registry._clients["caido"]
         assert client.alive()
-        base_skills, base_tools = SkillRegistry().available_counts()
-        assert registry.available_counts() == (base_skills + 1, base_tools + 8)
+        base_skills, base_tools, *_mcp = SkillRegistry().available_counts()
+        assert _mcp == [0, 0]
+        assert registry.available_counts() == (base_skills, base_tools, 1, 8)
         menu = registry.get_menu()
         assert "mcp:\n- caido: Browse and replay HTTP traffic in Caido." in menu
         assert menu.index("- tasks:") < menu.index("mcp:")
@@ -36,7 +37,7 @@ def test_mcp_handshake_at_start_keeps_schemas_out_until_load(tmp_path):
         assert "caido_list_requests" in names
         assert "caido_send_request" in names
         assert "caido_read_resource" in names
-        assert registry.available_counts() == (base_skills + 1, base_tools + 8)
+        assert registry.available_counts() == (base_skills, base_tools, 1, 8)
         assert loaded.index("Browse and replay HTTP traffic in Caido.") < (
             loaded.index("Check scope first.\n\n# Fake\nUse HTTPQL.")
         )
@@ -243,8 +244,8 @@ def test_unreachable_mcp_url_is_omitted_and_a_server_without_one_stays(tmp_path)
         assert closed.warnings == [
             ("caido", f"not accepting connections: http://127.0.0.1:{port}")
         ]
-        base_skills, base_tools = SkillRegistry().available_counts()
-        assert closed.available_counts() == (base_skills, base_tools)
+        base_skills, base_tools, *_mcp = SkillRegistry().available_counts()
+        assert closed.available_counts() == (base_skills, base_tools, 0, 0)
     finally:
         closed.close()
 
@@ -252,7 +253,7 @@ def test_unreachable_mcp_url_is_omitted_and_a_server_without_one_stays(tmp_path)
     try:
         assert "- caido: Widgets." in plain.get_menu()
         assert plain.warnings == []
-        assert plain.available_counts() == (base_skills + 1, base_tools + 8)
+        assert plain.available_counts() == (base_skills, base_tools, 1, 8)
     finally:
         plain.close()
 
@@ -271,9 +272,11 @@ def test_status_bar_warns_when_an_mcp_server_is_unavailable(tmp_path):
         async with app.run_test(size=(80, 24)) as pilot:
             content = app.query_one("#status").content
             status = str(content)
-            skills, tools = session.skills.available_counts()
+            skills, tools, servers, _mcp_tools = session.skills.available_counts()
+            assert servers == 0
             assert f"Model: {session.model}" in status
-            assert f"{skills} skills · {tools} tools" in status
+            assert f"{skills} skills · {tools} tools · ⚠" in status
+            assert "MCP" not in status
             warning = "⚠ caido unavailable · Ctrl+W for warning details"
             assert warning in status
             red = [
@@ -296,5 +299,22 @@ def test_status_bar_warns_when_an_mcp_server_is_unavailable(tmp_path):
             await pilot.press("escape")
             await pilot.pause()
             assert not isinstance(app.screen, WarningScreen)
+
+    asyncio.run(drive())
+
+
+def test_status_bar_counts_mcp_servers_and_tools_apart(tmp_path):
+    session = agent.Session(workspace=tmp_path)
+    session.skills.close()
+    session.skills = SkillRegistry(servers=(_mcp_server(description="Widgets."),))
+    app = HarnessApp(session, lambda *args, **kwargs: "done", show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(120, 24)):
+            status = str(app.query_one("#status").content)
+            skills, tools, servers, mcp_tools = session.skills.available_counts()
+            assert (servers, mcp_tools) == (1, 8)
+            expected = f"{skills} skills · {tools} tools · 1 MCP server · 8 MCP tools"
+            assert expected in status
 
     asyncio.run(drive())

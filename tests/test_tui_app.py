@@ -469,13 +469,13 @@ def test_debug_banner_stays_after_a_new_session(tmp_path, monkeypatch):
 
     async def drive():
         async with app.run_test(size=(80, 24)) as pilot:
-            skills, tools = session.skills.available_counts()
+            skills, tools, _servers, _mcp_tools = session.skills.available_counts()
             expected = f"Model: custom-model · {skills} skills · {tools} tools · Debug"
             assert "\nDebug\n" not in str(app.query_one("#banner").content)
             assert "Model:" not in str(app.query_one("#banner").content)
             assert str(app.query_one("#status").content) == expected
             await pilot.press("ctrl+n")
-            skills, tools = session.skills.available_counts()
+            skills, tools, _servers, _mcp_tools = session.skills.available_counts()
             expected = f"Model: custom-model · {skills} skills · {tools} tools · Debug"
             assert "\nDebug\n" not in str(app.query_one("#banner").content)
             assert str(app.query_one("#status").content) == expected
@@ -497,7 +497,7 @@ def test_yolo_banner_stays_after_a_new_session(tmp_path, monkeypatch):
     async def drive():
         async with plain_app.run_test(size=(80, 24)) as pilot:
             assert "YOLO" not in str(plain_app.query_one("#banner").content)
-            skills, tools = plain.skills.available_counts()
+            skills, tools, _servers, _mcp_tools = plain.skills.available_counts()
             assert (
                 str(plain_app.query_one("#status").content)
                 == f"Model: custom-model · {skills} skills · {tools} tools"
@@ -509,7 +509,7 @@ def test_yolo_banner_stays_after_a_new_session(tmp_path, monkeypatch):
         async with app.run_test(size=(80, 24)) as pilot:
             assert "YOLO" not in str(app.query_one("#banner").content)
             content = app.query_one("#status").content
-            skills, tools = session.skills.available_counts()
+            skills, tools, _servers, _mcp_tools = session.skills.available_counts()
             assert (
                 str(content)
                 == f"Model: custom-model · {skills} skills · {tools} tools · YOLO"
@@ -528,7 +528,7 @@ def test_yolo_banner_stays_after_a_new_session(tmp_path, monkeypatch):
             await pilot.press("ctrl+n")
             assert "YOLO" not in str(app.query_one("#banner").content)
             content = app.query_one("#status").content
-            skills, tools = session.skills.available_counts()
+            skills, tools, _servers, _mcp_tools = session.skills.available_counts()
             assert (
                 str(content)
                 == f"Model: custom-model · {skills} skills · {tools} tools · YOLO"

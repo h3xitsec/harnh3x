@@ -332,16 +332,24 @@ class SkillRegistry:
     def loaded_names(self) -> list[str]:
         return sorted(self._active)
 
-    def available_counts(self) -> tuple[int, int]:
-        names: set[str] = set()
+    def available_counts(self) -> tuple[int, int, int, int]:
+        skills = servers = 0
+        builtin: set[str] = set()
+        remote: set[str] = set()
         for name, skill in self._catalog.items():
             current = self._active.get(name, skill)
+            if skill.category == "mcp":
+                servers += 1
+                names = remote
+            else:
+                skills += 1
+                names = builtin
             for tool in current.tools:
                 function = tool.get("function") if isinstance(tool, dict) else None
                 tool_name = function.get("name") if isinstance(function, dict) else None
                 if isinstance(tool_name, str):
                     names.add(tool_name)
-        return len(self._catalog), len(names)
+        return skills, len(builtin), servers, len(remote)
 
     def get_menu(self) -> str:
         lines = [
