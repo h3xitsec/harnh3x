@@ -50,6 +50,7 @@ def _complete(
             _compact(session, api)
             if session.abort.is_set():
                 return ""
+            _announce_turn(session, turn + 1)
             _emit_debug(session)
             try:
                 completed = _completion(session, api)
@@ -131,6 +132,12 @@ def _complete(
         if session.abort.is_set():
             return ""
         return _close_with(session, MAX_TURNS_REACHED, compact=api)
+
+
+def _announce_turn(session: Session, number: int) -> None:
+    hook = getattr(session, "on_model_turn", None)
+    if callable(hook):
+        hook(number)
 
 
 def _another_window(session: Session) -> bool:

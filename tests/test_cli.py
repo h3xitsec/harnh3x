@@ -211,6 +211,8 @@ def test_plain_resume_reprints_the_session(monkeypatch, capsys, tmp_path):
     output = capsys.readouterr().out
     assert "Unknown command: /nope" in output
     assert "You: fix the notes" in output
+    assert output.index("Turn 1") < output.index("🔧 load_skill")
+    assert output.index("Turn 2") < output.index("### **Done**")
     assert "🔧 load_skill({'name': 'file-ops'})" in output
     assert "### **Done**" in output
     assert "alpha" not in output

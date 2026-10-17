@@ -146,10 +146,16 @@ def _span_steps(span: list, answer: str | None) -> list:
         ):
             final = message
     steps = []
+    number = 0
     for message in span:
         if not isinstance(message, dict) or message.get("role") != "assistant":
             continue
-        steps.extend(_assistant_steps(message, answer, is_final=message is final))
+        piece = _assistant_steps(message, answer, is_final=message is final)
+        if not piece:
+            continue
+        number += 1
+        steps.append(("round", number))
+        steps.extend(piece)
     return steps
 
 

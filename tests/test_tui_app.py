@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from helpers import _export_messages, _past_workspace, _write_transcript
 from textual import events
+from textual.widgets import Rule
 
 from harnh3x import __version__, agent
 from harnh3x.tui import (
@@ -27,6 +28,7 @@ from harnh3x.tui import (
     ReviewApp,
     Thinking,
     ToolBox,
+    TurnHeading,
     UserMessage,
     WarningScreen,
 )
@@ -271,13 +273,13 @@ def test_export_icon_writes_the_clicked_response(tmp_path):
             assert str(copy.content) == "⧉"
             assert copy.region.x < button.region.x
             assert button.region.x > answers[0].region.x
-            copy.scroll_visible()
+            copy.scroll_visible(animate=False)
             await pilot.pause()
             await pilot.click(copy)
             await pilot.pause()
             assert app.clipboard == "draft"
             assert toasts == [("Copied to the clipboard.", "information")]
-            button.scroll_visible()
+            button.scroll_visible(animate=False)
             await pilot.pause()
             await pilot.click(button)
             await pilot.pause()
@@ -1427,6 +1429,32 @@ def test_one_shot_enter_continues_past_max_turns():
             await _wait_for(
                 pilot, lambda: "Agent: kept going" in app.transcript_plain()
             )
+
+    asyncio.run(drive())
+
+
+def test_model_turns_head_each_round():
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+
+    def fake_run(message, active, show_tools=True, on_tool=None):
+        active.on_model_turn(1)
+        on_tool("read_file", {"path": "a.txt"})
+        active.on_model_turn(2)
+        return "done"
+
+    app = HarnessApp(session, fake_run, show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press(*"go", "enter")
+            await _wait_for(pilot, lambda: "Agent: done" in app.transcript_plain())
+            plain = app.transcript_plain()
+            assert plain.index("Turn 1") < plain.index("read_file")
+            assert plain.index("read_file") < plain.index("Turn 2")
+            assert plain.index("Turn 2") < plain.index("Agent: done")
+            headings = list(app.query(TurnHeading))
+            assert [heading.number for heading in headings] == [1, 2]
+            assert all(list(heading.query(Rule)) for heading in headings)
 
     asyncio.run(drive())
 

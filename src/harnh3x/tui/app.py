@@ -60,6 +60,7 @@ from harnh3x.tui.panels import (
     DebugBox,
     Thinking,
     ToolBox,
+    TurnHeading,
     UserMessage,
 )
 from harnh3x.tui.pickers import ExportScreen, ResumeScreen
@@ -420,6 +421,7 @@ class HarnessApp(App):
 
     def on_mount(self) -> None:
         self.session.confirm_continue = self._confirm_continue
+        self.session.on_model_turn = self._queue_model_turn
         self._refresh_status()
         self._load_context_limit()
         self._anchor_transcript()
@@ -972,6 +974,8 @@ class HarnessApp(App):
                 parts.append(f"Agent: {child.source}")
             elif isinstance(child, UserMessage):
                 parts.append(f"You: {child.source}")
+            elif isinstance(child, TurnHeading):
+                parts.append(f"Turn {child.number}")
             elif isinstance(child, Thinking):
                 parts.append(child.plain)
             elif isinstance(child, Static):
@@ -987,6 +991,20 @@ class HarnessApp(App):
         self._msg_content = ""
         self._live_thinking: Thinking | None = None
         self._live_answer: AgentAnswer | None = None
+
+    def _queue_model_turn(self, number: int) -> None:
+        self._from_thread(self._begin_model_turn, number)
+
+    def _begin_model_turn(self, number: int) -> None:
+        self._tools_open = False
+        self._reasoning_open = False
+        self._content_open = False
+        self._msg_reasoning = ""
+        self._msg_content = ""
+        self._live_thinking = None
+        self._live_answer = None
+        self.tools = None
+        self.query_one("#transcript").mount(TurnHeading(number))
 
     def _queue_debug(self, system: str | None, request: str) -> None:
         self._from_thread(self._show_debug, system, request)
@@ -1033,7 +1051,9 @@ class HarnessApp(App):
     def _render_steps(self, steps: tuple) -> None:
         transcript = self.query_one("#transcript")
         for kind, payload in steps:
-            if kind == "thinking":
+            if kind == "round":
+                transcript.mount(TurnHeading(payload))
+            elif kind == "thinking":
                 transcript.mount(Thinking(payload, hold=False))
             elif kind == "answer":
                 transcript.mount(AgentAnswer(payload, error=is_failure_answer(payload)))

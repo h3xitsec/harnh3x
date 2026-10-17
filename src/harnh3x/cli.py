@@ -183,6 +183,11 @@ def _print_tools(tools: list[tuple[str, object]]) -> None:
         print(f"  🔧 {name}({args})")
 
 
+def _print_turn_heading(number: int) -> None:
+    sys.stdout.write(f"\nTurn {number}\n")
+    sys.stdout.flush()
+
+
 def _print_turns(session, *, answer_only: bool) -> None:
     for kind, item in transcript_items(session.messages):
         if kind == "compact":
@@ -195,7 +200,9 @@ def _print_turns(session, *, answer_only: bool) -> None:
                 _present(turn.answer, "", answer_only=True)
             continue
         for kind, payload in turn.steps:
-            if kind == "thinking":
+            if kind == "round":
+                _print_turn_heading(payload)
+            elif kind == "thinking":
                 panel = format_thinking(
                     payload, expanded=False, width=terminal_width(), hold=False
                 )
@@ -370,12 +377,16 @@ def _finish_live(
 def _run_printed(session, text: str, *, show_tools: bool, answer_only: bool) -> None:
     live = _LiveReply(answer_only=answer_only)
     previous = getattr(session, "on_delta", None)
+    previous_turn = getattr(session, "on_model_turn", None)
     session.on_delta = live
+    if not answer_only:
+        session.on_model_turn = _print_turn_heading
     start = len(getattr(session, "messages", []) or [])
     try:
         answer = run(text, session, show_tools=show_tools)
     finally:
         session.on_delta = previous
+        session.on_model_turn = previous_turn
     reasoning = "" if answer_only else reply_reasoning(session, start, answer)
     _finish_live(live, answer, reasoning, answer_only=answer_only)
 

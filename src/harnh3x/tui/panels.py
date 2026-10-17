@@ -10,7 +10,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.content import Content
 from textual.events import Click, Key
-from textual.widgets import Markdown, Static, TextArea
+from textual.widgets import Markdown, Rule, Static, TextArea
 from textual.widgets.markdown import MarkdownStream
 
 from harnh3x.commands import matching_commands
@@ -117,6 +117,34 @@ class Thinking(CollapsiblePanel):
     def append(self, text: str) -> None:
         self.reasoning += text
         self.refresh_body()
+
+
+class TurnHeading(Vertical):
+    """The model-round label and the rule drawn under it."""
+
+    DEFAULT_CSS = """
+    TurnHeading {
+        height: auto;
+        margin: 1 0 0 0;
+    }
+    TurnHeading .turn-label {
+        color: $text-muted;
+        height: 1;
+    }
+    TurnHeading Rule.-horizontal {
+        margin: 0;
+        height: 1;
+        color: $text-muted;
+    }
+    """
+
+    def __init__(self, number: int) -> None:
+        super().__init__()
+        self.number = number
+
+    def compose(self) -> ComposeResult:
+        yield Static(f"Turn {self.number}", classes="turn-label", markup=False)
+        yield Rule(line_style="solid")
 
 
 class UserMessage(Static):

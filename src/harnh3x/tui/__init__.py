@@ -52,6 +52,7 @@ from harnh3x.tui.panels import (
     Thinking,
     ToolBox,
     ToolEntry,
+    TurnHeading,
     UserMessage,
 )
 from harnh3x.tui.pickers import (
@@ -136,6 +137,7 @@ __all__ = [
     "ToolBox",
     "ToolEntry",
     "Turn",
+    "TurnHeading",
     "UserMessage",
     "WarningScreen",
     "activity_text",

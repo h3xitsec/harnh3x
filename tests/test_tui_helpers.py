@@ -329,7 +329,14 @@ def test_transcript_items_keep_compaction_notes_in_order():
             {"role": "assistant", "content": "### **Done**"},
         ]
     )
-    assert [step[0] for step in past[0][1].steps] == ["thinking", "tools", "answer"]
+    assert [step[0] for step in past[0][1].steps] == [
+        "round",
+        "thinking",
+        "tools",
+        "round",
+        "answer",
+    ]
+    assert [step[1] for step in past[0][1].steps if step[0] == "round"] == [1, 2]
 
 
 def test_exportable_answers_keep_final_replies_only():
