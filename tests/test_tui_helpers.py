@@ -9,6 +9,8 @@ from helpers import _export_messages
 
 from harnh3x import is_failure_answer, matching_commands
 from harnh3x.tui import (
+    MENTION_ROWS,
+    Mention,
     ModelApp,
     activity_text,
     context_level,
@@ -18,8 +20,17 @@ from harnh3x.tui import (
     export_base,
     export_filename,
     exportable_answers,
+    filter_mentions,
     format_call,
+    index_project,
+    insert_mention,
+    mention_at,
+    mention_browse,
+    mention_children,
+    mention_menu,
+    mention_window,
     render_export,
+    replace_mention_query,
     slash_hint,
     transcript_items,
     translate_legacy_key,
@@ -84,6 +95,143 @@ def test_slash_hint_lists_matching_commands():
     assert matching_commands("/a\nb") == []
     assert slash_hint(matching_commands("/e")) == "/export  /exit · Tab completes"
     assert slash_hint(matching_commands("/det")).startswith("/details  hide or show")
+
+
+def test_mention_token_stops_at_whitespace_and_finished_quotes():
+    assert mention_at("look @src/fo", len("look @src/fo")) == (5, 12, "src/fo")
+    assert mention_at("user@host", len("user@host")) is None
+    assert mention_at("@", 1) == (0, 1, "")
+    assert mention_at("@src/foo bar", len("@src/foo bar")) is None
+    assert mention_at("@src/foo bar", len("@src/foo")) == (0, 8, "src/foo")
+    assert mention_at("hello\n@src", len("hello\n@src")) == (6, 10, "src")
+    quoted = '@"my file.py" '
+    assert mention_at(quoted, len(quoted)) is None
+    assert mention_at('@"my file', len('@"my file')) == (0, 9, "my file")
+
+
+def test_insert_mention_quotes_spaces_and_marks_folders():
+    text = "see @src and more"
+    start, end, _query = mention_at(text, len("see @src"))
+    updated, cursor = insert_mention(text, start, end, Mention("src/app.py", False))
+    assert updated == "see @src/app.py  and more"
+    assert cursor == len("see @src/app.py ")
+    folder, _cursor = insert_mention("@tu", 0, 3, Mention("src/tui", True))
+    assert folder == "@src/tui/ "
+    spaced, _cursor = insert_mention("@", 0, 1, Mention("my file.py", False))
+    assert spaced == '@"my file.py" '
+    assert mention_at(spaced, len(spaced)) is None
+    quoted, _cursor = insert_mention("@", 0, 1, Mention('say "hi".py', False))
+    assert quoted == '@"say \\"hi\\".py" '
+    assert mention_at(quoted, len(quoted)) is None
+    assert mention_menu([Mention("readme.md", False), Mention("src", True)], 1) == (
+        "  readme.md\n> src/"
+    )
+
+
+def test_mention_browse_enters_directories_and_keeps_a_filter():
+    entries = [
+        Mention("readme.md", False),
+        Mention("src", True),
+        Mention("src/app.py", False),
+        Mention("src/pkg", True),
+        Mention("src/pkg/code.py", False),
+    ]
+    assert mention_browse(entries, "") == ("", "")
+    assert mention_browse(entries, "src") == ("", "src")
+    assert mention_browse(entries, "src/") == ("src", "")
+    assert mention_browse(entries, "src/app") == ("src", "app")
+    assert mention_browse(entries, "src/pkg/code") == ("src/pkg", "code")
+    assert mention_browse(entries, "src/nope/x") == ("src", "nope/x")
+    assert {item.path for item in mention_children(entries, "")} == {
+        "readme.md",
+        "src",
+    }
+    assert {item.path for item in mention_children(entries, "src")} == {
+        "src/app.py",
+        "src/pkg",
+    }
+    text, cursor = replace_mention_query("@src", 0, len("@src"), "src/pkg/")
+    assert (text, cursor) == ("@src/pkg/", len("@src/pkg/"))
+    assert mention_at(text, cursor)[2] == "src/pkg/"
+    quoted, quoted_cursor = replace_mention_query("@", 0, 1, 'say "hi"/')
+    assert quoted == '@"say \\"hi\\"/'
+    assert mention_at(quoted, quoted_cursor)[2] == 'say "hi"/'
+
+
+def test_filter_mentions_ranks_subsequence_matches():
+    entries = [
+        Mention("tui/app.py", False),
+        Mention("app.py", False),
+        Mention("src/app_helper.py", False),
+        Mention("other/tapp.py", False),
+        Mention("readme.md", False),
+    ]
+    assert [item.path for item in filter_mentions(entries, "tapp")] == [
+        "other/tapp.py",
+        "tui/app.py",
+    ]
+    assert filter_mentions(entries, "app", limit=0) == []
+    assert [item.path for item in filter_mentions(entries, "app")] == [
+        "app.py",
+        "tui/app.py",
+        "src/app_helper.py",
+        "other/tapp.py",
+    ]
+    shallow = filter_mentions(
+        [
+            Mention("b/c.py", False),
+            Mention("a.py", False),
+            Mention("b", True),
+        ],
+        "",
+    )
+    assert [item.path for item in shallow] == ["a.py", "b", "b/c.py"]
+    many = [Mention(f"a{index}.txt", False) for index in range(9)]
+    shown = filter_mentions(many, "")
+    assert [item.path for item in shown] == [f"a{index}.txt" for index in range(9)]
+    selected, offset, menu = mention_window(shown, 0, 0)
+    assert (selected, offset) == (0, 0)
+    assert menu.splitlines()[0] == "> a0.txt"
+    assert menu.splitlines()[-1] == "  a7.txt"
+    assert len(menu.splitlines()) == MENTION_ROWS
+    for _step in range(7):
+        selected += 1
+        selected, offset, menu = mention_window(shown, selected, offset)
+        assert offset == 0
+    selected, offset, menu = mention_window(shown, selected + 1, offset)
+    assert (selected, offset) == (8, 1)
+    assert menu.splitlines()[0] == "  a1.txt"
+    assert menu.splitlines()[-1] == "> a8.txt"
+    selected, offset, menu = mention_window(shown, 0, offset)
+    assert (selected, offset) == (0, 0)
+    assert menu.splitlines()[0] == "> a0.txt"
+
+
+def test_index_project_skips_ignored_dirs_and_symlinks(tmp_path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "keep.py").write_text("x")
+    nested = root / "src"
+    nested.mkdir()
+    (nested / "app.py").write_text("x")
+    skipped = root / "node_modules"
+    skipped.mkdir()
+    (skipped / "secret.py").write_text("x")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "hidden.py").write_text("x")
+    (root / "link").symlink_to(outside, target_is_directory=True)
+    found = {entry.path: entry.is_dir for entry in index_project(root)}
+    assert found["keep.py"] is False
+    assert found["src"] is True
+    assert found["src/app.py"] is False
+    assert "node_modules" not in found
+    assert "node_modules/secret.py" not in found
+    assert found["link"] is True
+    assert "link/hidden.py" not in found
+    assert index_project(root / "keep.py") == []
+    assert index_project(root, limit=0) == []
+    assert len(index_project(root, limit=2)) == 2
 
 
 def test_failure_answers_are_recognized():

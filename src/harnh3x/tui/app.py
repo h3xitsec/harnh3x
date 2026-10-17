@@ -6,6 +6,7 @@ import os
 import threading
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import ClassVar
 
 from textual import events
@@ -35,6 +36,17 @@ from harnh3x.tui.export import (
     exportable_answers,
     render_export,
     write_export,
+)
+from harnh3x.tui.mentions import (
+    Mention,
+    filter_mentions,
+    index_project,
+    insert_mention,
+    mention_at,
+    mention_browse,
+    mention_children,
+    mention_window,
+    replace_mention_query,
 )
 from harnh3x.tui.modals import ExportPathScreen, HelpScreen, WarningScreen
 from harnh3x.tui.panels import (
@@ -138,12 +150,18 @@ class HarnessApp(App):
         padding: 0 1;
         color: $accent;
     }
+    #mention-menu {
+        height: auto;
+        max-height: 8;
+        padding: 0 1;
+        color: $text-muted;
+    }
     #slash-hint {
         height: 1;
         padding: 0 1;
         color: $text-muted;
     }
-    #activity.hidden, #slash-hint.hidden {
+    #activity.hidden, #mention-menu.hidden, #slash-hint.hidden {
         display: none;
     }
     .panel {
@@ -223,6 +241,13 @@ class HarnessApp(App):
         self._busy_since = 0.0
         self._frame = 0
         self._activity_timer: Timer | None = None
+        self._mentions: list[Mention] | None = None
+        self._mention_matches: list[Mention] = []
+        self._mention_selected = 0
+        self._mention_offset = 0
+        self._mention_prefer: str | None = None
+        self._mention_token: tuple[int, int, str] | None = None
+        self._mention_hold: str | None = None
         self._reset_live()
 
     async def on_event(self, event: events.Event) -> None:
@@ -372,6 +397,7 @@ class HarnessApp(App):
         with VerticalGroup(id="bottom"):
             yield Static("", id="activity", classes="hidden", markup=False)
             if self.review is None and self.initial is None:
+                yield Static("", id="mention-menu", classes="hidden", markup=False)
                 yield Static("", id="slash-hint", classes="hidden", markup=False)
                 yield Composer()
             with Horizontal(id="status-line"):
@@ -415,6 +441,7 @@ class HarnessApp(App):
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         if isinstance(event.text_area, Composer):
             self._refresh_slash_hint(event.text_area.text)
+            self._refresh_mentions(event.text_area)
 
     def _refresh_slash_hint(self, text: str) -> None:
         hints = list(self.query("#slash-hint"))
@@ -425,6 +452,154 @@ class HarnessApp(App):
         if matches:
             hint.update(slash_hint(matches))
         hint.set_class(not matches, "hidden")
+
+    def _mention_root(self) -> Path | None:
+        if not getattr(self.session, "coding", False):
+            return None
+        project = getattr(self.session, "project", None)
+        if project is None:
+            return None
+        root = Path(project)
+        if not root.is_dir():
+            return None
+        return root
+
+    def mention_open(self) -> bool:
+        return bool(self._mention_matches)
+
+    def mention_move(self, step: int) -> bool:
+        if not self._mention_matches:
+            return False
+        last = len(self._mention_matches) - 1
+        self._mention_selected = min(max(self._mention_selected + step, 0), last)
+        self._paint_mentions()
+        return True
+
+    def mention_into(self) -> bool:
+        if not self.mention_open() or self._mention_token is None:
+            return False
+        entry = self._mention_matches[self._mention_selected]
+        if not entry.is_dir:
+            return True
+        self._mention_prefer = None
+        self._set_mention_query(entry.path + "/")
+        return True
+
+    def mention_back(self) -> bool:
+        if self._mention_token is None or self._mentions is None:
+            return False
+        directory, _name = mention_browse(self._mentions, self._mention_token[2])
+        if not directory:
+            return self.mention_open()
+        parent = directory.rpartition("/")[0]
+        self._mention_prefer = directory
+        self._set_mention_query(f"{parent}/" if parent else "")
+        return True
+
+    def _set_mention_query(self, query: str) -> None:
+        if self._mention_token is None:
+            return
+        composer = self.query_one(Composer)
+        start, end, _query = self._mention_token
+        updated, cursor = replace_mention_query(composer.text, start, end, query)
+        self._mention_hold = None
+        self._mention_selected = 0
+        self._mention_offset = 0
+        composer.place(updated, cursor)
+
+    def _paint_mentions(self) -> None:
+        menus = list(self.query("#mention-menu"))
+        if not menus:
+            return
+        self._mention_selected, self._mention_offset, text = mention_window(
+            self._mention_matches, self._mention_selected, self._mention_offset
+        )
+        menus[0].update(text)
+        menus[0].set_class(not text, "hidden")
+
+    def mention_accept(self) -> bool:
+        if not self._mention_matches or self._mention_token is None:
+            return False
+        composer = self.query_one(Composer)
+        start, end, _query = self._mention_token
+        entry = self._mention_matches[self._mention_selected]
+        updated, cursor = insert_mention(composer.text, start, end, entry)
+        self._mention_hold = None
+        composer.place(updated, cursor)
+        return True
+
+    def mention_dismiss(self) -> bool:
+        if not self._mention_matches:
+            return False
+        composers = list(self.query(Composer))
+        self._mention_hold = composers[0].text if composers else ""
+        self._mention_matches = []
+        self._mention_token = None
+        self._mention_selected = 0
+        self._mention_offset = 0
+        self._mention_prefer = None
+        menus = list(self.query("#mention-menu"))
+        if menus:
+            menus[0].set_class(True, "hidden")
+        return True
+
+    def _drop_mentions(self) -> None:
+        self._mentions = None
+        self._mention_matches = []
+        self._mention_selected = 0
+        self._mention_offset = 0
+        self._mention_prefer = None
+        self._mention_token = None
+        self._mention_hold = None
+        menus = list(self.query("#mention-menu"))
+        if menus:
+            menus[0].set_class(True, "hidden")
+
+    def _refresh_mentions(self, composer: Composer) -> None:
+        menus = list(self.query("#mention-menu"))
+        if not menus:
+            return
+        menu = menus[0]
+        if self._mention_hold is not None and composer.text == self._mention_hold:
+            self._mention_matches = []
+            self._mention_token = None
+            self._mention_offset = 0
+            menu.set_class(True, "hidden")
+            return
+        self._mention_hold = None
+        root = self._mention_root()
+        token = None
+        if root is not None:
+            offset = composer.document.get_index_from_location(composer.cursor_location)
+            token = mention_at(composer.text, offset)
+        if token is None or root is None:
+            self._mention_matches = []
+            self._mention_token = None
+            self._mention_selected = 0
+            self._mention_offset = 0
+            self._mention_prefer = None
+            menu.set_class(True, "hidden")
+            return
+        if self._mentions is None:
+            self._mentions = index_project(root)
+        _start, _end, query = token
+        if self._mention_token is None or self._mention_token[2] != query:
+            self._mention_selected = 0
+            self._mention_offset = 0
+        self._mention_token = token
+        directory, name = mention_browse(self._mentions, query)
+        children = mention_children(self._mentions, directory)
+        self._mention_matches = filter_mentions(children, name)
+        if self._mention_prefer:
+            for index, entry in enumerate(self._mention_matches):
+                if entry.path == self._mention_prefer:
+                    self._mention_selected = index
+                    break
+            self._mention_prefer = None
+        if not self._mention_matches:
+            menu.set_class(True, "hidden")
+            return
+        self._paint_mentions()
 
     def _begin_busy(self, phase: str = WAITING) -> None:
         self._busy = True
@@ -507,6 +682,7 @@ class HarnessApp(App):
         composer = self.query_one(Composer)
         composer.disabled = False
         composer.focus()
+        self._drop_mentions()
 
     def action_warnings(self) -> None:
         warnings = self._warnings()
@@ -532,6 +708,7 @@ class HarnessApp(App):
         if composer.disabled:
             return
         self.session.reset()
+        self._drop_mentions()
         self._refresh_banner()
         self.tools = None
         self._shown_compactions = []
@@ -731,6 +908,8 @@ class HarnessApp(App):
         self._render_history()
         self._load_context_limit()
         self._seed_history()
+        self._drop_mentions()
+        self._refresh_mentions(composer)
         composer.disabled = False
         composer.focus()
 
@@ -924,6 +1103,7 @@ class HarnessApp(App):
             composer.focus()
 
     def _after_turn(self, answer: str, start: int) -> None:
+        self._drop_mentions()
         if not self._streamed:
             reasoning = ""
             if self.show_tools:

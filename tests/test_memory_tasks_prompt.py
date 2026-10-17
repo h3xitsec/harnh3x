@@ -146,6 +146,13 @@ def test_system_prompt_mentions_yolo_only_when_enabled(tmp_path):
     assert "Load file-ops" not in coding
     assert "Make the smallest change that does the job." in coding
     assert "Always confirm what you changed, including the paths." in coding
+    mention = (
+        "When the user writes @path, that path is a file or folder in the project; "
+        "read it before you answer. A trailing slash is a folder."
+    )
+    assert mention in coding
+    assert mention not in plain
+    assert mention not in granted
     assert "RULES" in coding
     assert coding.endswith("MENU")
     both = system_prompt(tmp_path, "MENU", now=now, yolo=True, project=project)

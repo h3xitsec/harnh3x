@@ -392,7 +392,9 @@ class Composer(TextArea):
 
     Up on the first row and Down on the last row walk ``prompts`` (TextArea
     already uses ``history`` for undo); Tab completes a slash command while
-    one matches.
+    one matches. In a coding session, an open ``@`` list takes Up, Down, Tab,
+    and Enter. Right enters the selected directory, Left returns to its
+    parent, and Escape closes that list.
     """
 
     def __init__(self) -> None:
@@ -416,6 +418,12 @@ class Composer(TextArea):
     def _load(self, text: str) -> None:
         self.load_text(text)
         self.move_cursor(self.document.end)
+
+    def place(self, text: str, cursor: int) -> None:
+        """Replace the draft and leave the cursor at a codepoint index."""
+        self.load_text(text)
+        self.move_cursor(self.document.get_location_from_index(cursor))
+        self._prompt_index = None
 
     def _recall(self, step: int) -> bool:
         if not self.prompts:
@@ -446,22 +454,45 @@ class Composer(TextArea):
         self._load(text)
         return True
 
+    def _mention_app(self):
+        app = self.app
+        if callable(getattr(app, "mention_open", None)):
+            return app
+        return None
+
     async def _on_key(self, event: Key) -> None:
         handled = False
-        if event.key == "enter":
+        mentions = self._mention_app()
+        if mentions is not None and mentions.mention_open():
+            if event.key == "escape":
+                handled = mentions.mention_dismiss()
+            elif event.key in ("enter", "tab"):
+                handled = mentions.mention_accept()
+            elif event.key == "up":
+                handled = mentions.mention_move(-1)
+            elif event.key == "down":
+                handled = mentions.mention_move(1)
+            elif event.key == "right":
+                handled = mentions.mention_into()
+            elif event.key == "left":
+                handled = mentions.mention_back()
+        elif mentions is not None and event.key == "left":
+            handled = mentions.mention_back()
+        if not handled and event.key == "enter":
             self.app.action_submit()
             handled = True
-        elif event.key in ("shift+enter", "ctrl+j"):
+        elif not handled and event.key in ("shift+enter", "ctrl+j"):
             self.insert("\n")
             handled = True
-        elif event.key == "up" and self.cursor_location[0] == 0:
+        elif not handled and event.key == "up" and self.cursor_location[0] == 0:
             handled = self._recall(-1)
         elif (
-            event.key == "down"
+            not handled
+            and event.key == "down"
             and self.cursor_location[0] == self.document.line_count - 1
         ):
             handled = self._recall(1)
-        elif event.key == "tab":
+        elif not handled and event.key == "tab":
             handled = self._complete_command()
         if handled:
             event.stop()
@@ -470,3 +501,5 @@ class Composer(TextArea):
         if event.key not in ("up", "down"):
             self._prompt_index = None
         await super()._on_key(event)
+        if mentions is not None:
+            mentions._refresh_mentions(self)

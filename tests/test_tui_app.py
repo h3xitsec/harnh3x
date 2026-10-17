@@ -175,7 +175,11 @@ def test_help_command_lists_commands_and_hotkeys():
             assert "open warning details" in shown
             assert "Ctrl+Q" in shown
             assert "Ctrl+J" in shown
-            assert "Esc          stop the running request" in shown
+            assert "Esc          close the @ list, or stop the running request" in shown
+            assert (
+                "@            in a coding session, pick a project file or folder"
+                in shown
+            )
             assert "/details" in shown
             assert "/new" in shown
             assert "Use Option as Meta key" in shown
@@ -1457,6 +1461,177 @@ def test_slash_hint_and_tab_completion():
             await pilot.press("enter")
             assert "details-hidden" in app.query_one("#transcript").classes
             assert not hint.display
+
+    asyncio.run(drive())
+
+
+def test_at_mention_inserts_a_project_path(tmp_path):
+    project = tmp_path / "proj"
+    (project / "src").mkdir(parents=True)
+    (project / "src" / "app.py").write_text("print(1)\n")
+    (project / "readme.md").write_text("hi\n")
+    calls = []
+
+    def run(*args, **kwargs):
+        calls.append(args[0])
+        return "ok"
+
+    session = SimpleNamespace(
+        workspace="ws",
+        model="m",
+        messages=[],
+        coding=True,
+        project=project,
+        abort=threading.Event(),
+    )
+    app = HarnessApp(session, run, show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            menu = app.query_one("#mention-menu")
+            composer = app.query_one(Composer)
+            await pilot.press(*"older", "enter")
+            await _wait_for(pilot, lambda: "Agent: ok" in app.transcript_plain())
+            await pilot.press("@")
+            assert menu.display
+            assert "> readme.md" in str(menu.content)
+            await pilot.press("up")
+            assert composer.text == "@"
+            app._busy = True
+            await pilot.press("escape")
+            assert not session.abort.is_set()
+            app._busy = False
+            assert not menu.display
+            assert composer.text == "@"
+            await pilot.press(*"src/app")
+            assert "> src/app.py" in str(menu.content)
+            await pilot.press("enter")
+            assert composer.text == "@src/app.py "
+            assert not menu.display
+            assert calls == ["older"]
+            composer.load_text("")
+            await pilot.pause()
+            await pilot.press("@", "down", "tab")
+            assert composer.text == "@src/ "
+            composer.load_text("")
+            await pilot.pause()
+            await pilot.press(*"@zzz", "enter")
+            await _wait_for(pilot, lambda: "@zzz" in app.transcript_plain())
+            assert calls[-1] == "@zzz"
+            (project / "new.py").write_text("x\n")
+            await pilot.press(*"@new")
+            assert "new.py" in str(menu.content)
+
+    asyncio.run(drive())
+
+
+def test_at_mention_scrolls_past_the_visible_rows(tmp_path):
+    project = tmp_path / "proj"
+    project.mkdir()
+    for index in range(10):
+        (project / f"f{index:02}.txt").write_text("x\n")
+    session = SimpleNamespace(
+        workspace="ws",
+        model="m",
+        messages=[],
+        coding=True,
+        project=project,
+    )
+    app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            menu = app.query_one("#mention-menu")
+            await pilot.press("@")
+            lines = str(menu.content).splitlines()
+            assert lines[0] == "> f00.txt"
+            assert lines[-1] == "  f07.txt"
+            assert "f08.txt" not in lines
+            for _step in range(8):
+                await pilot.press("down")
+            lines = str(menu.content).splitlines()
+            assert lines[0] == "  f01.txt"
+            assert lines[-1] == "> f08.txt"
+            assert "f00.txt" not in lines
+            await pilot.press("down")
+            lines = str(menu.content).splitlines()
+            assert lines[-1] == "> f09.txt"
+            await pilot.press("up")
+            lines = str(menu.content).splitlines()
+            assert "> f08.txt" in lines
+            assert lines[-1] == "  f09.txt"
+            for _step in range(8):
+                await pilot.press("up")
+            assert str(menu.content).splitlines()[0] == "> f00.txt"
+
+    asyncio.run(drive())
+
+
+def test_at_mention_enters_a_directory_and_returns_to_its_parent(tmp_path):
+    project = tmp_path / "proj"
+    (project / "src" / "pkg").mkdir(parents=True)
+    (project / "app.py").write_text("x\n")
+    (project / "src" / "app.py").write_text("x\n")
+    (project / "src" / "pkg" / "code.py").write_text("x\n")
+    session = SimpleNamespace(
+        workspace="ws",
+        model="m",
+        messages=[],
+        coding=True,
+        project=project,
+    )
+    app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            menu = app.query_one("#mention-menu")
+            composer = app.query_one(Composer)
+            await pilot.press("@")
+            assert str(menu.content) == "> app.py\n  src/"
+            await pilot.press("right")
+            assert composer.text == "@"
+            assert str(menu.content) == "> app.py\n  src/"
+            await pilot.press("down", "right")
+            assert composer.text == "@src/"
+            assert str(menu.content) == "> src/app.py\n  src/pkg/"
+            await pilot.press("right")
+            assert composer.text == "@src/"
+            await pilot.press("down", "right")
+            assert composer.text == "@src/pkg/"
+            assert str(menu.content) == "> src/pkg/code.py"
+            await pilot.press("right")
+            assert composer.text == "@src/pkg/"
+            await pilot.press("left")
+            assert composer.text == "@src/"
+            assert str(menu.content) == "  src/app.py\n> src/pkg/"
+            await pilot.press("left")
+            assert composer.text == "@"
+            assert str(menu.content) == "  app.py\n> src/"
+            await pilot.press("left")
+            assert composer.text == "@"
+            assert str(menu.content) == "  app.py\n> src/"
+
+    asyncio.run(drive())
+
+
+def test_at_mention_stays_closed_outside_a_coding_session(tmp_path):
+    project = tmp_path / "proj"
+    project.mkdir()
+    (project / "app.py").write_text("x")
+    session = SimpleNamespace(
+        workspace="ws",
+        model="m",
+        messages=[],
+        coding=False,
+        project=project,
+    )
+    app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press("@")
+            assert not app.query_one("#mention-menu").display
+            assert app.query_one(Composer).text == "@"
 
     asyncio.run(drive())
 

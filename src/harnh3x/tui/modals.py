@@ -16,11 +16,13 @@ from harnh3x.commands import help_lines
 
 _HOTKEYS = """\
 Hotkeys
-  Enter        send
+  Enter        send, or insert the highlighted @ path
   Shift+Enter  new line (Ctrl+J where Shift+Enter sends Enter)
-  Up/Down      previous or next prompt
-  Tab          complete a slash command
-  Esc          stop the running request
+  Up/Down      previous or next prompt, or move through the @ list
+  Left/Right   in the @ list, leave a folder or enter the selected one
+  Tab          complete a slash command, or insert the highlighted @ path
+  @            in a coding session, pick a project file or folder
+  Esc          close the @ list, or stop the running request
   Ctrl+N       new session
   Ctrl+H       hide or show thinking, tool calls, debug, and compaction boxes
   Ctrl+W       open warning details

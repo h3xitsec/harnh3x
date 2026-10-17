@@ -78,6 +78,7 @@ If a tool returns an error, tell the user the error. Do not guess."""
         return f"""You are a coding agent working in a granted project.
 {header}
 Read the project before you change it, and match the code already there.
+When the user writes @path, that path is a file or folder in the project; read it before you answer. A trailing slash is a folder.
 {skills}
 Load the coding skill before you read or change source; it can list, search, edit, and run commands in the project. Use the python skill only to compute an answer.
 When a job takes several steps, load the tasks skill, write a plan, and work through it.
