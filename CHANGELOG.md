@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.7.0](https://github.com/h3xitsec/harnh3x/compare/harnh3x-v0.6.0...harnh3x-v0.7.0) (2026-10-17)
+
+
+### Features
+
+* ask to continue when the turn limit is reached ([0d0283d](https://github.com/h3xitsec/harnh3x/commit/0d0283d9fee6fe680fc05857b8d9ef1986dd1c90))
+* label each model round in the transcript ([79c675e](https://github.com/h3xitsec/harnh3x/commit/79c675ede431115f3bb205b79daf96987b83c024))
+* **tools:** outline Python classes and functions with line spans ([0ede2d5](https://github.com/h3xitsec/harnh3x/commit/0ede2d5856e9a710d870d3ea6876c99dcce2436c))
+* **tui:** pick a project file or folder with @ ([bf7f06b](https://github.com/h3xitsec/harnh3x/commit/bf7f06b52cfe407344591624978e2a3184ad5d2a))
+
 ## [0.6.0](https://github.com/h3xitsec/harnh3x/compare/harnh3x-v0.5.1...harnh3x-v0.6.0) (2026-10-17)
 
 
