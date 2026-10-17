@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from anthropic import Anthropic, APIConnectionError, APIStatusError, APITimeoutError
 
 from harnh3x import config
+from harnh3x.failures import TIMED_OUT, UNREACHABLE, rejected
 
 __all__ = [
     "Anthropic",
@@ -53,9 +54,9 @@ class AnthropicClient:
         try:
             page = self.sdk.models.list()
         except APITimeoutError:
-            raise SystemExit("The API request timed out.") from None
+            raise SystemExit(TIMED_OUT) from None
         except APIConnectionError:
-            raise SystemExit("Could not reach the API.") from None
+            raise SystemExit(UNREACHABLE) from None
         except APIStatusError as exc:
             raise SystemExit(status_message(exc)) from None
         items = getattr(page, "data", page)
@@ -201,7 +202,7 @@ def status_message(exc: APIStatusError) -> str:
         text = _plain_error(str(exc))
     if not text:
         text = "the API rejected the request"
-    return f"The API rejected the request: {text}"
+    return rejected(text)
 
 
 def _error_text(body: object) -> str:
@@ -229,9 +230,9 @@ def _call(fn):
     try:
         return fn()
     except APITimeoutError:
-        raise CompletionError("The API request timed out.") from None
+        raise CompletionError(TIMED_OUT) from None
     except APIConnectionError:
-        raise CompletionError("Could not reach the API.") from None
+        raise CompletionError(UNREACHABLE) from None
     except APIStatusError as exc:
         raise CompletionError(status_message(exc)) from None
 

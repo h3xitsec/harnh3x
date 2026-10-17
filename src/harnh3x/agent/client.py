@@ -7,6 +7,7 @@ from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI
 
 from harnh3x import anthropic_api, config
 from harnh3x.anthropic_api import AnthropicClient, status_message
+from harnh3x.failures import TIMED_OUT, UNREACHABLE
 
 _client = None
 
@@ -28,8 +29,8 @@ def get_client() -> OpenAI | AnthropicClient:
 
 def _api_failure(exc: APIConnectionError) -> str:
     if isinstance(exc, APITimeoutError):
-        return "The API request timed out."
-    return "Could not reach the API."
+        return TIMED_OUT
+    return UNREACHABLE
 
 
 def list_models(client: OpenAI | AnthropicClient | None = None) -> list[str]:

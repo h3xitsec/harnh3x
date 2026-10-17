@@ -1,3 +1,6 @@
+from harnh3x.failures import EMPTY_ANSWER
+
+
 def _reasoning_text(msg) -> str:
     for name in ("reasoning", "reasoning_content"):
         value = getattr(msg, name, None)
@@ -42,7 +45,7 @@ def _visible_answer(stored: dict) -> str:
     reasoning = stored.get("reasoning") or ""
     if reasoning:
         return reasoning
-    return "The model returned an empty answer."
+    return EMPTY_ANSWER
 
 
 def _log_preview(value):
