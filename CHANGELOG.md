@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.6.0](https://github.com/h3xitsec/harnh3x/compare/harnh3x-v0.5.1...harnh3x-v0.6.0) (2026-10-17)
+
+
+### Features
+
+* **agent:** send max_tokens on OpenAI completions ([1908536](https://github.com/h3xitsec/harnh3x/commit/1908536605dc28dccd374ba434ee9c9ed3b14d86))
+* **cli:** start a new session with /new and hide trace boxes with /details ([4e9aa4d](https://github.com/h3xitsec/harnh3x/commit/4e9aa4d9f2f0726999858d4c6a69163f675f1a56))
+* export or copy a response ([58bd853](https://github.com/h3xitsec/harnh3x/commit/58bd8531135193af8e58b41019f9a829439375d9))
+* **skills:** describe MCP servers from config instructions and what they report ([0e8b60f](https://github.com/h3xitsec/harnh3x/commit/0e8b60f3375af7b6bfe79007e607b81d2f2f283f))
+* **skills:** load coding once to list, search, edit, and run project commands ([14cecfc](https://github.com/h3xitsec/harnh3x/commit/14cecfce4d6580c5cd097f29bb879c1b55249b12))
+* **skills:** tell the model each tool's sandbox or yolo limits on every call ([14cecfc](https://github.com/h3xitsec/harnh3x/commit/14cecfce4d6580c5cd097f29bb879c1b55249b12))
+* **tools:** cap shell and Python output with shell_max_output ([2dc2f6d](https://github.com/h3xitsec/harnh3x/commit/2dc2f6df15c57ceeac21ad8dede5877fcfc0c6e1))
+* **tools:** report the host OS, CPU, memory, and hardware ([7150554](https://github.com/h3xitsec/harnh3x/commit/7150554aceb82e8b2fb497ba9217da6ba9cf8aa9))
+* **tools:** run pipes and redirects in yolo mode ([cc3126c](https://github.com/h3xitsec/harnh3x/commit/cc3126cf4107e670efbeac5e9154fd6a365db3f7))
+* **tui:** count MCP servers and their tools apart from built-in ones ([027b11c](https://github.com/h3xitsec/harnh3x/commit/027b11cdc427ceb71159a1e6718b63e34e21da52))
+* **tui:** filter /resume by typing and prefill the export file name ([4e9aa4d](https://github.com/h3xitsec/harnh3x/commit/4e9aa4d9f2f0726999858d4c6a69163f675f1a56))
+* **tui:** grow the composer, recall past prompts, and complete slash commands ([4e9aa4d](https://github.com/h3xitsec/harnh3x/commit/4e9aa4d9f2f0726999858d4c6a69163f675f1a56))
+* **tui:** mark each tool call as running, done, or failed with its error ([4e9aa4d](https://github.com/h3xitsec/harnh3x/commit/4e9aa4d9f2f0726999858d4c6a69163f675f1a56))
+* **tui:** open MCP warning details by clicking the status bar ([4e9aa4d](https://github.com/h3xitsec/harnh3x/commit/4e9aa4d9f2f0726999858d4c6a69163f675f1a56))
+* **tui:** show context use as a percentage that turns yellow, then red, near compaction ([4e9aa4d](https://github.com/h3xitsec/harnh3x/commit/4e9aa4d9f2f0726999858d4c6a69163f675f1a56))
+* **tui:** show copy and export results as toasts and failed answers in red ([4e9aa4d](https://github.com/h3xitsec/harnh3x/commit/4e9aa4d9f2f0726999858d4c6a69163f675f1a56))
+* **tui:** stop a running turn with Esc and show what it is doing ([4e9aa4d](https://github.com/h3xitsec/harnh3x/commit/4e9aa4d9f2f0726999858d4c6a69163f675f1a56))
+
+
+### Bug Fixes
+
+* **agent:** answer every pending tool call when a turn is aborted ([f328650](https://github.com/h3xitsec/harnh3x/commit/f328650e16416b84aff762546897734393c82af6))
+* **agent:** honour context_limit for OpenAI-compatible servers ([c06ed95](https://github.com/h3xitsec/harnh3x/commit/c06ed959993eff71ed4fb9aadcc65f2e0933e196))
+* **agent:** keep the compacted-context estimate after a summary ([a949129](https://github.com/h3xitsec/harnh3x/commit/a949129aadaed515f21f591205f0394278b7bfd4))
+* **config:** reject out-of-range counts, limits, and ratios at startup ([08212eb](https://github.com/h3xitsec/harnh3x/commit/08212eb55fb6c52ebbd821f5befcb6a8b75524db))
+* **http:** connect only to an address that passed the host check ([6b65fa3](https://github.com/h3xitsec/harnh3x/commit/6b65fa3e55ed99cabd0b1016e23e10028bf1e3c9))
+* **skills:** register one exit handler for MCP processes ([f511a50](https://github.com/h3xitsec/harnh3x/commit/f511a50903d44801842f04336661e03613aa5b19))
+* **skills:** stop the API rejecting a turn when two loaded skills share a tool ([14cecfc](https://github.com/h3xitsec/harnh3x/commit/14cecfce4d6580c5cd097f29bb879c1b55249b12))
+* **tools:** refuse a .docx whose document part exceeds the byte cap ([3d78d52](https://github.com/h3xitsec/harnh3x/commit/3d78d52dad6e88590e67edced898dd2e103ddd39))
+* **tools:** stop read_url at the PDF page cap ([356366a](https://github.com/h3xitsec/harnh3x/commit/356366a7012f54966d8cf0f5e28cea70880b0299))
+* **tui:** close MCP servers on Ctrl+Q ([c4d3a10](https://github.com/h3xitsec/harnh3x/commit/c4d3a104b814feb78f5a26058283ee5fc0c58c69))
+* **tui:** make Ctrl+H, Shift+Enter, and Option+Backspace work in Terminal.app ([4e9aa4d](https://github.com/h3xitsec/harnh3x/commit/4e9aa4d9f2f0726999858d4c6a69163f675f1a56))
+
+
+### Performance Improvements
+
+* **tui:** scroll smoothly while an answer is streaming ([8c6d991](https://github.com/h3xitsec/harnh3x/commit/8c6d99170e9256550d40e9058e35bce6e3ddc16f))
+
 ## [0.5.1](https://github.com/h3xitsec/harnh3x/compare/harnh3x-v0.5.0...harnh3x-v0.5.1) (2026-10-15)
 
 
