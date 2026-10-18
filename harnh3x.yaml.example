@@ -4,7 +4,7 @@
 
 api_key: sk-...
 api_url: http://127.0.0.1:11434/v1
-model: qwen3.5-128k
+model: model_name
 
 # provider: openai
 # max_tokens: 8192
