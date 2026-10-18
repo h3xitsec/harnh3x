@@ -36,6 +36,7 @@ from harnh3x.tui import (
     mention_window,
     render_export,
     replace_mention_query,
+    skills_text,
     slash_hint,
     transcript_items,
     translate_legacy_key,
@@ -335,11 +336,38 @@ def test_build_segments_shows_each_badge_only_when_it_applies():
     ]
     actions = {segment.key: segment.action for segment in segments}
     assert actions["warnings"] == "warnings"
-    assert all(action is None for key, action in actions.items() if key != "warnings")
+    assert actions["skills"] == actions["tools"] == "skills"
+    clickable = {"warnings", "skills", "tools"}
+    assert all(
+        action is None for key, action in actions.items() if key not in clickable
+    )
     plain = build_segments(StatusState(model="m", counts=(12, 31, 0, 0, 0)))
     assert _texts(plain) == ["m", "skills 12", "tools 31"]
     one = build_segments(StatusState(counts=(1, 1, 0, 1, 1)))
     assert "mcp 1 · 1 tool" in _texts(one)
+
+
+def test_skills_text_lists_loaded_skills_first():
+    text = skills_text(
+        [
+            ("file-ops", "", True, ("read_file", "write_file")),
+            ("shell", "", False, ("run_shell",)),
+            ("caido", "mcp", False, ()),
+        ]
+    )
+    assert text.splitlines() == [
+        "Loaded (1)",
+        "  file-ops",
+        "    read_file, write_file",
+        "",
+        "Not loaded (2)",
+        "  shell",
+        "    run_shell",
+        "  caido [mcp]",
+        "    no tools",
+    ]
+    empty = skills_text([("shell", "", False, ("run_shell",))])
+    assert empty.splitlines()[:2] == ["Loaded (0)", "  none"]
 
 
 def test_context_badge_style_follows_the_compaction_level():

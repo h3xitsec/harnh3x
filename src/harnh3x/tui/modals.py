@@ -1,4 +1,4 @@
-"""Modal overlays: the export path prompt, the max-turns prompt, the help box, and warning details."""
+"""Modal overlays: the export path prompt, the max-turns prompt, the help box, the skill list, and warning details."""
 
 from __future__ import annotations
 
@@ -169,6 +169,45 @@ class HelpScreen(ModalScreen):
     def on_mount(self) -> None:
         frame = self.query_one("#help-frame", VerticalScroll)
         frame.border_title = "Help"
+        frame.border_subtitle = CLOSE_HINT
+
+    def action_close(self) -> None:
+        self.dismiss()
+
+
+def skills_text(entries: list[tuple[str, str, bool, tuple[str, ...]]]) -> str:
+    def block(title: str, loaded: bool) -> list[str]:
+        chosen = [entry for entry in entries if entry[2] is loaded]
+        lines = [f"{title} ({len(chosen)})"]
+        if not chosen:
+            lines.append("  none")
+        for name, category, _loaded, tools in chosen:
+            lines.append(f"  {name} [{category}]" if category else f"  {name}")
+            lines.append(f"    {', '.join(tools) if tools else 'no tools'}")
+        return lines
+
+    return "\n".join([*block("Loaded", True), "", *block("Not loaded", False)])
+
+
+class SkillsScreen(ModalScreen):
+    BINDINGS: ClassVar[list[Binding]] = [
+        Binding("escape", "close", "Close", priority=True),
+    ]
+    DEFAULT_CSS = _FRAME_CSS.format(
+        screen="SkillsScreen", frame="skills-frame", border="ansi_bright_black"
+    )
+
+    def __init__(self, entries: list[tuple[str, str, bool, tuple[str, ...]]]) -> None:
+        super().__init__()
+        self.entries = entries
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(id="skills-frame"):
+            yield Static(skills_text(self.entries), id="skills-box", markup=False)
+
+    def on_mount(self) -> None:
+        frame = self.query_one("#skills-frame", VerticalScroll)
+        frame.border_title = "Skills and tools"
         frame.border_subtitle = CLOSE_HINT
 
     def action_close(self) -> None:

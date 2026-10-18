@@ -467,3 +467,17 @@ def test_readme_lists_every_tool():
         if f"| `{tool['function']['name']}` |" not in readme
     ]
     assert missing == []
+
+
+def test_overview_marks_loaded_skills_in_menu_order():
+    registry = SkillRegistry()
+    registry.load_skill("shell")
+    overview = registry.overview()
+    names = [name for name, _category, _loaded, _tools in overview]
+    assert names[0] == "coding"
+    assert "file-ops" in names
+    by_name = {name: (loaded, tools) for name, _category, loaded, tools in overview}
+    assert by_name["shell"] == (True, ("run_shell",))
+    assert by_name["file-ops"][0] is False
+    assert "read_file" in by_name["file-ops"][1]
+    assert [name for name, _c, loaded, _t in overview if loaded] == ["shell"]

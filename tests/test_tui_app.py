@@ -26,6 +26,7 @@ from harnh3x.tui import (
     ResumeOptions,
     ResumeScreen,
     ReviewApp,
+    SkillsScreen,
     StatusBar,
     Thinking,
     ToolBox,
@@ -1325,6 +1326,35 @@ def test_other_terminals_keep_ctrl_w_for_warnings(monkeypatch):
             assert "connection refused" in str(
                 app.screen.query_one("#warning-box").content
             )
+
+    asyncio.run(drive())
+
+
+def test_clicking_skills_or_tools_opens_the_skill_list(tmp_path):
+    session = agent.Session(workspace=tmp_path)
+    session.skills.load_skill("shell")
+    app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(100, 24)) as pilot:
+            bar = app.query_one("#status", StatusBar)
+            for key in ("skills", "tools"):
+                start, _end, _segment = next(
+                    hit for hit in bar.hits if hit[2].key == key
+                )
+                await pilot.click("#status", offset=(start + 1, 0))
+                await pilot.pause()
+                assert isinstance(app.screen, SkillsScreen)
+                shown = str(app.screen.query_one("#skills-box").content)
+                assert shown.startswith("Loaded (1)\n  shell\n    run_shell\n")
+                assert "Not loaded" in shown
+                assert "  file-ops\n    read_file" in shown
+                frame = app.screen.query_one("#skills-frame")
+                assert frame.border_subtitle == "Escape to close"
+                await pilot.press("escape")
+                await pilot.pause()
+                assert not isinstance(app.screen, SkillsScreen)
+                assert app.focused is app.query_one(Composer)
 
     asyncio.run(drive())
 

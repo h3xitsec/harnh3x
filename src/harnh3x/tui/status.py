@@ -102,13 +102,14 @@ def _skills(state: StatusState) -> Segment | None:
         return None
     skills, _tools, custom, _servers, _mcp_tools = state.counts
     text = f"skills {skills}+{custom}" if custom else f"skills {skills}"
-    return Segment("skills", text, BADGE_STYLE, "right", 30)
+    return Segment("skills", text, BADGE_STYLE, "right", 30, action="skills")
 
 
 def _tools(state: StatusState) -> Segment | None:
     if state.counts is None:
         return None
-    return Segment("tools", f"tools {state.counts[1]}", BADGE_STYLE, "right", 30)
+    text = f"tools {state.counts[1]}"
+    return Segment("tools", text, BADGE_STYLE, "right", 30, action="skills")
 
 
 def _mcp(state: StatusState) -> Segment | None:

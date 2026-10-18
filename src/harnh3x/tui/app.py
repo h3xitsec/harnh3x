@@ -52,6 +52,7 @@ from harnh3x.tui.modals import (
     ContinueScreen,
     ExportPathScreen,
     HelpScreen,
+    SkillsScreen,
     WarningScreen,
 )
 from harnh3x.tui.panels import (
@@ -671,6 +672,13 @@ class HarnessApp(App):
         if not warnings or len(self.screen_stack) > 1:
             return
         self.push_screen(WarningScreen(warnings))
+
+    def action_skills(self) -> None:
+        skills = getattr(self.session, "skills", None)
+        overview = getattr(skills, "overview", None)
+        if not callable(overview) or len(self.screen_stack) > 1:
+            return
+        self.push_screen(SkillsScreen(overview()))
 
     def action_toggle_trace(self) -> None:
         transcript = self.query_one("#transcript")

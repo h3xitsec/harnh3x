@@ -37,8 +37,10 @@ from harnh3x.tui.modals import (
     ContinueScreen,
     ExportPathScreen,
     HelpScreen,
+    SkillsScreen,
     WarningScreen,
     export_filename,
+    skills_text,
 )
 from harnh3x.tui.panels import (
     AgentAnswer,
@@ -142,6 +144,7 @@ __all__ = [
     "ResumeScreen",
     "ReviewApp",
     "Segment",
+    "SkillsScreen",
     "StatusBar",
     "StatusState",
     "Thinking",
@@ -185,6 +188,7 @@ __all__ = [
     "reply_reasoning",
     "run_interactive",
     "run_review",
+    "skills_text",
     "slash_hint",
     "thinking_hint",
     "thinking_overflows",

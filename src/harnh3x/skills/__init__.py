@@ -426,6 +426,13 @@ class SkillRegistry:
     def loaded_names(self) -> list[str]:
         return sorted(self._active)
 
+    def overview(self) -> list[tuple[str, str, bool, tuple[str, ...]]]:
+        """Each skill in menu order as (name, category, loaded, tool names)."""
+        return [
+            (name, skill.category, name in self._active, self.skill_tools(name) or ())
+            for name, skill in self._catalog.items()
+        ]
+
     def available_counts(self) -> tuple[int, int, int, int, int]:
         skills = custom = servers = 0
         builtin: set[str] = set()
