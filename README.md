@@ -34,8 +34,8 @@ poetry install
 The client reads `~/.config/harnh3x/harnh3x.yaml`, or `$XDG_CONFIG_HOME/harnh3x/harnh3x.yaml` when that variable is set. A missing file changes nothing, and the process does not create it. [`harnh3x.yaml.example`](harnh3x.yaml.example) lists every setting. If an old `harnh3x.conf` is still there and the YAML file is not, startup exits and tells you to move the settings.
 
 ```yaml
-api_key: sk-...
-api_url: http://127.0.0.1:11434/v1
+openai_api_key: sk-...
+openai_api_url: http://127.0.0.1:11434/v1
 model: qwen3.5-128k
 ```
 
@@ -49,15 +49,15 @@ HARNH3X_MODEL=qwen3.5-128k
 
 `python-dotenv` loads a `.env` from the working directory when the process starts, without overriding variables that are already set. Do not commit that file. `--model` overrides the model.
 
-Startup exits with a short error when `api_key` or `api_url` is missing from both the config file and the environment.
+Startup exits with a short error when `openai_api_key` or `openai_api_url` is missing from both the config file and the environment.
 
-`provider` is `openai` by default. Set it to `anthropic` to call Claude's Messages API. The key is then `ANTHROPIC_API_KEY` when that variable is set, otherwise `api_key`. `OPENAI_API_KEY` does not override the Claude key. `api_url` is optional in that mode and defaults to `https://api.anthropic.com`. `max_tokens` (default 8192) is sent on every completion with either provider, including compaction; an OpenAI-compatible server that rejects the parameter is called again with `max_completion_tokens`.
+`provider` is `openai` by default. Set it to `anthropic` to call Claude's Messages API. The key is then `anthropic_api_key`, or `ANTHROPIC_API_KEY` when that variable is set. `openai_api_key` and `openai_api_url` are ignored in that mode, and the URL is `https://api.anthropic.com`. `max_tokens` (default 8192) is sent on every completion with either provider, including compaction; an OpenAI-compatible server that rejects the parameter is called again with `max_completion_tokens`.
 
 `context_limit` sets the window used for compaction with either provider. When it is unset, Claude uses 200000 and an OpenAI-compatible server is asked through Ollama's `/api/show`; a server without that endpoint leaves the limit unknown and compaction off until `context_limit` is set.
 
 ```yaml
 provider: anthropic
-api_key: sk-ant-...
+anthropic_api_key: sk-ant-...
 model: claude-sonnet-4-6
 ```
 
@@ -77,7 +77,7 @@ mcp:
 
 Install [caido-mcp-server](https://github.com/c0tton-fluff/caido-mcp-server) yourself and put the local Caido access token in `env`. Leave `CAIDO_ALLOW_SENSITIVE_HEADERS` unset unless you need real credential headers in tool output. Another server is another key under `mcp`. Environment variables do not override this block. An MCP skill is omitted when an `http` or `https` URL in its `env` is not accepting connections.
 
-The built-in model is `qwen3.5-128k` when nothing else sets it. Point `api_url` or `OPENAI_BASE_URL` at whatever server hosts it.
+The built-in model is `qwen3.5-128k` when nothing else sets it. Point `openai_api_url` or `OPENAI_BASE_URL` at whatever server hosts it.
 
 ## Usage
 

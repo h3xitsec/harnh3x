@@ -2,11 +2,14 @@
 # A non-empty environment variable overrides the matching scalar.
 # Environment variables do not override mcp.
 
-api_key: sk-...
-api_url: http://127.0.0.1:11434/v1
+openai_api_key: [enter openai api key]
+openai_api_url: http://127.0.0.1:11434/v1
+anthropic_api_key: [enter anthropic api key]
 model: model_name
 
 # provider: openai
+# provider: anthropic
+# anthropic_api_key: sk-ant-...
 # max_tokens: 8192
 # context_limit: 200000
 # max_turns: 45

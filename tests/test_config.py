@@ -18,8 +18,8 @@ def test_config_file_skips_comments_and_reads_quotes():
     text = """
 # comment
 
-api_key: "sk-quoted"
-api_url: "http://127.0.0.1:11434/v1"
+openai_api_key: "sk-quoted"
+openai_api_url: "http://127.0.0.1:11434/v1"
 model: from-file
 max_turns: 12
 """
@@ -28,7 +28,7 @@ max_turns: 12
     resolved = config.resolve_settings(values, {}, path)
 
     assert servers == ()
-    assert values["api_key"] == "sk-quoted"
+    assert values["openai_api_key"] == "sk-quoted"
     assert resolved["API_KEY"] == "sk-quoted"
     assert resolved["API_URL"] == "http://127.0.0.1:11434/v1"
     assert resolved["MODEL"] == "from-file"
@@ -40,6 +40,9 @@ def test_config_file_rejects_unknown_keys_and_bad_numbers():
     path = Path("demo.yaml")
     with pytest.raises(SystemExit, match=r"demo.yaml: unknown setting nope"):
         config.parse_config("#\nnope: 1\n", path)
+    for key in ("api_key", "api_url"):
+        with pytest.raises(SystemExit, match=rf"demo.yaml: unknown setting {key}"):
+            config.parse_config(f"{key}: leftover\n", path)
     with pytest.raises(SystemExit, match=r"demo.yaml: max_turns: must be an integer"):
         values, _servers = config.parse_config("max_turns: lots\n", path)
         config.resolve_settings(values, {}, path)
@@ -122,24 +125,33 @@ def test_range_checked_settings():
 def test_environment_overrides_the_config_file():
     path = Path("harnh3x.yaml")
     values, _servers = config.parse_config(
-        "api_key: file-key\nmodel: file-model\napi_url: http://file/v1\nmax_turns: 3\n",
+        "openai_api_key: file-key\n"
+        "model: file-model\n"
+        "openai_api_url: http://file/v1\n"
+        "max_turns: 3\n"
+        "anthropic_api_key: ant-file\n",
         path,
     )
     resolved = config.resolve_settings(
         values,
-        {"OPENAI_API_KEY": "env-key", "HARNH3X_MODEL": "env-model"},
+        {
+            "OPENAI_API_KEY": "env-key",
+            "OPENAI_BASE_URL": "http://env/v1",
+            "HARNH3X_MODEL": "env-model",
+        },
         path,
     )
 
     assert resolved["API_KEY"] == "env-key"
     assert resolved["MODEL"] == "env-model"
-    assert resolved["API_URL"] == "http://file/v1"
+    assert resolved["API_URL"] == "http://env/v1"
     assert resolved["MAX_TURNS"] == 3
+    assert resolved["ANTHROPIC_API_KEY"] == "ant-file"
 
 
 def test_config_file_fills_settings_the_environment_omits(tmp_path):
     conf = tmp_path / "harnh3x.yaml"
-    conf.write_text("api_url: http://file/v1\nmax_turns: 9\n")
+    conf.write_text("openai_api_url: http://file/v1\nmax_turns: 9\n")
     resolved = config.load_settings(
         {"HARNH3X_CONFIG": str(conf), "OPENAI_API_KEY": "   "}
     )
@@ -169,11 +181,11 @@ def test_startup_requires_api_key_and_url(monkeypatch):
 
     monkeypatch.setattr(cli, "Session", refuse_session)
 
-    with pytest.raises(SystemExit, match="Missing api_key") as missing:
+    with pytest.raises(SystemExit, match="Missing openai_api_key") as missing:
         cli.main(["--yolo"])
 
     message = str(missing.value)
-    assert "api_url (OPENAI_BASE_URL)" in message
+    assert "openai_api_url (OPENAI_BASE_URL)" in message
     assert "the environment" in message
 
 
@@ -183,13 +195,13 @@ def test_startup_names_only_the_missing_setting(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "API_KEY", None)
     monkeypatch.setattr(config, "API_URL", "http://127.0.0.1:11434/v1")
 
-    with pytest.raises(SystemExit, match="Missing api_key") as missing:
+    with pytest.raises(SystemExit, match="Missing openai_api_key") as missing:
         config.require_api_settings()
 
     message = str(missing.value)
     assert "OPENAI_API_KEY" in message
     assert str(conf) in message
-    assert "api_url" not in message
+    assert "openai_api_url" not in message
 
 
 def test_explicit_config_path_must_exist(tmp_path):
@@ -200,7 +212,7 @@ def test_explicit_config_path_must_exist(tmp_path):
 
 def test_import_applies_the_config_file(tmp_path):
     conf = tmp_path / "harnh3x.yaml"
-    conf.write_text("model: from-file\napi_key: file-key\n")
+    conf.write_text("model: from-file\nopenai_api_key: file-key\n")
     env = os.environ.copy()
     env["HARNH3X_CONFIG"] = str(conf)
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")

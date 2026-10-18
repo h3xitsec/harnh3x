@@ -59,8 +59,9 @@ class _Setting:
 
 _SETTINGS = {
     "provider": _Setting("PROVIDER", "HARNH3X_PROVIDER", "openai", str),
-    "api_key": _Setting("API_KEY", "OPENAI_API_KEY", None, str),
-    "api_url": _Setting("API_URL", "OPENAI_BASE_URL", None, str),
+    "openai_api_key": _Setting("OPENAI_API_KEY", "OPENAI_API_KEY", None, str),
+    "openai_api_url": _Setting("OPENAI_API_URL", "OPENAI_BASE_URL", None, str),
+    "anthropic_api_key": _Setting("ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY", None, str),
     "max_tokens": _Setting("MAX_TOKENS", "HARNH3X_MAX_TOKENS", 8192, int),
     "context_limit": _Setting("CONTEXT_LIMIT", "HARNH3X_CONTEXT_LIMIT", None, int),
     "model": _Setting("MODEL", "HARNH3X_MODEL", "qwen3.5-128k", str),
@@ -161,7 +162,7 @@ def resolve_settings(
             origins[spec.attr] = origin
             continue
         resolved[spec.attr] = spec.default
-    _apply_provider(resolved, origins, file_values, environ, path)
+    _apply_provider(resolved, origins)
     _validate_ranges(resolved, origins)
     return resolved
 
@@ -202,9 +203,6 @@ def _validate_ranges(resolved: dict[str, object], origins: dict[str, str]) -> No
 def _apply_provider(
     resolved: dict[str, object],
     origins: dict[str, str],
-    file_values: Mapping[str, object],
-    environ: Mapping[str, str],
-    path: Path,
 ) -> None:
     provider = resolved["PROVIDER"]
     if not isinstance(provider, str) or provider not in _PROVIDERS:
@@ -212,20 +210,12 @@ def _apply_provider(
         raise SystemExit(f"{origin}: expected openai or anthropic")
     _require_positive(resolved, origins, "MAX_TOKENS", "max_tokens")
     _require_positive(resolved, origins, "CONTEXT_LIMIT", "context_limit")
-    if provider != "anthropic":
-        return
-    anthropic_key = _present(environ.get("ANTHROPIC_API_KEY"))
-    if anthropic_key is not None:
-        resolved["API_KEY"] = anthropic_key
-    elif origins.get("API_KEY") == "OPENAI_API_KEY":
-        if "api_key" in file_values:
-            resolved["API_KEY"] = _coerce(
-                str, file_values["api_key"], f"{path}: api_key"
-            )
-        else:
-            resolved["API_KEY"] = None
-    if resolved["API_URL"] is None:
+    if provider == "anthropic":
+        resolved["API_KEY"] = resolved["ANTHROPIC_API_KEY"]
         resolved["API_URL"] = ANTHROPIC_API_URL
+        return
+    resolved["API_KEY"] = resolved["OPENAI_API_KEY"]
+    resolved["API_URL"] = resolved["OPENAI_API_URL"]
 
 
 def _require_positive(
@@ -245,12 +235,14 @@ def _require_positive(
 
 def require_api_settings() -> None:
     missing: list[str] = []
-    anthropic = PROVIDER == "anthropic"
-    if not API_KEY:
-        key_env = "ANTHROPIC_API_KEY" if anthropic else "OPENAI_API_KEY"
-        missing.append(f"api_key ({key_env})")
-    if not anthropic and not API_URL:
-        missing.append("api_url (OPENAI_BASE_URL)")
+    if PROVIDER == "anthropic":
+        if not API_KEY:
+            missing.append("anthropic_api_key (ANTHROPIC_API_KEY)")
+    else:
+        if not API_KEY:
+            missing.append("openai_api_key (OPENAI_API_KEY)")
+        if not API_URL:
+            missing.append("openai_api_url (OPENAI_BASE_URL)")
     if not missing:
         return
     path, _explicit = config_location()

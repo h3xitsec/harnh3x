@@ -408,7 +408,11 @@ def test_compact_session_uses_the_messages_api(tmp_path, monkeypatch):
 def test_anthropic_provider_prefers_its_own_key():
     path = Path("harnh3x.yaml")
     values, _servers = config.parse_config(
-        "provider: anthropic\napi_key: file-key\n", path
+        "provider: anthropic\n"
+        "anthropic_api_key: file-key\n"
+        "openai_api_key: openai-file\n"
+        "openai_api_url: http://file/v1\n",
+        path,
     )
 
     preferred = config.resolve_settings(
@@ -424,6 +428,24 @@ def test_anthropic_provider_prefers_its_own_key():
     assert preferred["MAX_TOKENS"] == 8192
     assert preferred["CONTEXT_LIMIT"] is None
     assert from_file["API_KEY"] == "file-key"
+    assert from_file["API_URL"] == "https://api.anthropic.com"
+
+
+def test_openai_provider_ignores_the_anthropic_key():
+    path = Path("harnh3x.yaml")
+    values, _servers = config.parse_config(
+        "provider: openai\n"
+        "openai_api_key: file-key\n"
+        "openai_api_url: http://file/v1\n"
+        "anthropic_api_key: ant-file\n",
+        path,
+    )
+
+    resolved = config.resolve_settings(values, {"ANTHROPIC_API_KEY": "ant-env"}, path)
+
+    assert resolved["API_KEY"] == "file-key"
+    assert resolved["API_URL"] == "http://file/v1"
+    assert resolved["ANTHROPIC_API_KEY"] == "ant-env"
 
 
 def test_provider_must_be_openai_or_anthropic():
@@ -440,12 +462,13 @@ def test_startup_names_the_anthropic_key(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "API_KEY", None)
     monkeypatch.setattr(config, "API_URL", "https://api.anthropic.com")
 
-    with pytest.raises(SystemExit, match="Missing api_key") as missing:
+    with pytest.raises(SystemExit, match="Missing anthropic_api_key") as missing:
         config.require_api_settings()
 
     message = str(missing.value)
     assert "ANTHROPIC_API_KEY" in message
-    assert "api_url" not in message
+    assert "openai_api_key" not in message
+    assert "openai_api_url" not in message
 
 
 def test_get_client_builds_an_anthropic_client(monkeypatch):
