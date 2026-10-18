@@ -463,6 +463,11 @@ def test_list_models_exits_when_the_api_is_unreachable():
 def test_model_option_selects_that_model(monkeypatch, capsys, tmp_path):
     cli = _load_cli()
     seen = {}
+
+    def refuse_list():
+        raise AssertionError("list_models")
+
+    monkeypatch.setattr(cli, "list_models", refuse_list)
     monkeypatch.setattr(
         cli,
         "Session",
@@ -476,6 +481,120 @@ def test_model_option_selects_that_model(monkeypatch, capsys, tmp_path):
 
     assert seen["model"] == "gemma4:12b"
     assert "Model: gemma4:12b" in capsys.readouterr().out
+
+
+def test_configured_model_skips_the_chooser_when_it_is_listed(
+    monkeypatch, capsys, tmp_path
+):
+    cli = _load_cli()
+    seen = {}
+
+    def refuse_prompt(prompt=""):
+        raise AssertionError(prompt)
+
+    monkeypatch.setattr(cli, "list_models", lambda: [MODEL, "other"])
+    monkeypatch.setattr("builtins.input", refuse_prompt)
+    monkeypatch.setattr(
+        cli,
+        "Session",
+        lambda **kwargs: (
+            seen.update(kwargs) or SimpleNamespace(workspace=tmp_path, **kwargs)
+        ),
+    )
+    monkeypatch.setattr(cli, "run", lambda *args, **kwargs: "final answer")
+
+    cli.main(["fix the notes"])
+
+    assert seen["model"] == MODEL
+    assert f"Model: {MODEL}" in capsys.readouterr().out
+
+
+def test_missing_configured_model_prompts(monkeypatch, capsys, tmp_path):
+    cli = _load_cli()
+    seen = {}
+    calls = []
+    answers = iter(["0", "nope", "2"])
+
+    def listed():
+        calls.append(True)
+        return ["alpha", "beta"]
+
+    monkeypatch.setattr(cli, "list_models", listed)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    monkeypatch.setattr(
+        cli,
+        "Session",
+        lambda **kwargs: (
+            seen.update(kwargs) or SimpleNamespace(workspace=tmp_path, **kwargs)
+        ),
+    )
+    monkeypatch.setattr(cli, "run", lambda *args, **kwargs: "final answer")
+
+    cli.main(["fix the notes"])
+
+    assert calls == [True]
+    assert seen["model"] == "beta"
+    output = capsys.readouterr().out
+    assert (
+        f"{MODEL} is missing from this provider. Choose a model to continue." in output
+    )
+    assert "1. alpha" in output
+    assert "2. beta" in output
+    assert "Enter a number from 1 to 2." in output
+    assert "Model: beta" in output
+
+
+def test_missing_configured_model_tells_the_textual_picker_why(monkeypatch):
+    cli = _load_cli()
+    seen = {}
+    monkeypatch.setattr(cli, "list_models", lambda: ["alpha", "beta"])
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+
+    def fake_pick(models, reason=None):
+        seen["models"] = models
+        seen["reason"] = reason
+        return "alpha"
+
+    monkeypatch.setattr(cli, "pick_model", fake_pick)
+
+    assert cli.resolve_model(None) == "alpha"
+    assert seen["models"] == ["alpha", "beta"]
+    assert (
+        seen["reason"]
+        == f"{MODEL} is missing from this provider. Choose a model to continue."
+    )
+
+
+def test_unreachable_model_list_keeps_the_configured_model(
+    monkeypatch, capsys, tmp_path
+):
+    cli = _load_cli()
+    seen = {}
+
+    def unreachable():
+        raise SystemExit("Could not reach the API.")
+
+    def refuse_prompt(prompt=""):
+        raise AssertionError(prompt)
+
+    monkeypatch.setattr(cli, "list_models", unreachable)
+    monkeypatch.setattr("builtins.input", refuse_prompt)
+    monkeypatch.setattr(
+        cli,
+        "Session",
+        lambda **kwargs: (
+            seen.update(kwargs) or SimpleNamespace(workspace=tmp_path, **kwargs)
+        ),
+    )
+    monkeypatch.setattr(cli, "run", lambda *args, **kwargs: "final answer")
+
+    cli.main(["fix the notes"])
+
+    assert seen["model"] == MODEL
+    assert f"Model: {MODEL}" in capsys.readouterr().out
 
 
 def test_model_flag_without_a_name_prompts(monkeypatch, capsys, tmp_path):
@@ -499,6 +618,7 @@ def test_model_flag_without_a_name_prompts(monkeypatch, capsys, tmp_path):
 
     assert seen["model"] == "beta"
     output = capsys.readouterr().out
+    assert "missing from this provider" not in output
     assert "1. alpha" in output
     assert "2. beta" in output
     assert "Enter a number from 1 to 2." in output

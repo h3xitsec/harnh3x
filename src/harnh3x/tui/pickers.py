@@ -57,6 +57,9 @@ class NumberedPicker(ModalScreen):
         max-height: 70vh;
         border: none;
     }
+    #picker-box #note {
+        margin-bottom: 1;
+    }
     #picker-box #status {
         color: $text-muted;
         margin-top: 1;
@@ -75,6 +78,7 @@ class NumberedPicker(ModalScreen):
         self.labels = labels
         self.digits = ""
         self.error = ""
+        self.note = ""
         self.shown = list(range(len(labels)))
 
     def choose(self, index: int) -> None:
@@ -104,6 +108,8 @@ class NumberedPicker(ModalScreen):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="picker-box"):
+            if self.note:
+                yield Static(self.note, id="note", markup=False)
             if self._empty:
                 yield Static(self.empty_text or "", markup=False)
                 yield Static(_BACK, id="status", markup=False)
@@ -244,12 +250,16 @@ ExportOptions = NumberedOptions
 
 
 class ModelScreen(NumberedPicker):
+    BINDINGS: ClassVar[list[Binding]] = [_CANCEL]
+
     heading = "Available models"
     option_id = "models"
+    cancellable = True
 
-    def __init__(self, models: list[str]) -> None:
+    def __init__(self, models: list[str], reason: str | None = None) -> None:
         super().__init__([f"{index + 1}. {name}" for index, name in enumerate(models)])
         self.models = models
+        self.note = reason or ""
 
     def choose(self, index: int) -> None:
         self.dismiss(self.models[index])
@@ -280,18 +290,19 @@ class SwitchModelScreen(BackdropCloses, ModelScreen):
 
 
 class ModelApp(App[str]):
-    def __init__(self, models: list[str]) -> None:
+    def __init__(self, models: list[str], reason: str | None = None) -> None:
         super().__init__()
         self.models = models
+        self.reason = reason
 
     def on_mount(self) -> None:
-        self.push_screen(ModelScreen(self.models), self.exit)
+        self.push_screen(ModelScreen(self.models, self.reason), self.exit)
 
 
-def pick_model(models: list[str]) -> str:
-    chosen = ModelApp(models).run()
+def pick_model(models: list[str], reason: str | None = None) -> str:
+    chosen = ModelApp(models, reason).run()
     if not isinstance(chosen, str):
-        raise KeyboardInterrupt
+        raise SystemExit(1)
     return chosen
 
 

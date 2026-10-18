@@ -34,6 +34,7 @@ from harnh3x.tui import (
     mention_children,
     mention_menu,
     mention_window,
+    pick_model,
     render_export,
     replace_mention_query,
     skills_text,
@@ -282,6 +283,50 @@ def test_model_screen_accepts_arrows_or_a_number():
 
     asyncio.run(invalid_then_one())
     assert app.return_value == "alpha"
+
+
+def test_model_screen_explains_a_required_choice():
+    reason = "qwen3.5-128k is missing from this provider. Choose a model to continue."
+    app = ModelApp(["alpha", "beta"], reason)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            assert str(app.screen.query_one("#note").content) == reason
+            await pilot.press("enter")
+
+    asyncio.run(drive())
+    assert app.return_value == "alpha"
+
+    plain = ModelApp(["alpha"])
+
+    async def no_note():
+        async with plain.run_test(size=(80, 24)) as pilot:
+            assert len(plain.screen.query("#note")) == 0
+            await pilot.press("enter")
+
+    asyncio.run(no_note())
+
+
+def test_escape_closes_the_model_screen():
+    app = ModelApp(["alpha", "beta"])
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            status = str(app.screen.query_one("#status").content)
+            assert "Escape cancels." in status
+            await pilot.press("escape")
+
+    asyncio.run(drive())
+    assert app.return_value is None
+
+
+def test_pick_model_exits_when_the_list_is_closed(monkeypatch):
+    monkeypatch.setattr("harnh3x.tui.pickers.ModelApp.run", lambda self: None)
+
+    with pytest.raises(SystemExit) as exc:
+        pick_model(["alpha"])
+
+    assert exc.value.code == 1
 
 
 def test_compact_count_and_context_text():

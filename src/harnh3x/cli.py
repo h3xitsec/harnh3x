@@ -96,7 +96,13 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _choose_model_by_number(models: list[str]) -> str:
+def unavailable_model_reason(name: str) -> str:
+    return f"{name} is missing from this provider. Choose a model to continue."
+
+
+def _choose_model_by_number(models: list[str], reason: str | None = None) -> str:
+    if reason:
+        print(reason)
     print("Available models:")
     for index, name in enumerate(models, start=1):
         print(f"  {index}. {name}")
@@ -107,20 +113,26 @@ def _choose_model_by_number(models: list[str]) -> str:
         print(f"Enter a number from 1 to {len(models)}.")
 
 
-def choose_model(models: list[str]) -> str:
+def choose_model(models: list[str], reason: str | None = None) -> str:
     if not models:
         raise SystemExit("No models available from the API.")
     if sys.stdin.isatty() and sys.stdout.isatty():
-        return pick_model(models)
-    return _choose_model_by_number(models)
+        return pick_model(models, reason)
+    return _choose_model_by_number(models, reason)
 
 
 def resolve_model(spec: str | None) -> str:
-    if spec is None:
+    if spec is not None:
+        if spec.strip() == "":
+            return choose_model(list_models())
+        return spec
+    try:
+        models = list_models()
+    except SystemExit:
         return MODEL
-    if spec.strip() == "":
-        return choose_model(list_models())
-    return spec
+    if MODEL in models:
+        return MODEL
+    return choose_model(models, unavailable_model_reason(MODEL))
 
 
 def format_thinking(reasoning: str, *, expanded: bool, width: int, hold: bool) -> str:

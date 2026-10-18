@@ -100,7 +100,7 @@ poetry run harnh3x --coding --project ~/Github/my-project
 poetry run harnh3x --debug
 ```
 
-`--model` with a name selects that model. `--model` alone lists models from the API: a Textual picker on a tty, a numbered prompt otherwise.
+`--model` with a name selects that model. `--model` alone lists models from the API: a Textual picker on a tty, a numbered prompt otherwise. Escape closes the Textual picker and exits. When the configured default is not in that list, startup uses the same chooser and says that model is missing from this provider. An explicit name is used as given. A list that cannot be fetched leaves the configured default in place.
 
 `--project PATH` grants sandboxed read, write, and shell access to an existing directory. The path is expanded and must not be `/` or overlap the session workspace. Relative tool paths and the shell working directory use that folder. Absolute paths may also use the session workspace. Downloads, plans, and the transcript stay in the session directory. The grant is stored in `transcript.json` and restored by `/resume`. A new session in the same process (Ctrl+N) keeps it. Plain output and the header print `Project:` when one is set.
 
