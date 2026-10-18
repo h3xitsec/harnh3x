@@ -7,10 +7,10 @@ import sys
 
 from helpers import _FAKE_MCP, _mcp_server, _tool_names
 
-from harnh3x import agent, config, skills
+from harnh3x import __version__, agent, config, skills
 from harnh3x.mcp.client import upstream_problem
 from harnh3x.skills import SkillRegistry
-from harnh3x.tui import HarnessApp, WarningScreen
+from harnh3x.tui import HarnessApp, StatusBar, WarningScreen
 
 
 def test_mcp_handshake_at_start_keeps_schemas_out_until_load(tmp_path):
@@ -271,27 +271,28 @@ def test_status_bar_warns_when_an_mcp_server_is_unavailable(tmp_path):
 
     async def drive():
         async with app.run_test(size=(80, 24)) as pilot:
-            content = app.query_one("#status").content
-            status = str(content)
+            bar = app.query_one("#status", StatusBar)
             skills, tools, _custom, servers, _mcp_tools = (
                 session.skills.available_counts()
             )
             assert servers == 0
-            assert f"Model: {session.model}" in status
-            assert f"{skills} skills · {tools} tools · ⚠" in status
-            assert "MCP" not in status
-            warning = "⚠ caido unavailable · Ctrl+W for warning details"
-            assert warning in status
-            red = [
-                status[span.start : span.end]
-                for span in content.spans
-                if span.style == "bold ansi_bright_red"
+            assert [segment.text for segment in bar.shown()] == [
+                session.model,
+                f"skills {skills}",
+                f"tools {tools}",
+                "⚠ 1",
+                __version__,
             ]
-            assert red == [warning]
+            red = [
+                segment.text
+                for segment in bar.segments
+                if segment.style == "bold ansi_white on ansi_red"
+            ]
+            assert red == ["⚠ 1"]
             assert "caido" not in str(app.query_one("#banner").content)
             composer = app.query_one("#composer")
             status_bar = app.query_one("#status")
-            assert composer.region.bottom == status_bar.region.y
+            assert status_bar.region.y == composer.region.bottom + 1
             assert status_bar.region.bottom == app.size.height
             await pilot.press("ctrl+w")
             await pilot.pause()
@@ -314,13 +315,18 @@ def test_status_bar_counts_mcp_servers_and_tools_apart(tmp_path):
 
     async def drive():
         async with app.run_test(size=(120, 24)):
-            status = str(app.query_one("#status").content)
+            bar = app.query_one("#status", StatusBar)
             skills, tools, _custom, servers, mcp_tools = (
                 session.skills.available_counts()
             )
             assert (servers, mcp_tools) == (1, 8)
-            expected = f"{skills} skills · {tools} tools · 1 MCP server · 8 MCP tools"
-            assert expected in status
+            shown = [segment.text for segment in bar.shown()]
+            assert shown[1:] == [
+                f"skills {skills}",
+                f"tools {tools}",
+                "mcp 1 · 8 tools",
+                __version__,
+            ]
 
     asyncio.run(drive())
 
@@ -517,13 +523,14 @@ def test_status_bar_counts_custom_skills_apart(tmp_path):
 
     async def drive():
         async with app.run_test(size=(160, 24)):
-            status = str(app.query_one("#status").content)
+            bar = app.query_one("#status", StatusBar)
             skills, tools, custom, *_mcp = session.skills.available_counts()
             assert custom == 1
-            expected = (
-                f"{skills} skills · {tools} tools · 1 custom skill · "
-                "1 MCP server · 8 MCP tools"
-            )
-            assert expected in status
+            shown = [segment.text for segment in bar.shown()]
+            assert shown[1:4] == [
+                f"skills {skills}+1",
+                f"tools {tools}",
+                "mcp 1 · 8 tools",
+            ]
 
     asyncio.run(drive())

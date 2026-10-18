@@ -12,9 +12,13 @@ from harnh3x.tui import (
     MENTION_ROWS,
     Mention,
     ModelApp,
+    Segment,
+    StatusState,
     activity_text,
+    build_segments,
+    compact_count,
     context_level,
-    context_line,
+    context_text,
     conversation_turns,
     elapsed_text,
     export_base,
@@ -24,6 +28,7 @@ from harnh3x.tui import (
     format_call,
     index_project,
     insert_mention,
+    layout_segments,
     mention_at,
     mention_browse,
     mention_children,
@@ -278,12 +283,130 @@ def test_model_screen_accepts_arrows_or_a_number():
     assert app.return_value == "alpha"
 
 
-def test_context_line_formats_used_and_limit():
-    assert context_line(1234, 8192) == "Context: 1,234 / 8,192 (15%)"
-    assert context_line(0, 8192) == "Context: 0 / 8,192 (0%)"
-    assert context_line(None, 8192) == "Context: — / 8,192"
-    assert context_line(50, None) == "Context: 50"
-    assert context_line(None, None) is None
+def test_compact_count_and_context_text():
+    assert compact_count(0) == "0"
+    assert compact_count(999) == "999"
+    assert compact_count(1234) == "1.2k"
+    assert compact_count(8192) == "8.2k"
+    assert compact_count(262_144) == "262k"
+    assert compact_count(1_048_576) == "1.0M"
+    assert context_text(1234, 8192) == "ctx 1.2k/8.2k 15%"
+    assert context_text(0, 8192) == "ctx 0/8.2k 0%"
+    assert context_text(None, 262_144) == "ctx —/262k"
+    assert context_text(50, None) == "ctx 50"
+    assert context_text(None, None) is None
+
+
+def _texts(segments):
+    return [segment.text for segment in segments]
+
+
+def test_build_segments_shows_each_badge_only_when_it_applies():
+    assert build_segments(StatusState()) == []
+    full = StatusState(
+        model="qwen3.5:9b",
+        used=None,
+        limit=262_144,
+        compact_at=0.75,
+        counts=(12, 31, 1, 1, 67),
+        warnings=(("caido", "refused"), ("web-triage", "server unavailable")),
+        yolo=True,
+        debug=True,
+        version="0.6.0",
+    )
+    segments = build_segments(full)
+    assert _texts(segments) == [
+        "qwen3.5:9b",
+        "ctx —/262k",
+        "YOLO",
+        "DEBUG",
+        "skills 12+1",
+        "tools 31",
+        "mcp 1 · 67 tools",
+        "⚠ 2",
+        "0.6.0",
+    ]
+    sides = {segment.key: segment.side for segment in segments}
+    assert [key for key, side in sides.items() if side == "left"] == [
+        "model",
+        "context",
+        "yolo",
+        "debug",
+    ]
+    actions = {segment.key: segment.action for segment in segments}
+    assert actions["warnings"] == "warnings"
+    assert all(action is None for key, action in actions.items() if key != "warnings")
+    plain = build_segments(StatusState(model="m", counts=(12, 31, 0, 0, 0)))
+    assert _texts(plain) == ["m", "skills 12", "tools 31"]
+    one = build_segments(StatusState(counts=(1, 1, 0, 1, 1)))
+    assert "mcp 1 · 1 tool" in _texts(one)
+
+
+def test_context_badge_style_follows_the_compaction_level():
+    def style(used):
+        state = StatusState(used=used, limit=1000, compact_at=0.5)
+        return build_segments(state)[0].style
+
+    assert style(100) == "ansi_white on ansi_bright_black"
+    assert style(450) == "ansi_black on ansi_yellow"
+    assert style(600) == "bold ansi_white on ansi_red"
+
+
+def test_layout_segments_right_aligns_and_reports_hit_ranges():
+    segments = [
+        Segment("model", "m", "s"),
+        Segment("tools", "tools 3", "s", "right"),
+        Segment("version", "1.0", "s", "right"),
+    ]
+    content, hits = layout_segments(segments, 30)
+    text = str(content)
+    assert len(text) == 30
+    assert text.startswith(" m ")
+    assert text.endswith(" tools 3   1.0 ")
+    assert [(start, end, segment.key) for start, end, segment in hits] == [
+        (0, 3, "model"),
+        (15, 24, "tools"),
+        (25, 30, "version"),
+    ]
+    for start, end, segment in hits:
+        assert text[start:end] == f" {segment.text} "
+    assert all(span.style == "s" for span in content.spans)
+
+
+def test_layout_segments_drops_the_lowest_priority_first():
+    state = StatusState(
+        model="qwen3.5:9b",
+        used=1234,
+        limit=262_144,
+        counts=(12, 31, 1, 1, 67),
+        warnings=(("caido", "refused"),),
+        yolo=True,
+        version="0.6.0",
+    )
+    segments = build_segments(state)
+
+    def shown(width):
+        _content, hits = layout_segments(segments, width)
+        return [segment.key for _start, _end, segment in hits]
+
+    assert shown(200) == [
+        "model",
+        "context",
+        "yolo",
+        "skills",
+        "tools",
+        "mcp",
+        "warnings",
+        "version",
+    ]
+    assert shown(80) == ["model", "context", "yolo", "skills", "mcp", "warnings"]
+    assert shown(70) == ["model", "context", "yolo", "mcp", "warnings"]
+    assert shown(60) == ["model", "context", "yolo", "warnings"]
+    assert shown(30) == ["model", "yolo", "warnings"]
+    assert shown(12) == ["yolo", "warnings"]
+    assert shown(0) == []
+    content, _hits = layout_segments(segments, 40)
+    assert content.cell_length <= 40
 
 
 def test_transcript_items_keep_compaction_notes_in_order():

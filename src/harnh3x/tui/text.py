@@ -1,4 +1,4 @@
-"""Pure text helpers: wrapping, panel bodies, and the status context line."""
+"""Pure text helpers: wrapping, panel bodies, and the context warning level."""
 
 from __future__ import annotations
 
@@ -71,18 +71,6 @@ def debug_text(title: str, body: str, *, expanded: bool, width: int) -> str:
     header = "\n".join(wrap_lines(title, limit))
     shown = "\n".join(thinking_shown(body, expanded=expanded, width=width))
     return f"{header}\n{shown}"
-
-
-def context_line(used: int | None, limit: int | None) -> str | None:
-    if used is None and limit is None:
-        return None
-    used_text = f"{used:,}" if used is not None else "—"
-    if limit is None:
-        return f"Context: {used_text}"
-    line = f"Context: {used_text} / {limit:,}"
-    if used is not None and limit > 0:
-        line += f" ({round(used * 100 / limit)}%)"
-    return line
 
 
 CONTEXT_WARN_SHARE = 0.8

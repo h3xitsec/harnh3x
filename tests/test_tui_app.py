@@ -26,12 +26,22 @@ from harnh3x.tui import (
     ResumeOptions,
     ResumeScreen,
     ReviewApp,
+    StatusBar,
     Thinking,
     ToolBox,
     TurnHeading,
     UserMessage,
     WarningScreen,
 )
+
+
+def _status(app):
+    return [segment.text for segment in app.query_one("#status", StatusBar).segments]
+
+
+def _status_styles(app):
+    bar = app.query_one("#status", StatusBar)
+    return {segment.key: segment.style for segment in bar.segments}
 
 
 def test_compacting_indicator_shows_and_hides():
@@ -137,20 +147,20 @@ def test_banner_shows_context_and_updates_after_a_turn():
             banner = str(app.query_one("#banner").content)
             assert "🤖 Harnh3x" in banner
             assert __version__ not in banner
-            version = app.query_one("#version")
-            assert str(version.content) == __version__
-            assert version.region.right == app.size.width
-            assert version.region.y == app.query_one("#status").region.y
+            bar = app.query_one("#status", StatusBar)
+            assert bar.region.right == app.size.width
+            assert bar.region.bottom == app.size.height
+            _start, end, last = bar.hits[-1]
+            assert last.text == __version__
+            assert end == bar.size.width
             assert "Context:" not in banner
             assert "Model:" not in banner
-            status = str(app.query_one("#status").content)
-            assert status == "Model: m · Context: 1,234 / 8,192 (15%)"
+            assert _status(app) == ["m", "ctx 1.2k/8.2k 15%", __version__]
             await pilot.press(*"hi", "enter")
             await _wait_for(pilot, lambda: "Agent: done" in app.transcript_plain())
             banner = str(app.query_one("#banner").content)
             assert "Context:" not in banner
-            status = str(app.query_one("#status").content)
-            assert status == "Model: m · Context: 5,000 / 8,192 (61%)"
+            assert _status(app) == ["m", "ctx 5.0k/8.2k 61%", __version__]
             assert "Shift+Enter" not in banner
             assert "/resume" not in banner
 
@@ -463,7 +473,8 @@ def test_debug_panels_collapse_and_hide():
         async with app.run_test(size=(80, 24)) as pilot:
             banner = str(app.query_one("#banner").content)
             assert "\nDebug\n" not in banner
-            assert str(app.query_one("#status").content) == "Model: m · Debug"
+            assert _status(app) == ["m", "DEBUG", __version__]
+            assert _status_styles(app)["debug"] == "ansi_black on ansi_cyan"
             await pilot.press(*"hi", "enter")
             await _wait_for(pilot, lambda: "Agent: done" in app.transcript_plain())
             boxes = list(app.query(".debug"))
@@ -503,17 +514,29 @@ def test_debug_banner_stays_after_a_new_session(tmp_path, monkeypatch):
             skills, tools, _custom, _servers, _mcp_tools = (
                 session.skills.available_counts()
             )
-            expected = f"Model: custom-model · {skills} skills · {tools} tools · Debug"
+            expected = [
+                "custom-model",
+                "DEBUG",
+                f"skills {skills}",
+                f"tools {tools}",
+                __version__,
+            ]
             assert "\nDebug\n" not in str(app.query_one("#banner").content)
             assert "Model:" not in str(app.query_one("#banner").content)
-            assert str(app.query_one("#status").content) == expected
+            assert _status(app) == expected
             await pilot.press("ctrl+n")
             skills, tools, _custom, _servers, _mcp_tools = (
                 session.skills.available_counts()
             )
-            expected = f"Model: custom-model · {skills} skills · {tools} tools · Debug"
+            expected = [
+                "custom-model",
+                "DEBUG",
+                f"skills {skills}",
+                f"tools {tools}",
+                __version__,
+            ]
             assert "\nDebug\n" not in str(app.query_one("#banner").content)
-            assert str(app.query_one("#status").content) == expected
+            assert _status(app) == expected
             assert session.debug is True
 
     asyncio.run(drive())
@@ -535,52 +558,56 @@ def test_yolo_banner_stays_after_a_new_session(tmp_path, monkeypatch):
             skills, tools, _custom, _servers, _mcp_tools = (
                 plain.skills.available_counts()
             )
-            assert (
-                str(plain_app.query_one("#status").content)
-                == f"Model: custom-model · {skills} skills · {tools} tools"
-            )
+            assert _status(plain_app) == [
+                "custom-model",
+                f"skills {skills}",
+                f"tools {tools}",
+                __version__,
+            ]
             composer = plain_app.query_one("#composer")
             status_bar = plain_app.query_one("#status")
-            assert composer.region.bottom == status_bar.region.y
+            assert status_bar.region.y == composer.region.bottom + 1
             assert status_bar.region.bottom == plain_app.size.height
         async with app.run_test(size=(80, 24)) as pilot:
             assert "YOLO" not in str(app.query_one("#banner").content)
-            content = app.query_one("#status").content
             skills, tools, _custom, _servers, _mcp_tools = (
                 session.skills.available_counts()
             )
-            assert (
-                str(content)
-                == f"Model: custom-model · {skills} skills · {tools} tools · YOLO"
-            )
-            text = str(content)
-            yellow = [
-                text[span.start : span.end]
-                for span in content.spans
-                if span.style == "bold ansi_bright_yellow"
+            assert _status(app) == [
+                "custom-model",
+                "YOLO",
+                f"skills {skills}",
+                f"tools {tools}",
+                __version__,
             ]
-            assert yellow == ["YOLO"]
+            yellow = [
+                key
+                for key, style in _status_styles(app).items()
+                if style == "bold ansi_black on ansi_bright_yellow"
+            ]
+            assert yellow == ["yolo"]
             composer = app.query_one("#composer")
             status_bar = app.query_one("#status")
-            assert composer.region.bottom == status_bar.region.y
+            assert status_bar.region.y == composer.region.bottom + 1
             assert status_bar.region.bottom == app.size.height
             await pilot.press("ctrl+n")
             assert "YOLO" not in str(app.query_one("#banner").content)
-            content = app.query_one("#status").content
             skills, tools, _custom, _servers, _mcp_tools = (
                 session.skills.available_counts()
             )
-            assert (
-                str(content)
-                == f"Model: custom-model · {skills} skills · {tools} tools · YOLO"
-            )
-            text = str(content)
-            yellow = [
-                text[span.start : span.end]
-                for span in content.spans
-                if span.style == "bold ansi_bright_yellow"
+            assert _status(app) == [
+                "custom-model",
+                "YOLO",
+                f"skills {skills}",
+                f"tools {tools}",
+                __version__,
             ]
-            assert yellow == ["YOLO"]
+            yellow = [
+                key
+                for key, style in _status_styles(app).items()
+                if style == "bold ansi_black on ansi_bright_yellow"
+            ]
+            assert yellow == ["yolo"]
             assert session.yolo is True
 
     asyncio.run(drive())
@@ -732,7 +759,7 @@ def test_resume_restores_the_transcript(tmp_path, monkeypatch):
             banner = str(app.query_one("#banner").content)
             assert f"Workspace: {past.resolve()}" in banner
             assert "Model:" not in banner
-            assert "Model: saved-model" in str(app.query_one("#status").content)
+            assert _status(app)[0] == "saved-model"
             captured["plain"] = app.transcript_plain()
             await pilot.press(*"next", "enter")
             await _wait_for(pilot, lambda: bool(seen))
@@ -1307,7 +1334,15 @@ def test_clicking_the_status_warning_opens_details():
 
     async def drive():
         async with app.run_test(size=(100, 24)) as pilot:
-            await pilot.click("#status")
+            bar = app.query_one("#status", StatusBar)
+            assert "⚠ 1" in _status(app)
+            await pilot.click("#status", offset=(1, 0))
+            await pilot.pause()
+            assert not isinstance(app.screen, WarningScreen)
+            start, _end, _segment = next(
+                hit for hit in bar.hits if hit[2].key == "warnings"
+            )
+            await pilot.click("#status", offset=(start + 1, 0))
             await pilot.pause()
             assert isinstance(app.screen, WarningScreen)
             await pilot.press("escape")
@@ -1817,25 +1852,19 @@ def test_context_warning_colors(monkeypatch):
     )
     app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
 
-    def styled(content, style):
-        text = str(content)
-        return [
-            text[span.start : span.end] for span in content.spans if span.style == style
-        ]
-
     async def drive():
         async with app.run_test(size=(100, 24)) as pilot:
-            content = app.query_one("#status").content
-            assert styled(content, "ansi_yellow") == ["Context: 450 / 1,000 (45%)"]
+            assert _status(app)[1] == "ctx 450/1.0k 45%"
+            assert _status_styles(app)["context"] == "ansi_black on ansi_yellow"
             session.context_tokens = 600
             app._refresh_status()
             await pilot.pause()
-            content = app.query_one("#status").content
-            assert styled(content, "bold ansi_red") == ["Context: 600 / 1,000 (60%)"]
+            assert _status(app)[1] == "ctx 600/1.0k 60%"
+            assert _status_styles(app)["context"] == "bold ansi_white on ansi_red"
             session.context_tokens = 100
             app._refresh_status()
             await pilot.pause()
-            assert app.query_one("#status").content.spans == []
+            assert _status_styles(app)["context"] == "ansi_white on ansi_bright_black"
 
     asyncio.run(drive())
 

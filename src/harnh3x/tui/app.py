@@ -12,7 +12,7 @@ from typing import ClassVar
 from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, VerticalGroup, VerticalScroll
+from textual.containers import VerticalGroup, VerticalScroll
 from textual.content import Content
 from textual.geometry import Offset
 from textual.screen import Screen
@@ -64,10 +64,9 @@ from harnh3x.tui.panels import (
     UserMessage,
 )
 from harnh3x.tui.pickers import ExportScreen, ResumeScreen
+from harnh3x.tui.status import Segment, StatusState, build_segments, layout_segments
 from harnh3x.tui.text import (
     activity_text,
-    context_level,
-    context_line,
     reply_reasoning,
     slash_hint,
     translate_legacy_key,
@@ -83,7 +82,6 @@ from harnh3x.tui.transcript import (
 WAITING = "Waiting for the model…"
 STOPPING = "Stopping…"
 MAX_TURNS_PHASE = "Max turns reached"
-_CONTEXT_STYLES = {"warn": "ansi_yellow", "over": "bold ansi_red"}
 
 
 class HarnessScreen(Screen):
@@ -98,12 +96,36 @@ class HarnessScreen(Screen):
         return widget, offset
 
 
-class StatusBar(Static):
-    def on_click(self, event: events.Click) -> None:
+class StatusBar(Widget):
+    DEFAULT_CSS = """
+    StatusBar {
+        height: 1;
+        margin-top: 1;
+    }
+    """
+
+    def __init__(self, segments: list[Segment] | None = None, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.segments: list[Segment] = list(segments or [])
+        self.hits: list[tuple[int, int, Segment]] = []
+
+    def show(self, segments: list[Segment]) -> None:
+        self.segments = list(segments)
+        self.refresh()
+
+    def render(self) -> Content:
+        content, self.hits = layout_segments(self.segments, self.size.width)
+        return content
+
+    def shown(self) -> list[Segment]:
+        return [segment for _start, _end, segment in self.hits]
+
+    async def on_click(self, event: events.Click) -> None:
         event.stop()
-        action = getattr(self.app, "action_warnings", None)
-        if callable(action):
-            action()
+        for start, end, segment in self.hits:
+            if start <= event.x < end and segment.action:
+                await self.app.run_action(segment.action)
+                return
 
 
 class HarnessApp(App):
@@ -128,24 +150,6 @@ class HarnessApp(App):
     #bottom {
         dock: bottom;
         height: auto;
-    }
-    #status-line {
-        height: 1;
-        width: 1fr;
-    }
-    #status {
-        height: 1;
-        padding: 0 1;
-        overflow: hidden;
-    }
-    #status.hidden {
-        display: none;
-    }
-    #version {
-        dock: right;
-        width: auto;
-        height: 1;
-        padding: 0 1;
     }
     #composer {
         height: auto;
@@ -313,72 +317,32 @@ class HarnessApp(App):
                 found.append(item)
         return found
 
-    def _status(self) -> Content:
-        chunks: list[Content] = []
-
-        def add(text: str, style: str | None = None) -> None:
-            if chunks:
-                chunks.append(Content(" · "))
-            piece = Content.styled(text, style) if style else Content(text)
-            chunks.append(piece)
+    def _status_state(self) -> StatusState:
+        def count(name: str) -> int | None:
+            value = getattr(self.session, name, None)
+            if isinstance(value, bool) or not isinstance(value, int):
+                return None
+            return value
 
         model = getattr(self.session, "model", None)
-        if isinstance(model, str) and model:
-            add(f"Model: {model}")
-        used = getattr(self.session, "context_tokens", None)
-        limit = getattr(self.session, "context_limit", None)
-        context = context_line(used, limit)
-        if context is not None:
-            add(context, _CONTEXT_STYLES.get(context_level(used, limit, COMPACT_AT)))
-        counts = self._available_counts()
-        if counts is not None:
-            skills, tools, custom, servers, mcp_tools = counts
-            add(f"{skills} skill" if skills == 1 else f"{skills} skills")
-            add(f"{tools} tool" if tools == 1 else f"{tools} tools")
-            if custom:
-                add(
-                    f"{custom} custom skill"
-                    if custom == 1
-                    else f"{custom} custom skills"
-                )
-            if servers:
-                add(
-                    f"{servers} MCP server"
-                    if servers == 1
-                    else f"{servers} MCP servers"
-                )
-                add(
-                    f"{mcp_tools} MCP tool"
-                    if mcp_tools == 1
-                    else f"{mcp_tools} MCP tools"
-                )
-        if self._yolo():
-            add("YOLO", "bold ansi_bright_yellow")
-        if getattr(self.session, "debug", False):
-            add("Debug")
-        warnings = self._warnings()
-        if warnings:
-            names = ", ".join(name for name, _reason in warnings)
-            add(
-                f"⚠ {names} unavailable · Ctrl+W for warning details",
-                "bold ansi_bright_red",
-            )
-        if not chunks:
-            return Content("")
-        line = chunks[0]
-        for chunk in chunks[1:]:
-            line += chunk
-        return line
+        return StatusState(
+            model=model if isinstance(model, str) and model else None,
+            used=count("context_tokens"),
+            limit=count("context_limit"),
+            compact_at=COMPACT_AT,
+            counts=self._available_counts(),
+            warnings=tuple(self._warnings()),
+            yolo=self._yolo(),
+            debug=bool(getattr(self.session, "debug", False)),
+            version=__version__,
+        )
 
     def _refresh_banner(self) -> None:
         self.query_one("#banner", Static).update(self._banner())
         self._refresh_status()
 
     def _refresh_status(self) -> None:
-        bar = self.query_one("#status", Static)
-        content = self._status()
-        bar.update(content)
-        bar.set_class(not str(content), "hidden")
+        self.query_one("#status", StatusBar).show(build_segments(self._status_state()))
 
     def _load_context_limit(self) -> None:
         if self._context_limit is None or self.review is not None:
@@ -413,9 +377,7 @@ class HarnessApp(App):
                 yield Static("", id="mention-menu", classes="hidden", markup=False)
                 yield Static("", id="slash-hint", classes="hidden", markup=False)
                 yield Composer()
-            with Horizontal(id="status-line"):
-                yield StatusBar(self._status(), id="status", markup=False)
-                yield Static(__version__, id="version", markup=False)
+            yield StatusBar(build_segments(self._status_state()), id="status")
 
     def _anchor_transcript(self) -> None:
         self.query_one("#transcript").anchor()
