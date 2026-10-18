@@ -16,6 +16,7 @@ load_dotenv()
 # gemma4:12b-it-qat
 
 MEMORY_FILE = "memory.md"
+CUSTOM_SKILLS_DIR = "skills"
 PLAN_FILE = "plan.md"
 TRANSCRIPT_FILE = "transcript.json"
 ANTHROPIC_API_URL = "https://api.anthropic.com"

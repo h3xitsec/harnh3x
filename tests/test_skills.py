@@ -359,3 +359,111 @@ def test_schemas_carry_the_session_scope(tmp_path):
     base = {tool["function"]["name"]: tool for tool in tools.TOOLS}
     assert "Paths must" not in base["read_file"]["function"]["description"]
     assert "blocked" not in base["run_shell"]["function"]["description"]
+
+
+def test_custom_skill_is_listed_apart_and_loads_its_tools(tmp_path):
+    root = tmp_path / "skills"
+    _write_skill(
+        root,
+        "notes-helper",
+        description="Keep notes.",
+        body="Write notes in notes.md.\n",
+        tools=("read_file", "write_file", "list_files"),
+    )
+    _write_skill(root, "team", "standup", tools=())
+    base = SkillRegistry().available_counts()
+    registry = SkillRegistry(custom_dir=root)
+
+    menu = registry.get_menu()
+    assert "custom:\n- notes-helper: Keep notes." in menu
+    assert "custom/team:\n- standup: Do the thing." in menu
+    assert menu.index("- tasks:") < menu.index("custom:")
+    assert registry.warnings == []
+    assert registry.available_counts() == (base[0], base[1], 2, 0, 0)
+
+    loaded = registry.load_skill("notes-helper")
+    assert loaded.startswith(
+        "Loaded skill 'notes-helper' with 3 tools: read_file, write_file, list_files"
+    )
+    assert "Write notes in notes.md." in loaded
+    (tmp_path / "a.txt").write_text("hi")
+    assert registry.execute("read_file", {"path": "a.txt"}, tmp_path) == "hi"
+    assert "Paths must be inside the workspace." in _description(registry, "read_file")
+
+
+def test_missing_custom_dir_changes_nothing(tmp_path):
+    registry = SkillRegistry(custom_dir=tmp_path / "absent")
+
+    assert registry.get_menu() == SkillRegistry().get_menu()
+    assert registry.warnings == []
+
+
+def test_malformed_custom_skills_are_skipped_with_a_warning(tmp_path):
+    root = tmp_path / "skills"
+    _write_skill(root, "good", tools=("read_file",))
+    _write_skill(
+        root,
+        "extra-key",
+        frontmatter="---\nname: extra-key\ndescription: Do it.\nversion: 1\n---",
+    )
+    _write_skill(root, "renamed", name="other-name")
+    _write_skill(root, "no-description", frontmatter="---\nname: no-description\n---")
+    _write_skill(root, "unclosed", frontmatter="---\nname: unclosed\ndescription: x")
+    _write_skill(root, "bad-tool", tools=("read_file", "not_a_tool"))
+    _write_skill(root, "bad-entry", tools=(":read_file",))
+    _write_skill(root, "unknown-server", tools=("nowhere:*",))
+    _write_skill(root, "file-ops", tools=("read_file",))
+    _write_skill(root, "load_skill", tools=())
+    _write_skill(root, "a", "dup", tools=())
+    _write_skill(root, "b", "dup", tools=())
+
+    registry = SkillRegistry(custom_dir=root)
+
+    assert dict(registry.warnings) == {
+        "b/dup": "skill 'b/dup' uses the name 'dup', which another skill already has",
+        "bad-entry": "skill 'bad-entry' lists invalid tool ':read_file'",
+        "bad-tool": "skill 'bad-tool' lists unknown tool 'not_a_tool'",
+        "extra-key": "skill 'extra-key' has unknown frontmatter key: version",
+        "file-ops": (
+            "skill 'file-ops' uses the name 'file-ops', which another skill already has"
+        ),
+        "load_skill": "skill 'load_skill' has an invalid name",
+        "no-description": "skill 'no-description' description must be a string",
+        "renamed": "skill name 'other-name' does not match directory 'renamed'",
+        "unclosed": "skill 'unclosed' frontmatter is not closed",
+        "unknown-server": (
+            "skill 'unknown-server' lists MCP server 'nowhere', which is not configured"
+        ),
+    }
+    menu = registry.get_menu()
+    assert "custom:\n- good: Do the thing." in menu
+    assert "custom/a:\n- dup:" in menu
+    assert "custom/b:" not in menu
+    assert "extra-key" not in menu
+    assert registry.available_counts()[2] == 2
+    assert registry.load_skill("bad-tool") == (
+        "Error: Unknown skill 'bad-tool'. Check the skill menu."
+    )
+    assert "Loaded skill 'file-ops' with 8 tools" in registry.load_skill("file-ops")
+
+
+def test_session_reads_custom_skills_from_base_dir(tmp_path):
+    from harnh3x import agent, config
+
+    _write_skill(Path(config.BASE_DIR) / config.CUSTOM_SKILLS_DIR, "mine", tools=())
+
+    session = agent.Session(workspace=tmp_path / "work")
+
+    assert "custom:\n- mine: Do the thing." in session.messages[0]["content"]
+
+
+def test_readme_lists_every_tool():
+    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(
+        encoding="utf-8"
+    )
+    missing = [
+        tool["function"]["name"]
+        for tool in tools.TOOLS
+        if f"| `{tool['function']['name']}` |" not in readme
+    ]
+    assert missing == []

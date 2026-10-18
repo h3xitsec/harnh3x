@@ -35,6 +35,7 @@ class Skill:
     doc: str
     tools: tuple
     category: str = ""
+    custom: bool = False
 
 
 def _ordered(found: dict[str, Skill]) -> dict[str, Skill]:
@@ -270,9 +271,12 @@ class SkillRegistry:
         yolo: bool = False,
         project: Path | None = None,
         servers: Sequence[McpServer] = (),
+        custom_dir: Path | None = None,
     ):
         catalog = dict(_CATALOG)
         self._clients: dict[str, McpClient] = {}
+        # Custom skill name -> {MCP tool name: server name}.
+        self._remote: dict[str, dict[str, str]] = {}
         self._active: dict[str, Skill] = {}
         self.warnings: list[tuple[str, str]] = []
         for server in servers:
@@ -284,6 +288,10 @@ class SkillRegistry:
             skill = self._handshake(server)
             if skill is not None:
                 catalog[server.name] = skill
+        if custom_dir is not None:
+            configured = {server.name for server in servers}
+            taken = set(catalog) | configured | {"load_skill", "unload_skill"}
+            catalog.update(self._load_custom(custom_dir, taken, configured))
         self._catalog = _ordered(catalog)
         self._owners = _tool_owners(self._catalog)
         self._yolo = yolo
@@ -318,6 +326,92 @@ class SkillRegistry:
             category="mcp",
         )
 
+    def _load_custom(
+        self, custom_dir: Path, taken: set[str], configured: set[str]
+    ) -> dict[str, Skill]:
+        found: dict[str, Skill] = {}
+        if not custom_dir.is_dir():
+            return found
+        for skill_md in _skill_files(custom_dir):
+            skill_dir = skill_md.parent
+            relative = skill_dir.relative_to(custom_dir)
+            location = relative.as_posix()
+            try:
+                name, description, body, tool_names = _read_skill(
+                    skill_md, skill_dir.name, location
+                )
+                if name in taken or name in found:
+                    raise RuntimeError(
+                        f"skill '{location}' uses the name '{name}', "
+                        "which another skill already has"
+                    )
+                tools, remote = self._custom_tools(tool_names, location, configured)
+            except RuntimeError as exc:
+                self.warnings.append((location, str(exc)))
+                continue
+            category = "custom"
+            if relative.parent != Path("."):
+                category = f"custom/{relative.parent.as_posix()}"
+            found[name] = Skill(
+                name=name,
+                description=description,
+                doc=body,
+                tools=tools,
+                category=category,
+                custom=True,
+            )
+            if remote:
+                self._remote[name] = remote
+        return found
+
+    def _custom_tools(
+        self, names: tuple[str, ...], location: str, configured: set[str]
+    ) -> tuple[tuple, dict[str, str]]:
+        builtin = {tool["function"]["name"]: tool for tool in TOOLS}
+        chosen: dict[str, dict] = {}
+        remote: dict[str, str] = {}
+        for entry in names:
+            server, colon, tool = entry.partition(":")
+            if not colon:
+                schema = builtin.get(entry)
+                if schema is None:
+                    raise RuntimeError(
+                        f"skill '{location}' lists unknown tool '{entry}'"
+                    )
+                chosen.setdefault(entry, schema)
+                continue
+            if not server or not tool:
+                raise RuntimeError(f"skill '{location}' lists invalid tool '{entry}'")
+            client = self._clients.get(server)
+            if client is None:
+                if server in configured:
+                    raise RuntimeError(
+                        f"skill '{location}' needs MCP server '{server}', "
+                        "which is unavailable"
+                    )
+                raise RuntimeError(
+                    f"skill '{location}' lists MCP server '{server}', "
+                    "which is not configured"
+                )
+            offered = client.schemas()
+            if tool != "*":
+                offered = [s for s in offered if s["function"]["name"] == tool]
+                if not offered:
+                    raise RuntimeError(
+                        f"skill '{location}' lists '{entry}', "
+                        f"which MCP server '{server}' does not offer"
+                    )
+            for schema in offered:
+                tool_name = schema["function"]["name"]
+                if remote.get(tool_name, server) != server:
+                    raise RuntimeError(
+                        f"skill '{location}' lists tool '{tool_name}' "
+                        "from more than one MCP server"
+                    )
+                chosen.setdefault(tool_name, schema)
+                remote[tool_name] = server
+        return tuple(chosen.values()), remote
+
     def skill_tools(self, name: str) -> tuple[str, ...] | None:
         skill = self._active.get(name) or self._catalog.get(name)
         if skill is None:
@@ -332,24 +426,29 @@ class SkillRegistry:
     def loaded_names(self) -> list[str]:
         return sorted(self._active)
 
-    def available_counts(self) -> tuple[int, int, int, int]:
-        skills = servers = 0
+    def available_counts(self) -> tuple[int, int, int, int, int]:
+        skills = custom = servers = 0
         builtin: set[str] = set()
         remote: set[str] = set()
         for name, skill in self._catalog.items():
             current = self._active.get(name, skill)
+            origins = self._remote.get(name, {})
             if skill.category == "mcp":
                 servers += 1
-                names = remote
+            elif skill.custom:
+                custom += 1
             else:
                 skills += 1
-                names = builtin
             for tool in current.tools:
                 function = tool.get("function") if isinstance(tool, dict) else None
                 tool_name = function.get("name") if isinstance(function, dict) else None
-                if isinstance(tool_name, str):
-                    names.add(tool_name)
-        return skills, len(builtin), servers, len(remote)
+                if not isinstance(tool_name, str):
+                    continue
+                if skill.category == "mcp" or tool_name in origins:
+                    remote.add(tool_name)
+                else:
+                    builtin.add(tool_name)
+        return skills, len(builtin), custom, servers, len(remote)
 
     def get_menu(self) -> str:
         lines = [
@@ -382,6 +481,12 @@ class SkillRegistry:
             if loaded is None:
                 return self._connect_error
             skill = loaded
+        for server in sorted(set(self._remote.get(name, {}).values())):
+            if server not in self._clients:
+                return (
+                    f"Error: skill '{name}' needs MCP server '{server}', "
+                    "which is no longer available."
+                )
         self._active[name] = skill
         tool_names = [tool["function"]["name"] for tool in skill.tools]
         return (
@@ -438,8 +543,11 @@ class SkillRegistry:
         }
         if name not in loaded:
             return self._unknown_tool(name, args)
-        client = self._client_for(name)
-        if client is not None:
+        server = self._server_for(name)
+        if server is not None:
+            client = self._clients.get(server)
+            if client is None:
+                return f"Error: MCP server '{server}' is no longer available"
             return client.call(name, args)
         return execute_tool(name, args, workspace, yolo=yolo, project=project)
 
@@ -479,7 +587,11 @@ class SkillRegistry:
         for other, skill in self._active.items():
             if other == skill_name:
                 continue
-            taken.update(tool["function"]["name"] for tool in skill.tools)
+            origins = self._remote.get(other, {})
+            for tool in skill.tools:
+                tool_name = tool["function"]["name"]
+                if origins.get(tool_name) != skill_name:
+                    taken.add(tool_name)
         for name in names:
             if name in taken:
                 return (
@@ -488,13 +600,16 @@ class SkillRegistry:
                 )
         return None
 
-    def _client_for(self, tool: str) -> McpClient | None:
+    def _server_for(self, tool: str) -> str | None:
         for name, skill in self._active.items():
-            if name not in self._clients:
+            if name in self._clients:
+                names = {schema["function"]["name"] for schema in skill.tools}
+                if tool in names:
+                    return name
                 continue
-            names = {schema["function"]["name"] for schema in skill.tools}
-            if tool in names:
-                return self._clients[name]
+            server = self._remote.get(name, {}).get(tool)
+            if server is not None:
+                return server
         return None
 
     def _unknown_tool(self, name: str, args: dict) -> str:

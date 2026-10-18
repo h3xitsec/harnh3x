@@ -15,7 +15,7 @@ from harnh3x.agent.transcript import (
     _stored_project,
     _workspaces_dir,
 )
-from harnh3x.config import MODEL, TRANSCRIPT_FILE
+from harnh3x.config import CUSTOM_SKILLS_DIR, MODEL, TRANSCRIPT_FILE
 from harnh3x.prompt import system_prompt
 from harnh3x.rules import format_rules, load_project_rules
 from harnh3x.skills import SkillRegistry
@@ -73,7 +73,10 @@ class Session:
 
     def _skills(self) -> SkillRegistry:
         return SkillRegistry(
-            yolo=self.yolo, project=self.project, servers=config.MCP_SERVERS
+            yolo=self.yolo,
+            project=self.project,
+            servers=config.MCP_SERVERS,
+            custom_dir=_expand(config.BASE_DIR).resolve() / CUSTOM_SKILLS_DIR,
         )
 
     def reset(self) -> None:

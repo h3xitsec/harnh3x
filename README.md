@@ -131,7 +131,7 @@ Enter submits. Shift+Enter inserts a newline.
 | `/export PATH` | Write one response, or every response, to that markdown file. Icons at the bottom right of a response copy it or write it to a markdown file. |
 | `/exit` | Quit and stop the running request |
 
-The header title is Harnh3x, then the workspace, the project when one is set, Coding when the session is a coding session, Debug when `--debug` is set, the model, and how much of the context window the last completion used. The package version sits at the far right of the status bar. With `--yolo` the header’s first line is `YOLO — sandbox off` in bright yellow, and that mark stays for a new session or a resumed transcript. Tool calls for a turn share one box, which keeps the last three lines until you click it. Each model completion is labeled `Turn N`, starting at 1, with a line under the label. The thinking box keeps the last three lines until you click it. With `--debug`, the first completion adds a cyan System box, and a later completion adds another only when the prompt changed. Every completion adds a cyan Request box. Both collapse the same way. Ctrl+H hides those with the thinking, tool, and compaction boxes. When the history is compacted, the transcript shows a compaction note and then the answer as Markdown.
+The header title is Harnh3x, then the workspace, the project when one is set, Coding when the session is a coding session, Debug when `--debug` is set, the model, and how much of the context window the last completion used. The status bar also counts the built-in skills and tools, the [custom skills](#custom-skills) when there are any, and the MCP servers and tools when any are connected. The package version sits at the far right of the status bar. With `--yolo` the header’s first line is `YOLO — sandbox off` in bright yellow, and that mark stays for a new session or a resumed transcript. Tool calls for a turn share one box, which keeps the last three lines until you click it. Each model completion is labeled `Turn N`, starting at 1, with a line under the label. The thinking box keeps the last three lines until you click it. With `--debug`, the first completion adds a cyan System box, and a later completion adds another only when the prompt changed. Every completion adds a cyan Request box. Both collapse the same way. Ctrl+H hides those with the thinking, tool, and compaction boxes. When the history is compacted, the transcript shows a compaction note and then the answer as Markdown.
 
 One-shot on a tty, when the model returned reasoning, waits for Enter before the process exits.
 
@@ -181,8 +181,86 @@ Each session directory holds:
 | `data` | CSV and JSON shape, columns, and a short preview |
 | `memory` | Remember and recall facts in the shared `memory.md` |
 | `tasks` | Write, update, and show a plan in `plan.md` |
+| `hardware-diagnosis` | Inventory and diagnose this Linux or macOS host |
 
 Each skill's `SKILL.md` has YAML frontmatter (`name`, `description`, and optional `allowed-tools`) and freeform instructions that are returned when that skill is loaded. The skill name is the folder that contains `SKILL.md`, under `src/harnh3x/skills/<name>/` or `src/harnh3x/skills/<category>/<name>/`.
+
+## Tools
+
+These are the built-in tool names a skill can list in `allowed-tools`. Paths, shell commands, and HTTP hosts follow the sandbox rules above, whichever skill a tool is loaded through.
+
+| Tool | Built-in skills | What it does |
+| --- | --- | --- |
+| `read_file` | file-ops, coding, documents, research, hardware-diagnosis | Read a text file, paged by line |
+| `write_file` | file-ops, coding | Write a file, creating parent directories and replacing existing content |
+| `edit_file` | file-ops, coding | Replace an exact text fragment in a file |
+| `append_file` | file-ops | Append to the end of a file, creating it if missing |
+| `delete_file` | file-ops | Delete a file |
+| `move_file` | file-ops | Move or rename a file without overwriting |
+| `list_files` | file-ops, coding, hardware-diagnosis | List files and directories with sizes |
+| `search_files` | file-ops, coding, hardware-diagnosis | Search UTF-8 text files with a regular expression |
+| `outline_python` | coding | Outline the classes and functions of a `.py` file or a directory |
+| `run_shell` | shell, coding, hardware-diagnosis | Run one command and return its exit code, stdout, and stderr |
+| `run_python` | python | Run a short standard-library Python snippet |
+| `run_script` | coding | Run a `.py` file with arguments |
+| `system_info` | hardware-diagnosis | Report the OS, machine, CPU, memory, storage, and attached hardware |
+| `web_search` | research, hardware-diagnosis | Search the web for titles, URLs, and snippets |
+| `read_url` | research, hardware-diagnosis | Fetch a page, PDF, or text URL and return its readable text |
+| `fetch_url` | research | Download a URL into the workspace |
+| `parse_html` | research | Extract the title and text of a saved HTML file |
+| `read_feed` | research | Read the latest entries of an RSS or Atom feed |
+| `wikipedia_search` | reference | Search Wikipedia article titles |
+| `wikipedia_summary` | reference | Summarize a Wikipedia article by its exact title |
+| `http_get_json` | http | GET a JSON API and return the parsed response |
+| `http_request` | http | Send any HTTP request and return the status, headers, and body |
+| `read_pdf` | documents, research | Extract text from a PDF |
+| `read_docx` | documents | Extract the paragraphs of a Word `.docx` file |
+| `inspect_csv` | data | Describe a CSV file's delimiter, columns, row count, and first rows |
+| `inspect_json` | data | Describe a JSON file's keys, array lengths, and sample values |
+| `remember` | memory | Save a fact under a key in `memory.md` |
+| `recall` | memory | Return saved memories, optionally filtered by a word |
+| `write_plan` | tasks | Write a numbered checklist to `plan.md` |
+| `update_plan` | tasks | Mark a plan step done, todo, or skipped |
+| `show_plan` | tasks | Show the current plan and how many steps are done |
+
+Tools from an MCP server in your config are named `server:tool` in `allowed-tools`, where `server` is the key under `mcp` and `tool` is the name the server reports, such as `caido:caido_list_requests`. `server:*` takes every tool the server exposes after its `include` and `exclude` filters, plus `server_read_resource` when the server has resources. The names a server reports are listed when its skill loads, and in its own documentation.
+
+## Custom Skills
+
+You can add your own skills under `~/.harnh3x/skills/` (`<base_dir>/skills/` when `base_dir` is set). Each skill is a folder holding one `SKILL.md`, either `skills/<name>/SKILL.md` or, to group them, `skills/<category>/<name>/SKILL.md` at any depth. Nothing is created for you, and a missing directory changes nothing.
+
+```markdown
+---
+name: web-triage
+description: Triage captured HTTP traffic and note findings. Use when the user asks to review requests in Caido or summarize suspicious endpoints.
+allowed-tools: caido:caido_list_requests caido:caido_send_request write_file read_file
+---
+
+## Workflow
+
+- List recent requests with `caido_list_requests` before replaying any of them.
+- Write findings to `findings.md` with `write_file`, one heading per endpoint.
+- The final answer names the endpoints and the file path.
+```
+
+The file starts with YAML frontmatter between two `---` lines, using the same strict rules as the built-in skills:
+
+| Key | Rule |
+| --- | --- |
+| `name` | Required. Lowercase letters, digits, and single hyphens (`web-triage`), at most 64 characters, and the same as the folder name. It must not match a built-in skill, an MCP server under `mcp`, or another custom skill. |
+| `description` | Required. A non-empty string of at most 1024 characters. It is the skill's menu line, and the only thing the model sees before loading, so say what the skill does and when to use it. |
+| `allowed-tools` | Optional. Space-separated tool names: built-in names from [Tools](#tools), `server:tool` for one MCP tool, or `server:*` for every tool of that server. A name may appear once. Without it, the skill is instructions only. |
+| `license` | Optional non-empty string. |
+| `compatibility` | Optional non-empty string of at most 500 characters. |
+| `metadata` | Optional mapping of string keys to string values. |
+
+Any other key makes the file malformed. Everything after the frontmatter is freeform Markdown, returned to the model when the skill is loaded. Put the workflow and reporting conventions there. A tool's own limits already travel with its schema.
+
+Custom skills appear in the menu under `custom:` (or `custom/<category>:`), after the built-in skills and before `mcp:`. The model loads and unloads them like any other skill, and a custom skill can share tools with built-in and MCP skills. The status bar counts them separately, as `N custom skills`, next to the built-in skill and tool counts.
+
+A malformed skill is skipped and the rest still load. That covers bad frontmatter, an unknown tool, an MCP server that is not configured or is unavailable when the session starts, an MCP tool that server does not offer, and a name that is already taken. Each skipped skill shows in the red status-bar warning, and Ctrl+W, or a click on the status bar, opens the reason. If an MCP server stops during a session, the custom skills that use it report that the server is no longer available.
+
+Skills are read when a session starts, so after editing a `SKILL.md`, press Ctrl+N or `/resume` to pick up the change.
 
 ## Development
 
