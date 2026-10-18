@@ -74,7 +74,7 @@ def context_text(used: int | None, limit: int | None) -> str | None:
 def _model(state: StatusState) -> Segment | None:
     if not state.model:
         return None
-    return Segment("model", state.model, MODEL_STYLE, priority=90)
+    return Segment("model", state.model, MODEL_STYLE, priority=90, action="model")
 
 
 def _context(state: StatusState) -> Segment | None:

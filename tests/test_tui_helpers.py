@@ -337,7 +337,8 @@ def test_build_segments_shows_each_badge_only_when_it_applies():
     actions = {segment.key: segment.action for segment in segments}
     assert actions["warnings"] == "warnings"
     assert actions["skills"] == actions["tools"] == "skills"
-    clickable = {"warnings", "skills", "tools"}
+    assert actions["model"] == "model"
+    clickable = {"warnings", "skills", "tools", "model"}
     assert all(
         action is None for key, action in actions.items() if key not in clickable
     )

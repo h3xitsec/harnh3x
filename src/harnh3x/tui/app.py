@@ -23,6 +23,7 @@ from textual.widgets import Static, TextArea
 from harnh3x import __version__
 from harnh3x.agent import (
     compact_session,
+    list_models,
     list_sessions,
     model_context_limit,
     parse_command,
@@ -64,7 +65,7 @@ from harnh3x.tui.panels import (
     TurnHeading,
     UserMessage,
 )
-from harnh3x.tui.pickers import ExportScreen, ResumeScreen
+from harnh3x.tui.pickers import ExportScreen, ResumeScreen, SwitchModelScreen
 from harnh3x.tui.status import Segment, StatusState, build_segments, layout_segments
 from harnh3x.tui.text import (
     activity_text,
@@ -233,9 +234,12 @@ class HarnessApp(App):
         show_tools: bool = True,
         review: tuple | None = None,
         context_limit: Callable[[str], int | None] | None = None,
+        models: Callable[[], list[str]] | None = None,
         initial: str | None = None,
     ) -> None:
         super().__init__()
+        self._models = models
+        self._fetching_models = False
         self.session = session
         self._run = run
         self.show_tools = show_tools
@@ -679,6 +683,53 @@ class HarnessApp(App):
         if not callable(overview) or len(self.screen_stack) > 1:
             return
         self.push_screen(SkillsScreen(overview()))
+
+    def action_model(self) -> None:
+        if (
+            self._models is None
+            or self.review is not None
+            or self.initial is not None
+            or self._run is None
+            or self._fetching_models
+            or len(self.screen_stack) > 1
+            or self.query_one(Composer).disabled
+        ):
+            return
+        self._fetching_models = True
+        fetch = self._models
+
+        def work() -> None:
+            try:
+                found: list[str] | str = fetch()
+            except SystemExit as exc:
+                found = str(exc.code)
+            except Exception as exc:
+                found = f"Could not list models: {exc}"
+            self._from_thread(self._show_models, found)
+
+        self._spawn(work)
+
+    def _show_models(self, found: list[str] | str) -> None:
+        self._fetching_models = False
+        if isinstance(found, str):
+            self.notify(found, severity="error")
+            return
+        if not found:
+            self.notify("No models available from the API.", severity="warning")
+            return
+        if len(self.screen_stack) > 1 or self.query_one(Composer).disabled:
+            return
+        current = getattr(self.session, "model", None)
+        self.push_screen(SwitchModelScreen(found, current), self._on_model)
+
+    def _on_model(self, chosen: str | None) -> None:
+        if chosen and chosen != self.session.model:
+            self.session.model = chosen
+            self.session.context_limit = None
+            self._refresh_status()
+            self._load_context_limit()
+            self.notify(f"Model: {chosen}")
+        self._focus_composer()
 
     def action_toggle_trace(self) -> None:
         transcript = self.query_one("#transcript")
@@ -1219,6 +1270,7 @@ def run_interactive(
         run,
         show_tools=show_tools,
         context_limit=model_context_limit,
+        models=list_models,
         initial=initial,
     ).run()
 

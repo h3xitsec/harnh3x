@@ -28,6 +28,7 @@ from harnh3x.tui import (
     ReviewApp,
     SkillsScreen,
     StatusBar,
+    SwitchModelScreen,
     Thinking,
     ToolBox,
     TurnHeading,
@@ -1357,6 +1358,88 @@ def test_clicking_skills_or_tools_opens_the_skill_list(tmp_path):
                 assert app.focused is app.query_one(Composer)
 
     asyncio.run(drive())
+
+
+async def _click_badge(pilot, app, key):
+    bar = app.query_one("#status", StatusBar)
+    start, _end, _segment = next(hit for hit in bar.hits if hit[2].key == key)
+    await pilot.click("#status", offset=(start + 1, 0))
+    await pilot.pause()
+
+
+def test_clicking_the_model_switches_to_a_listed_model():
+    session = SimpleNamespace(
+        workspace="ws",
+        model="beta",
+        messages=[],
+        context_tokens=500,
+        context_limit=8192,
+    )
+    asked = []
+
+    def context_limit(model):
+        asked.append(model)
+        return {"beta": 8192, "gamma": 32768}.get(model)
+
+    app = HarnessApp(
+        session,
+        lambda *args, **kwargs: "",
+        show_tools=True,
+        context_limit=context_limit,
+        models=lambda: ["alpha", "beta", "gamma"],
+    )
+    toasts = _record_toasts(app)
+
+    async def drive():
+        async with app.run_test(size=(100, 24)) as pilot:
+            await _click_badge(pilot, app, "model")
+            await _wait_for(pilot, lambda: isinstance(app.screen, SwitchModelScreen))
+            options = app.screen.query_one("#models")
+            assert options.highlighted == 1
+            labels = [str(options.get_option_at_index(i).prompt) for i in range(3)]
+            assert labels == ["1. alpha", "2. beta (current)", "3. gamma"]
+            await pilot.press("escape")
+            await pilot.pause()
+            assert not isinstance(app.screen, SwitchModelScreen)
+            assert session.model == "beta"
+            assert app.focused is app.query_one(Composer)
+            await _click_badge(pilot, app, "model")
+            await _wait_for(pilot, lambda: isinstance(app.screen, SwitchModelScreen))
+            await pilot.press("down", "enter")
+            await _wait_for(pilot, lambda: session.context_limit == 32768)
+            assert session.model == "gamma"
+            assert asked[-1] == "gamma"
+            assert _status(app)[:2] == ["gamma", "ctx 500/33k 2%"]
+            assert toasts[-1] == ("Model: gamma", "information")
+            assert app.focused is app.query_one(Composer)
+
+    asyncio.run(drive())
+
+
+def test_model_list_failures_show_a_toast():
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+
+    def unreachable():
+        raise SystemExit("Could not reach the API.")
+
+    for models, expected in (
+        (unreachable, ("Could not reach the API.", "error")),
+        (list, ("No models available from the API.", "warning")),
+    ):
+        app = HarnessApp(
+            session, lambda *args, **kwargs: "", show_tools=True, models=models
+        )
+        toasts = _record_toasts(app)
+
+        async def drive(app=app, toasts=toasts, expected=expected):
+            async with app.run_test(size=(100, 24)) as pilot:
+                await _click_badge(pilot, app, "model")
+                await _wait_for(pilot, lambda: bool(toasts))
+                assert toasts == [expected]
+                assert not isinstance(app.screen, SwitchModelScreen)
+                assert session.model == "m"
+
+        asyncio.run(drive())
 
 
 def test_clicking_the_status_warning_opens_details():

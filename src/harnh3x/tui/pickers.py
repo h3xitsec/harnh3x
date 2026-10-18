@@ -254,6 +254,30 @@ class ModelScreen(NumberedPicker):
         self.dismiss(self.models[index])
 
 
+class SwitchModelScreen(ModelScreen):
+    """The model list opened from the status bar: cancellable, filterable, current marked."""
+
+    BINDINGS: ClassVar[list[Binding]] = [_CANCEL]
+
+    heading = "Choose a model"
+    cancellable = True
+    filterable = True
+
+    def __init__(self, models: list[str], current: str | None) -> None:
+        super().__init__(models)
+        self.current = current
+        self.labels = [
+            f"{label} (current)" if name == current else label
+            for label, name in zip(self.labels, models, strict=True)
+        ]
+
+    def on_mount(self) -> None:
+        super().on_mount()
+        if self.current in self.models:
+            options = self.query_one(NumberedOptions)
+            options.highlighted = self.models.index(self.current)
+
+
 class ModelApp(App[str]):
     def __init__(self, models: list[str]) -> None:
         super().__init__()

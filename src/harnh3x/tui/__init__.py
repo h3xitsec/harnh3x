@@ -67,6 +67,7 @@ from harnh3x.tui.pickers import (
     NumberedPicker,
     ResumeOptions,
     ResumeScreen,
+    SwitchModelScreen,
     pick_model,
 )
 from harnh3x.tui.status import (
@@ -147,6 +148,7 @@ __all__ = [
     "SkillsScreen",
     "StatusBar",
     "StatusState",
+    "SwitchModelScreen",
     "Thinking",
     "ToolBox",
     "ToolEntry",
