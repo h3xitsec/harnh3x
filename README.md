@@ -199,6 +199,8 @@ These are the built-in tool names a skill can list in `allowed-tools`. Paths, sh
 | `move_file` | file-ops | Move or rename a file without overwriting |
 | `list_files` | file-ops, coding, hardware-diagnosis | List files and directories with sizes |
 | `search_files` | file-ops, coding, hardware-diagnosis | Search UTF-8 text files with a regular expression |
+| `glob` | file-ops, coding | Find files by a ripgrep glob, newest modification time first |
+| `grep` | file-ops, coding | Search file contents with ripgrep |
 | `outline_python` | coding | Outline the classes and functions of a `.py` file or a directory |
 | `run_shell` | shell, coding, hardware-diagnosis | Run one command and return its exit code, stdout, and stderr |
 | `run_python` | python | Run a short standard-library Python snippet |

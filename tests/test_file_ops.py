@@ -1,6 +1,8 @@
 """File tools inside the workspace."""
 
+import os
 import re
+import subprocess
 
 from harnh3x.config import MAX_TOOL_RESULT, SEARCH_FILES_MAX
 from harnh3x.tools import execute_tool
@@ -502,3 +504,245 @@ def test_outline_python_clips_a_long_signature(tmp_path):
     assert line.endswith("  1-2")
     assert len(line.removesuffix("  1-2").strip()) == 80
     assert line.removesuffix("  1-2").strip().endswith("...")
+
+
+def _git_init(path) -> None:
+    subprocess.run(
+        ["git", "init", "-q"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+    )
+
+
+def test_glob_matches_path_globs_and_sorts_by_mtime(tmp_path):
+    (tmp_path / "old.js").write_text("old\n")
+    (tmp_path / "new.js").write_text("new\n")
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    (nested / "x.js").write_text("nested\n")
+    source = tmp_path / "src" / "pkg"
+    source.mkdir(parents=True)
+    (tmp_path / "src" / "a.ts").write_text("export {}\n")
+    (source / "b.ts").write_text("export {}\n")
+    (tmp_path / "other.ts").write_text("export {}\n")
+    os.utime(tmp_path / "old.js", (1_000, 1_000))
+    os.utime(tmp_path / "new.js", (3_000, 3_000))
+    os.utime(nested / "x.js", (2_000, 2_000))
+
+    listing = execute_tool("glob", {"pattern": "**/*.js"}, tmp_path)
+
+    assert [line for line in listing.splitlines() if line.endswith(".js")] == [
+        "new.js",
+        "nested/x.js",
+        "old.js",
+    ]
+    typescript = execute_tool("glob", {"pattern": "src/**/*.ts"}, tmp_path)
+    assert "src/a.ts" in typescript
+    assert "src/pkg/b.ts" in typescript
+    assert "other.ts" not in typescript
+    (source / "c.js").write_text("deep\n")
+    assert execute_tool("glob", {"pattern": "*.js", "path": "src"}, tmp_path) == (
+        "src/pkg/c.js"
+    )
+    assert execute_tool("glob", {}, tmp_path) == "Error: pattern is required"
+    assert execute_tool("glob", {"pattern": "*.js", "path": "old.js"}, tmp_path) == (
+        "Error: not a directory"
+    )
+    assert "outside workspace" in execute_tool(
+        "glob", {"pattern": "*.js", "path": ".."}, tmp_path
+    )
+
+
+def test_glob_names_the_overflow(tmp_path, monkeypatch):
+    monkeypatch.setattr("harnh3x.tools.find.LIST_FILES_MAX", 2)
+    for name in ("a.js", "b.js", "c.js"):
+        (tmp_path / name).write_text("x\n")
+
+    listing = execute_tool("glob", {"pattern": "*.js"}, tmp_path)
+
+    assert listing.count(".js") == 2
+    assert "1 more entries; narrow the pattern or path" in listing
+
+
+def test_grep_reports_matches_and_filters_files(tmp_path):
+    (tmp_path / "a.py").write_text("import os\nTODO: fix\n")
+    (tmp_path / "b.txt").write_text("todo later\n")
+    (tmp_path / "bin.dat").write_bytes(b"TODO\x00rest\n")
+
+    result = execute_tool("grep", {"pattern": "TODO"}, tmp_path)
+    assert result == "a.py:2:TODO: fix"
+
+    loose = execute_tool("grep", {"pattern": "todo", "ignore_case": True}, tmp_path)
+    assert "a.py:2:TODO: fix" in loose
+    assert "b.txt:1:todo later" in loose
+    assert "bin.dat" not in loose
+
+    globbed = execute_tool(
+        "grep",
+        {"pattern": "todo", "ignore_case": True, "glob": "*.txt"},
+        tmp_path,
+    )
+    assert globbed == "b.txt:1:todo later"
+    assert execute_tool("grep", {"pattern": "zzz"}, tmp_path) == "No matches."
+    assert execute_tool("grep", {"pattern": "("}, tmp_path).startswith("Error:")
+    assert execute_tool("grep", {}, tmp_path) == "Error: pattern is required"
+    assert execute_tool("grep", {"pattern": "x", "glob": 1}, tmp_path) == (
+        "Error: glob must be a string"
+    )
+    assert "outside workspace" in execute_tool(
+        "grep", {"pattern": "x", "path": ".."}, tmp_path
+    )
+
+
+def test_grep_stops_at_the_match_cap(tmp_path, monkeypatch):
+    monkeypatch.setattr("harnh3x.tools.find.SEARCH_FILES_MAX", 2)
+    (tmp_path / "many.txt").write_text("hit\n" * 5)
+
+    result = execute_tool("grep", {"pattern": "hit"}, tmp_path)
+
+    assert result.count("many.txt:") == 2
+    assert "stopped at 2 matches; narrow the pattern or path" in result
+
+
+def test_glob_and_grep_skip_gitignored_and_hidden_files(tmp_path):
+    (tmp_path / "visible.txt").write_text("visible-token\n")
+    (tmp_path / "secret.txt").write_text("secret-token\n")
+    (tmp_path / ".secret").write_text("hidden-token\n")
+    (tmp_path / ".gitignore").write_text("secret.txt\n")
+    _git_init(tmp_path)
+
+    listing = execute_tool("glob", {"pattern": "*.txt"}, tmp_path)
+    assert "visible.txt" in listing
+    assert "secret.txt" not in listing
+
+    found = execute_tool("grep", {"pattern": "token"}, tmp_path)
+    assert "visible-token" in found
+    assert "secret-token" not in found
+    assert "hidden-token" not in found
+
+    ignored = execute_tool(
+        "grep",
+        {"pattern": "token", "glob": "*.txt", "include_ignored": True},
+        tmp_path,
+    )
+    assert "secret-token" in ignored
+    assert "hidden-token" not in ignored
+
+    listed = execute_tool(
+        "glob", {"pattern": "**/*", "include_ignored": True}, tmp_path
+    )
+    assert "secret.txt" in listed
+    assert ".secret" not in listed
+    assert ".git/" not in listed
+    assert ".git\n" not in listed and not listed.endswith(".git")
+
+
+def test_gitignore_is_not_applied_outside_a_repository(tmp_path):
+    (tmp_path / "secret.txt").write_text("secret-token\n")
+    (tmp_path / ".gitignore").write_text("secret.txt\n")
+
+    assert "secret.txt" in execute_tool("grep", {"pattern": "secret-token"}, tmp_path)
+    assert "secret.txt" in execute_tool("glob", {"pattern": "*.txt"}, tmp_path)
+
+
+def test_grep_reads_outside_the_workspace_when_yolo(tmp_path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    outside = tmp_path / "out"
+    outside.mkdir()
+    (outside / "note.txt").write_text("outside-token\n")
+
+    blocked = execute_tool(
+        "grep", {"pattern": "outside-token", "path": str(outside)}, workspace
+    )
+    found = execute_tool(
+        "grep",
+        {"pattern": "outside-token", "path": str(outside)},
+        workspace,
+        yolo=True,
+    )
+
+    assert "outside workspace" in blocked
+    assert "outside-token" in found
+
+
+def test_glob_and_grep_use_the_project_directory(tmp_path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    project = tmp_path / "proj"
+    project.mkdir()
+    (workspace / "notes.py").write_text("workspace-only\n")
+    (project / "app.py").write_text("project-only\n")
+
+    listed = execute_tool("glob", {"pattern": "*.py"}, workspace, project=project)
+    found = execute_tool("grep", {"pattern": "only"}, workspace, project=project)
+
+    assert "app.py" in listed
+    assert "notes.py" not in listed
+    assert "project-only" in found
+    assert "workspace-only" not in found
+
+
+def test_missing_rg_is_an_error(tmp_path, monkeypatch):
+    empty = tmp_path / "bin"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
+
+    assert execute_tool("glob", {"pattern": "*.py"}, tmp_path) == (
+        "Error: ripgrep (rg) was not found"
+    )
+    assert execute_tool("grep", {"pattern": "x"}, tmp_path) == (
+        "Error: ripgrep (rg) was not found"
+    )
+
+
+def test_select_rg_prefers_a_read_root_and_grants_an_outside_binary(
+    tmp_path, monkeypatch
+):
+    from harnh3x.sandbox import READ_ROOTS
+    from harnh3x.tools import find
+
+    inside_dir = tmp_path / "root" / "bin"
+    inside_dir.mkdir(parents=True)
+    inside = inside_dir / "rg"
+    inside.write_text("#!/bin/sh\n")
+    inside.chmod(0o755)
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    outside = outside_dir / "rg"
+    outside.write_text("#!/bin/sh\n")
+    outside.chmod(0o755)
+    monkeypatch.setattr(find, "READ_ROOTS", (*READ_ROOTS, str(tmp_path / "root")))
+    monkeypatch.setenv("PATH", f"{outside_dir}{os.pathsep}{inside_dir}")
+
+    chosen, grant = find.select_rg()
+
+    assert chosen == inside.resolve()
+    assert grant is None
+    monkeypatch.setenv("PATH", str(outside_dir))
+    chosen, grant = find.select_rg()
+    assert chosen == outside.resolve()
+    assert grant == outside.resolve()
+
+
+def test_extra_read_grants_one_rg_file(tmp_path):
+    from harnh3x import sandbox
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    binary = tmp_path / "outside" / "rg"
+    binary.parent.mkdir()
+    binary.write_bytes(b"#!/bin/sh\n")
+    resolved = str(binary.resolve())
+
+    profile = sandbox.seatbelt_profile(workspace, extra_read=binary)
+    policy = sandbox.linux_policy(workspace, None, "aarch64", extra_read=binary)
+
+    assert f'(literal "{resolved}")' in profile
+    assert f'(subpath "{binary.parent.resolve()}")' not in profile
+    assert resolved in policy["read"]
+    assert str(binary.parent.resolve()) not in policy["read"]
+    if sandbox.sys.platform == "darwin":
+        _argv, env = sandbox.sandboxed_argv(["true"], workspace, extra_read=binary)
+        assert f'(literal "{resolved}")' in env[sandbox.PROFILE_ENV]

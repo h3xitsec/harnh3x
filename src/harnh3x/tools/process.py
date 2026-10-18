@@ -302,19 +302,26 @@ def _overflow_note() -> str:
     return f"output exceeded {SHELL_MAX_OUTPUT} bytes; the process was killed"
 
 
-def _run_process(
-    argv: list[str], workspace: Path, timeout: int, stdin: str | None
-) -> str:
+def _capture(
+    argv: list[str],
+    workspace: Path,
+    timeout: int,
+    stdin: str | None = None,
+    *,
+    extra_read: Path | None = None,
+) -> tuple[int, str, str, str]:
+    """Run argv and return exit code, stdout, stderr, and a note.
+
+    The note is "", "timeout", or "overflow". Raises ValueError when the
+    sandbox cannot be applied. extra_read is one file the sandbox may also read.
+    """
     project = _project.get()
     cwd = project if project is not None else workspace
     if _yolo.get():
         command = argv
         env = os.environ.copy()
     else:
-        try:
-            command, env = sandboxed_argv(argv, workspace, project)
-        except ValueError as exc:
-            return f"Error: {exc}"
+        command, env = sandboxed_argv(argv, workspace, project, extra_read=extra_read)
     proc = subprocess.Popen(
         command,
         shell=False,
@@ -335,22 +342,31 @@ def _run_process(
             _kill_group(proc)
             proc.wait()
             output.join()
-            return _format_shell(
-                124,
-                output.text("stdout"),
-                output.text("stderr") or f"timed out after {timeout}s",
-                workspace,
-            )
+            return 124, output.text("stdout"), output.text("stderr"), "timeout"
         output.join()
-        stdout = output.text("stdout")
-        stderr = output.text("stderr")
-        if output.overflow:
-            return _format_shell(
-                proc.returncode or 137, stdout, stderr, workspace, _overflow_note()
-            )
-        return _format_shell(proc.returncode or 0, stdout, stderr, workspace)
+        note = "overflow" if output.overflow else ""
+        return proc.returncode or 0, output.text("stdout"), output.text("stderr"), note
     finally:
         _untrack(proc)
+
+
+def _run_process(
+    argv: list[str], workspace: Path, timeout: int, stdin: str | None
+) -> str:
+    try:
+        code, stdout, stderr, note = _capture(argv, workspace, timeout, stdin)
+    except ValueError as exc:
+        return f"Error: {exc}"
+    if note == "timeout":
+        return _format_shell(
+            124,
+            stdout,
+            stderr or f"timed out after {timeout}s",
+            workspace,
+        )
+    if note == "overflow":
+        return _format_shell(code or 137, stdout, stderr, workspace, _overflow_note())
+    return _format_shell(code, stdout, stderr, workspace)
 
 
 def run_shell(workspace: Path, args: dict) -> str:

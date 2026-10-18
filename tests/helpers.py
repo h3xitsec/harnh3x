@@ -72,7 +72,7 @@ def _prior_turn(session) -> None:
 
 FILE_OPS_LOADED = (
     "[loaded: read_file, write_file, edit_file, append_file, "
-    "delete_file, move_file, list_files, search_files]"
+    "delete_file, move_file, list_files, search_files, glob, grep]"
 )
 
 

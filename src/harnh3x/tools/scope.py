@@ -11,6 +11,8 @@ READ_TOOLS = (
     "read_file",
     "list_files",
     "search_files",
+    "glob",
+    "grep",
     "outline_python",
     "parse_html",
     "read_pdf",

@@ -273,11 +273,15 @@ def add_rule(ruleset, fd, access):
 
 def allow(ruleset, paths, access):
     for path in paths:
+        rights = access
+        # A file cannot take FS_READ_DIR. Drop it so one extra binary can be read.
+        if rights & FS_READ_DIR and not os.path.isdir(path):
+            rights &= ~FS_READ_DIR
         try:
             fd = os.open(path, O_PATH | O_CLOEXEC)
         except OSError as exc:
             fail(str(exc))
-        add_rule(ruleset, fd, access)
+        add_rule(ruleset, fd, rights)
 
 
 def apply_landlock(level, policy):
@@ -389,13 +393,22 @@ except OSError as exc:
 """
 
 
-def _subpath(path: Path) -> str:
+def _seatbelt_path(path: Path) -> str:
     text = str(path)
     if any(char in text for char in '()"\\\n\x00'):
         raise ValueError("sandbox path is not allowed")
+    return text
+
+
+def _subpath(path: Path) -> str:
+    text = _seatbelt_path(path)
     if path == Path("/"):
         raise ValueError("sandbox path is not allowed")
     return f'(subpath "{text}")'
+
+
+def _literal(path: Path) -> str:
+    return f'(literal "{_seatbelt_path(path)}")'
 
 
 def _read_roots(workspace: Path, project: Path | None = None) -> list[Path]:
@@ -419,7 +432,12 @@ def _read_roots(workspace: Path, project: Path | None = None) -> list[Path]:
     return found
 
 
-def seatbelt_profile(workspace: Path, project: Path | None = None) -> str:
+def seatbelt_profile(
+    workspace: Path,
+    project: Path | None = None,
+    *,
+    extra_read: Path | None = None,
+) -> str:
     root = workspace.resolve()
     granted = None if project is None else project.resolve()
     write_roots = [root]
@@ -430,6 +448,9 @@ def seatbelt_profile(workspace: Path, project: Path | None = None) -> str:
     reads = '(literal "/") ' + " ".join(
         _subpath(path) for path in _read_roots(root, granted)
     )
+    if extra_read is not None:
+        # One file, not its directory. subpath would open every sibling.
+        reads += " " + _literal(extra_read.resolve())
     writes = " ".join(_subpath(path) for path in write_roots)
     devices = " ".join(f'(literal "{device}")' for device in _DEVICES)
     return "\n".join(
@@ -481,12 +502,20 @@ def _unique(paths: list[str]) -> list[str]:
 
 
 def linux_policy(
-    workspace: Path, project: Path | None, machine: str
+    workspace: Path,
+    project: Path | None,
+    machine: str,
+    *,
+    extra_read: Path | None = None,
 ) -> dict[str, object]:
     """Read and write paths for the Linux runner. Proc paths stay literal."""
     reads: list[str] = []
     for root in (*READ_ROOTS, *_LINUX_LIB_ROOTS, sys.base_prefix, sys.prefix):
         listed = _listed(root)
+        if listed is not None:
+            reads.append(listed)
+    if extra_read is not None:
+        listed = _listed(extra_read)
         if listed is not None:
             reads.append(listed)
     root = str(workspace.resolve())
@@ -535,23 +564,32 @@ def landlock_abi() -> int:
 
 
 def _linux_argv(
-    argv: list[str], workspace: Path, project: Path | None
+    argv: list[str],
+    workspace: Path,
+    project: Path | None,
+    extra_read: Path | None = None,
 ) -> tuple[list[str], dict[str, str]]:
     machine = platform.machine()
     if machine not in _LINUX_MACHINES or landlock_abi() < _MIN_LANDLOCK_ABI:
         raise ValueError("sandbox is unavailable")
     env = _child_env(workspace)
-    env[PROFILE_ENV] = json.dumps(linux_policy(workspace, project, machine))
+    env[PROFILE_ENV] = json.dumps(
+        linux_policy(workspace, project, machine, extra_read=extra_read)
+    )
     return [sys.executable, "-I", "-c", LINUX_RUNNER, *argv], env
 
 
 def sandboxed_argv(
-    argv: list[str], workspace: Path, project: Path | None = None
+    argv: list[str],
+    workspace: Path,
+    project: Path | None = None,
+    *,
+    extra_read: Path | None = None,
 ) -> tuple[list[str], dict[str, str]]:
     if sys.platform == "darwin":
         env = _child_env(workspace)
-        env[PROFILE_ENV] = seatbelt_profile(workspace, project)
+        env[PROFILE_ENV] = seatbelt_profile(workspace, project, extra_read=extra_read)
         return [sys.executable, "-I", "-c", RUNNER, *argv], env
     if sys.platform == "linux":
-        return _linux_argv(argv, workspace, project)
+        return _linux_argv(argv, workspace, project, extra_read)
     raise ValueError("sandbox is unavailable")

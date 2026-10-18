@@ -55,13 +55,14 @@ def test_skill_load_unload_and_gated_execute(tmp_path):
     assert missing == "Error: Tool 'not_a_tool' not found. Is the skill loaded?"
 
     loaded = registry.load_skill("file-ops")
-    assert loaded.startswith("Loaded skill 'file-ops' with 8 tools: ")
+    assert loaded.startswith("Loaded skill 'file-ops' with 10 tools: ")
     assert "read_file" in loaded
     assert "Documentation:" in loaded
     assert "give the user the content of the file" in loaded
     assert registry.load_skill("file-ops") == (
         "Skill 'file-ops' is already loaded. Call one of: read_file, write_file, "
-        "edit_file, append_file, delete_file, move_file, list_files, search_files."
+        "edit_file, append_file, delete_file, move_file, list_files, search_files, "
+        "glob, grep."
     )
     assert FILE_OPS_LOADED in registry.get_menu()
 
@@ -444,7 +445,7 @@ def test_malformed_custom_skills_are_skipped_with_a_warning(tmp_path):
     assert registry.load_skill("bad-tool") == (
         "Error: Unknown skill 'bad-tool'. Check the skill menu."
     )
-    assert "Loaded skill 'file-ops' with 8 tools" in registry.load_skill("file-ops")
+    assert "Loaded skill 'file-ops' with 10 tools" in registry.load_skill("file-ops")
 
 
 def test_session_reads_custom_skills_from_base_dir(tmp_path):

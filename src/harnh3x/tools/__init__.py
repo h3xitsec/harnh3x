@@ -9,6 +9,8 @@ from harnh3x.tools.feed import FNS as _FEED_FNS
 from harnh3x.tools.feed import SCHEMAS as _FEED_SCHEMAS
 from harnh3x.tools.files import FNS as _FILE_FNS
 from harnh3x.tools.files import SCHEMAS as _FILE_SCHEMAS
+from harnh3x.tools.find import FNS as _FIND_FNS
+from harnh3x.tools.find import SCHEMAS as _FIND_SCHEMAS
 from harnh3x.tools.files import workspace_listing
 from harnh3x.tools.http import FNS as _HTTP_FNS
 from harnh3x.tools.http import SCHEMAS as _HTTP_SCHEMAS
@@ -37,6 +39,7 @@ _SCHEMAS = {
     schema["function"]["name"]: schema
     for schema in (
         *_FILE_SCHEMAS,
+        *_FIND_SCHEMAS,
         *_OUTLINE_SCHEMAS,
         *_PROCESS_SCHEMAS,
         *_SEARCH_SCHEMAS,
@@ -53,6 +56,7 @@ _SCHEMAS = {
 }
 _FNS = {
     **_FILE_FNS,
+    **_FIND_FNS,
     **_OUTLINE_FNS,
     **_PROCESS_FNS,
     **_SEARCH_FNS,
@@ -75,6 +79,8 @@ _ORDER = (
     "move_file",
     "list_files",
     "search_files",
+    "glob",
+    "grep",
     "outline_python",
     "run_shell",
     "run_python",
