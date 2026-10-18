@@ -1356,6 +1356,15 @@ def test_clicking_skills_or_tools_opens_the_skill_list(tmp_path):
                 await pilot.pause()
                 assert not isinstance(app.screen, SkillsScreen)
                 assert app.focused is app.query_one(Composer)
+            await _click_badge(pilot, app, "skills")
+            assert isinstance(app.screen, SkillsScreen)
+            await pilot.click("#skills-box")
+            await pilot.pause()
+            assert isinstance(app.screen, SkillsScreen)
+            await pilot.click(offset=(0, 0))
+            await pilot.pause()
+            assert not isinstance(app.screen, SkillsScreen)
+            assert app.focused is app.query_one(Composer)
 
     asyncio.run(drive())
 
@@ -1399,6 +1408,16 @@ def test_clicking_the_model_switches_to_a_listed_model():
             labels = [str(options.get_option_at_index(i).prompt) for i in range(3)]
             assert labels == ["1. alpha", "2. beta (current)", "3. gamma"]
             await pilot.press("escape")
+            await pilot.pause()
+            assert not isinstance(app.screen, SwitchModelScreen)
+            assert session.model == "beta"
+            assert app.focused is app.query_one(Composer)
+            await _click_badge(pilot, app, "model")
+            await _wait_for(pilot, lambda: isinstance(app.screen, SwitchModelScreen))
+            await pilot.click("#picker-box")
+            await pilot.pause()
+            assert isinstance(app.screen, SwitchModelScreen)
+            await pilot.click(offset=(0, 0))
             await pilot.pause()
             assert not isinstance(app.screen, SwitchModelScreen)
             assert session.model == "beta"
@@ -1459,6 +1478,15 @@ def test_clicking_the_status_warning_opens_details():
             await pilot.pause()
             assert isinstance(app.screen, WarningScreen)
             await pilot.press("escape")
+            await pilot.pause()
+            assert not isinstance(app.screen, WarningScreen)
+            await pilot.click("#status", offset=(start + 1, 0))
+            await pilot.pause()
+            assert isinstance(app.screen, WarningScreen)
+            await pilot.click("#warning-box")
+            await pilot.pause()
+            assert isinstance(app.screen, WarningScreen)
+            await pilot.click(offset=(0, 0))
             await pilot.pause()
             assert not isinstance(app.screen, WarningScreen)
 

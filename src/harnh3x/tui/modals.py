@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import ClassVar
 
+from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
@@ -175,6 +176,15 @@ class HelpScreen(ModalScreen):
         self.dismiss()
 
 
+class BackdropCloses:
+    """A click on the dimmed area around the box dismisses the screen."""
+
+    def on_click(self, event: events.Click) -> None:
+        if event.widget is self:
+            event.stop()
+            self.dismiss()
+
+
 def skills_text(entries: list[tuple[str, str, bool, tuple[str, ...]]]) -> str:
     def block(title: str, loaded: bool) -> list[str]:
         chosen = [entry for entry in entries if entry[2] is loaded]
@@ -189,7 +199,7 @@ def skills_text(entries: list[tuple[str, str, bool, tuple[str, ...]]]) -> str:
     return "\n".join([*block("Loaded", True), "", *block("Not loaded", False)])
 
 
-class SkillsScreen(ModalScreen):
+class SkillsScreen(BackdropCloses, ModalScreen):
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("escape", "close", "Close", priority=True),
     ]
@@ -214,7 +224,7 @@ class SkillsScreen(ModalScreen):
         self.dismiss()
 
 
-class WarningScreen(ModalScreen):
+class WarningScreen(BackdropCloses, ModalScreen):
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("escape", "close", "Close", priority=True),
     ]

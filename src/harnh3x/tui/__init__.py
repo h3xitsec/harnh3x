@@ -34,6 +34,7 @@ from harnh3x.tui.mentions import (
     replace_mention_query,
 )
 from harnh3x.tui.modals import (
+    BackdropCloses,
     ContinueScreen,
     ExportPathScreen,
     HelpScreen,
@@ -120,6 +121,7 @@ __all__ = [
     "YOLO_PLAIN",
     "AgentAnswer",
     "AnswerIcon",
+    "BackdropCloses",
     "CollapsiblePanel",
     "Compaction",
     "Composer",

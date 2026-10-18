@@ -13,6 +13,7 @@ from textual.widgets import OptionList, Static
 
 from harnh3x.agent import session_label
 from harnh3x.tui.export import answer_preview
+from harnh3x.tui.modals import BackdropCloses
 
 _PROMPT = "Use up/down and Enter, or type a number."
 _FILTER_PROMPT = "Use up/down and Enter, type a number, or type to filter."
@@ -254,7 +255,7 @@ class ModelScreen(NumberedPicker):
         self.dismiss(self.models[index])
 
 
-class SwitchModelScreen(ModelScreen):
+class SwitchModelScreen(BackdropCloses, ModelScreen):
     """The model list opened from the status bar: cancellable, filterable, current marked."""
 
     BINDINGS: ClassVar[list[Binding]] = [_CANCEL]
