@@ -1,4 +1,4 @@
-"""The --project grant and Cursor rules."""
+"""The project grant and Cursor rules."""
 
 import json
 import shlex
@@ -179,7 +179,7 @@ def test_project_is_stored_restored_and_kept_across_reset(tmp_path):
 def test_coding_is_stored_restored_and_kept_across_reset(tmp_path):
     project = tmp_path / "proj"
     project.mkdir()
-    with pytest.raises(ValueError, match="--coding requires --project"):
+    with pytest.raises(ValueError, match="coding session requires a project directory"):
         agent.Session(workspace=tmp_path / "nocode", coding=True)
 
     session = agent.Session(workspace=tmp_path / "ws", project=project, coding=True)

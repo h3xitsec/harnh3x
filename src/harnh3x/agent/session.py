@@ -42,7 +42,7 @@ class Session:
             None if project is None else _bind_project(project, self.workspace)
         )
         if coding and self.project is None:
-            raise ValueError("--coding requires --project")
+            raise ValueError("coding session requires a project directory")
         self.coding = coding
         self.skills = self._skills()
         self.applied_rules: set[str] = set()

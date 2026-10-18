@@ -62,19 +62,12 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--project",
+        "--coding",
         metavar="PATH",
         help=(
             "Grant sandboxed read, write, and shell access to this existing "
-            "directory. The session workspace stays separate."
-        ),
-    )
-    parser.add_argument(
-        "--coding",
-        action="store_true",
-        help=(
-            "Start a coding session in the --project directory. "
-            "Uses a coding system prompt and that project's Cursor rules."
+            "directory and start a coding session there. Uses a coding system "
+            "prompt and that project's Cursor rules."
         ),
     )
     parser.add_argument(
@@ -405,15 +398,13 @@ def _run_printed(session, text: str, *, show_tools: bool, answer_only: bool) -> 
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
-    if args.coding and not args.project:
-        raise SystemExit("--coding requires --project")
     require_api_settings()
     try:
         session = Session(
             model=resolve_model(args.model),
             yolo=args.yolo,
-            project=args.project,
-            coding=args.coding,
+            project=args.coding,
+            coding=args.coding is not None,
             debug=args.debug and not args.answer_only,
         )
     except ValueError as exc:

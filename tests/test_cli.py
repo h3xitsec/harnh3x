@@ -70,7 +70,7 @@ def test_yolo_option_prints_the_warning_and_selects_the_session(
     assert "Agent: final answer" in output
 
 
-def test_project_option_prints_the_grant_and_rejects_a_missing_directory(
+def test_coding_option_prints_the_grant_and_rejects_a_missing_directory(
     monkeypatch, capsys, tmp_path
 ):
     cli = _load_cli()
@@ -80,38 +80,25 @@ def test_project_option_prints_the_grant_and_rejects_a_missing_directory(
     monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
     monkeypatch.setattr(cli, "run", lambda *args, **kwargs: "final answer")
 
-    cli.main(["--project", str(project), "fix the notes"])
-
-    output = capsys.readouterr().out
-    assert f"Project: {project.resolve()}" in output
-    assert "Agent: final answer" in output
-
-    with pytest.raises(SystemExit) as exc:
-        cli.main(["--project", str(tmp_path / "missing"), "fix the notes"])
-    assert "existing directory" in str(exc.value)
-
-
-def test_coding_option_requires_a_project_and_prints_the_mode(
-    monkeypatch, capsys, tmp_path
-):
-    cli = _load_cli()
-    with pytest.raises(SystemExit) as missing:
-        cli.main(["--coding", "fix the notes"])
-    assert str(missing.value) == "--coding requires --project"
-
-    project = tmp_path / "proj"
-    project.mkdir()
-    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
-    monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
-    monkeypatch.setattr(cli, "run", lambda *args, **kwargs: "final answer")
-
-    cli.main(["--coding", "--project", str(project), "fix the notes"])
+    cli.main(["--coding", str(project), "fix the notes"])
 
     output = capsys.readouterr().out
     project_line = f"Project: {project.resolve()}"
     assert project_line in output
     assert output.index(project_line) < output.index("\nCoding\n")
     assert "Agent: final answer" in output
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--coding", str(tmp_path / "missing"), "fix the notes"])
+    assert "existing directory" in str(exc.value)
+
+
+def test_coding_option_requires_a_path_and_rejects_project():
+    cli = _load_cli()
+    with pytest.raises(SystemExit):
+        cli.main(["--coding"])
+    with pytest.raises(SystemExit):
+        cli.main(["--project", "/tmp"])
 
 
 def test_debug_option_prints_the_request_and_hides_it_for_answer_only(
