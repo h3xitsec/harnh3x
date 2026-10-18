@@ -14,7 +14,7 @@ _HTTP_YOLO = (
 )
 
 YOLO_NOTE = (
-    "Yolo mode is on. The seatbelt sandbox is off. "
+    "Yolo mode is on. The kernel sandbox is off. "
     "read_file and the other read tools may use any filesystem path. "
     "run_shell and run_python may run any program, including sudo, and may read or write any path. "
     + _SHELL_YOLO
@@ -27,7 +27,7 @@ def yolo_note(project: Path | None = None) -> str:
     if project is None:
         return YOLO_NOTE
     return (
-        "Yolo mode is on. The seatbelt sandbox is off. "
+        "Yolo mode is on. The kernel sandbox is off. "
         "read_file and the other read tools may use any filesystem path. "
         "run_shell and run_python may run any program, including sudo, and may read or write any path. "
         + _SHELL_YOLO

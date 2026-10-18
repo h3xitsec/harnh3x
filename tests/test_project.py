@@ -118,7 +118,10 @@ def test_project_shell_accepts_only_granted_absolute_paths(tmp_path):
     assert "status: success" in ran
     assert (project / "written.txt").read_text() == "ok"
     assert not (workspace / "written.txt").exists()
-    assert "Operation not permitted" in blocked_write
+    assert (
+        "Operation not permitted" in blocked_write
+        or "Permission denied" in blocked_write
+    )
     assert not sibling.exists()
 
 
@@ -129,11 +132,13 @@ def test_project_seatbelt_profile_grants_the_folder_and_keeps_home(tmp_path):
     project.mkdir()
 
     profile = sandbox.seatbelt_profile(workspace, project)
-    _argv, env = sandbox.sandboxed_argv(["true"], workspace, project)
 
     assert f'(subpath "{project.resolve()}")' in profile
     assert "(deny network*)" in profile
     assert "(allow file-write*" in profile
+    if sandbox.sys.platform != "darwin":
+        return
+    _argv, env = sandbox.sandboxed_argv(["true"], workspace, project)
     assert profile == env[sandbox.PROFILE_ENV]
     assert env["HOME"] == str(workspace.resolve())
     assert env["TMPDIR"] == str((workspace / ".tmp").resolve())
@@ -543,8 +548,8 @@ def test_rule_globs_accept_a_yaml_list(tmp_path):
     assert applied == {".cursor/rules/view.mdc"}
 
 
-def test_sandbox_refuses_to_run_off_macos(tmp_path, monkeypatch):
-    monkeypatch.setattr(sandbox.sys, "platform", "linux")
+def test_sandbox_refuses_on_an_unsupported_os(tmp_path, monkeypatch):
+    monkeypatch.setattr(sandbox.sys, "platform", "win32")
 
     def fail_popen(*args, **kwargs):
         raise AssertionError("command ran without a sandbox")
@@ -554,3 +559,82 @@ def test_sandbox_refuses_to_run_off_macos(tmp_path, monkeypatch):
     result = execute_tool("run_shell", {"command": "true"}, tmp_path)
 
     assert result == "Error: sandbox is unavailable"
+
+
+def _linux_sandbox(monkeypatch, machine="x86_64", abi=4):
+    monkeypatch.setattr(sandbox.sys, "platform", "linux")
+    monkeypatch.setattr(sandbox.platform, "machine", lambda: machine)
+    monkeypatch.setattr(sandbox, "landlock_abi", lambda: abi)
+
+
+def test_linux_policy_confines_writes_and_skips_etc(tmp_path, monkeypatch):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    project = tmp_path / "proj"
+    project.mkdir()
+    _linux_sandbox(monkeypatch)
+
+    argv, env = sandbox.sandboxed_argv(["true"], workspace, project)
+    policy = json.loads(env[sandbox.PROFILE_ENV])
+
+    assert argv[:3] == [sandbox.sys.executable, "-I", "-c"]
+    assert argv[3] == sandbox.LINUX_RUNNER
+    assert argv[4:] == ["true"]
+    assert str(workspace.resolve()) in policy["write"]
+    assert str(project.resolve()) in policy["write"]
+    assert policy["proc"] == ["/proc/self", "/proc/thread-self"]
+    assert "/proc" not in policy["read"]
+    assert "/etc" not in policy["read"]
+    assert not any(
+        path == "/etc" or path.startswith("/etc/") for path in policy["read"]
+    )
+    assert env["HOME"] == str(workspace.resolve())
+    assert env["TMPDIR"] == str((workspace / ".tmp").resolve())
+    assert '"socket": 41' in sandbox.LINUX_RUNNER
+    assert '"socket": 198' in sandbox.LINUX_RUNNER
+
+
+def test_linux_policy_lists_a_project_write_root_once(tmp_path, monkeypatch):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _linux_sandbox(monkeypatch, machine="aarch64", abi=6)
+
+    _argv, env = sandbox.sandboxed_argv(["true"], workspace, workspace)
+    policy = json.loads(env[sandbox.PROFILE_ENV])
+
+    assert policy["machine"] == "aarch64"
+    assert policy["write"] == [str(workspace.resolve())]
+
+
+def test_linux_policy_without_a_project_lists_the_prefix_once(tmp_path, monkeypatch):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _linux_sandbox(monkeypatch)
+    monkeypatch.setattr(sandbox.sys, "prefix", "/usr")
+    monkeypatch.setattr(sandbox.sys, "base_prefix", "/usr")
+
+    policy = sandbox.linux_policy(workspace, None, "x86_64")
+
+    assert policy["write"] == [str(workspace.resolve())]
+    assert policy["read"].count("/usr") == 1
+
+
+def test_landlock_probe_refuses_off_linux(monkeypatch):
+    monkeypatch.setattr(sandbox.sys, "platform", "darwin")
+    with pytest.raises(ValueError, match="sandbox is unavailable"):
+        sandbox.landlock_abi()
+
+
+def test_sandbox_refuses_an_old_landlock_or_unknown_machine(tmp_path, monkeypatch):
+    def fail_popen(*args, **kwargs):
+        raise AssertionError("command ran without a sandbox")
+
+    monkeypatch.setattr(tools.process.subprocess, "Popen", fail_popen)
+
+    _linux_sandbox(monkeypatch, abi=2)
+    old = execute_tool("run_shell", {"command": "true"}, tmp_path)
+    assert old == "Error: sandbox is unavailable"
+
+    _linux_sandbox(monkeypatch, machine="i686", abi=6)
+    unknown = execute_tool("run_shell", {"command": "true"}, tmp_path)
+    assert unknown == "Error: sandbox is unavailable"

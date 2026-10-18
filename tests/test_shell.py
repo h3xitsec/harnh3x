@@ -1,4 +1,4 @@
-"""run_shell and run_python under the seatbelt."""
+"""run_shell and run_python under the kernel sandbox."""
 
 import io
 import os
@@ -10,6 +10,10 @@ from pathlib import Path
 from harnh3x import tools
 from harnh3x.config import MAX_TOOL_RESULT
 from harnh3x.tools import execute_tool
+
+
+def _denied(result: str) -> bool:
+    return "Operation not permitted" in result or "Permission denied" in result
 
 
 def test_shell_accepts_stdin_and_timeout(tmp_path):
@@ -183,7 +187,7 @@ def test_sandbox_blocks_reads_writes_symlinks_and_network(tmp_path):
         workspace,
     )
     assert "secret-outside" not in denied_sibling
-    assert "Operation not permitted" in denied_sibling
+    assert _denied(denied_sibling)
 
     denied_passwd = execute_tool(
         "run_python",
@@ -191,7 +195,7 @@ def test_sandbox_blocks_reads_writes_symlinks_and_network(tmp_path):
         workspace,
     )
     assert "root:" not in denied_passwd
-    assert "Operation not permitted" in denied_passwd
+    assert _denied(denied_passwd)
 
     sibling_out = tmp_path / "pwned.txt"
     write_out = execute_tool(
@@ -199,12 +203,12 @@ def test_sandbox_blocks_reads_writes_symlinks_and_network(tmp_path):
         {"code": f"open({str(sibling_out)!r}, 'w').write('pwned')"},
         workspace,
     )
-    assert "Operation not permitted" in write_out
+    assert _denied(write_out)
     assert not sibling_out.exists()
 
     linked = execute_tool("run_shell", {"command": "cat escape.txt"}, workspace)
     assert "secret-outside" not in linked
-    assert "Operation not permitted" in linked
+    assert _denied(linked)
 
     networked = execute_tool(
         "run_python",
@@ -214,7 +218,7 @@ def test_sandbox_blocks_reads_writes_symlinks_and_network(tmp_path):
         },
         workspace,
     )
-    assert "Operation not permitted" in networked
+    assert _denied(networked)
 
 
 def test_yolo_reads_outside_the_workspace_and_keeps_writes_inside(tmp_path):
