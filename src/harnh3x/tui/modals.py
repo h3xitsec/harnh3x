@@ -78,7 +78,7 @@ class ExportPathScreen(ModalScreen[str | None]):
     #export-path-box {
         width: 70;
         height: auto;
-        border: round ansi_bright_black;
+        border: round $secondary;
         padding: 1 2;
         background: $surface;
     }
@@ -160,7 +160,7 @@ class HelpScreen(ModalScreen):
         Binding("escape", "close", "Close", priority=True),
     ]
     DEFAULT_CSS = _FRAME_CSS.format(
-        screen="HelpScreen", frame="help-frame", border="ansi_bright_black"
+        screen="HelpScreen", frame="help-frame", border="$secondary"
     )
 
     def compose(self) -> ComposeResult:
@@ -204,7 +204,7 @@ class SkillsScreen(BackdropCloses, ModalScreen):
         Binding("escape", "close", "Close", priority=True),
     ]
     DEFAULT_CSS = _FRAME_CSS.format(
-        screen="SkillsScreen", frame="skills-frame", border="ansi_bright_black"
+        screen="SkillsScreen", frame="skills-frame", border="$secondary"
     )
 
     def __init__(self, entries: list[tuple[str, str, bool, tuple[str, ...]]]) -> None:
@@ -229,7 +229,7 @@ class WarningScreen(BackdropCloses, ModalScreen):
         Binding("escape", "close", "Close", priority=True),
     ]
     DEFAULT_CSS = _FRAME_CSS.format(
-        screen="WarningScreen", frame="warning-frame", border="ansi_yellow"
+        screen="WarningScreen", frame="warning-frame", border="$warning"
     )
 
     def __init__(self, warnings: list[tuple[str, str]]) -> None:

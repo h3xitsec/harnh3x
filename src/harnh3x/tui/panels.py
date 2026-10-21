@@ -8,10 +8,10 @@ from typing import ClassVar
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.content import Content
 from textual.events import Click, Key
 from textual.widgets import Markdown, Rule, Static, TextArea
 from textual.widgets.markdown import MarkdownStream
+from textual.widgets.text_area import Edit, EditResult
 
 from harnh3x.commands import matching_commands
 from harnh3x.tui.export import copy_response
@@ -151,10 +151,28 @@ class TurnHeading(Vertical):
         yield Rule(line_style="solid")
 
 
-class UserMessage(Static):
+class UserMessage(Vertical):
+    """A sent message. The text is Markdown, including code fences."""
+
+    DEFAULT_CSS = """
+    UserMessage .you-label {
+        text-style: bold;
+        height: 1;
+    }
+    UserMessage Markdown {
+        padding: 0;
+        margin: 0;
+        background: transparent;
+    }
+    """
+
     def __init__(self, text: str) -> None:
         self.source = text
-        super().__init__(Content.assemble(("You", "bold"), "\n", text), classes="user")
+        super().__init__(classes="user")
+
+    def compose(self) -> ComposeResult:
+        yield Static("You", markup=False, classes="you-label")
+        yield Markdown(self.source, open_links=False)
 
 
 class AnswerIcon(Static, can_focus=True):
@@ -435,9 +453,9 @@ class SubagentBox(Vertical, can_focus=True):
 
     DEFAULT_CSS = """
     SubagentBox {
-        border: round ansi_magenta;
-        border-title-color: ansi_magenta;
-        border-subtitle-color: ansi_magenta;
+        border: round $primary;
+        border-title-color: $primary;
+        border-subtitle-color: $primary;
         padding: 0 1;
         margin: 1 0 1 2;
         height: auto;
@@ -591,24 +609,133 @@ def _subagent_title(kind: str, description: str) -> str:
     return title[:59] + "…"
 
 
+class PromptBox(Vertical):
+    """The message editor: a tall border, a prompt mark, and a line under it.
+
+    The border is clear until the editor is focused, then it uses the
+    secondary color. The mark is ``❯`` on one line and ``☰`` once the draft
+    wraps to another. The line under the box names the model, the project or
+    workspace, and ``Coding`` when this is a coding session.
+    """
+
+    DEFAULT_CSS = """
+    PromptBox {
+        height: auto;
+        margin: 0 1;
+    }
+    #prompt-container {
+        height: auto;
+        border: tall transparent;
+        background: black 10%;
+        padding: 0 1 0 0;
+    }
+    #prompt-container:focus-within {
+        border: tall $secondary;
+    }
+    #prompt-mark {
+        width: auto;
+        height: 1;
+        padding: 0 1 0 1;
+        color: $text-muted;
+    }
+    PromptBox #composer {
+        width: 1fr;
+        height: auto;
+        min-height: 1;
+        max-height: 10;
+        margin: 0;
+        padding: 0 1 0 0;
+        background: transparent;
+        border: none;
+        text-opacity: 50%;
+    }
+    PromptBox #composer:focus {
+        text-opacity: 100%;
+    }
+    #prompt-info {
+        height: 1;
+        width: 1fr;
+        margin: 0;
+    }
+    #prompt-model {
+        width: auto;
+        height: 1;
+        padding: 0 1;
+        margin: 0 1 0 0;
+        color: $text;
+        background: $primary 10%;
+    }
+    #prompt-path {
+        width: 1fr;
+        height: 1;
+        color: $text-muted;
+        text-wrap: nowrap;
+        text-overflow: ellipsis;
+    }
+    #prompt-mode {
+        width: auto;
+        height: 1;
+        dock: right;
+        padding: 0 1;
+        color: $text-muted;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Horizontal(id="prompt-container"):
+            yield Static("❯", id="prompt-mark", markup=False)
+            yield Composer()
+        with Horizontal(id="prompt-info"):
+            yield Static("", id="prompt-model", markup=False)
+            yield Static("", id="prompt-path", markup=False)
+            yield Static("", id="prompt-mode", markup=False)
+
+    def show_info(self, model: str, path: str, mode: str) -> None:
+        badge = self.query_one("#prompt-model", Static)
+        badge.update(model)
+        badge.display = bool(model)
+        self.query_one("#prompt-path", Static).update(path)
+        label = self.query_one("#prompt-mode", Static)
+        label.update(mode)
+        label.display = bool(mode)
+
+    def set_multiline(self, multiline: bool) -> None:
+        self.query_one("#prompt-mark", Static).update("☰" if multiline else "❯")
+
+    def on_click(self, event: Click) -> None:
+        composer = self.query_one(Composer)
+        if event.widget is composer:
+            return
+        composer.focus()
+
+
 class Composer(TextArea):
     """The message box: Enter sends, Shift+Enter or Ctrl+J adds a newline.
 
-    Up on the first row and Down on the last row walk ``prompts`` (TextArea
-    already uses ``history`` for undo); Tab completes a slash command while
-    one matches. In a coding session, an open ``@`` list takes Up, Down, Tab,
-    and Enter. Right enters the selected directory, Left returns to its
-    parent, and Escape closes that list.
+    The box grows with the draft until it reaches its height, then scrolls so
+    the cursor stays on screen. Up on the first row and Down on the last row
+    walk ``prompts`` (TextArea already uses ``history`` for undo); Tab
+    completes a slash command while one matches. In a coding session, an open
+    ``@`` list takes Up, Down, Tab, and Enter. Right enters the selected
+    directory, Left returns to its parent, and Escape closes that list.
     """
 
     def __init__(self) -> None:
         super().__init__(
             id="composer",
-            placeholder="Message · Enter to send · Shift+Enter for newline · /help",
+            placeholder="How can I help?",
         )
         self.prompts: list[str] = []
         self._prompt_index: int | None = None
         self._prompt_draft = ""
+
+    def edit(self, edit: Edit) -> EditResult:
+        # The cursor moves before the new line is in the scrollable height,
+        # so the first scroll stops one row short. Scroll again once the
+        # height includes that line.
+        result = super().edit(edit)
+        self.scroll_cursor_visible()
+        return result
 
     def set_prompts(self, items: list[str]) -> None:
         self.prompts = list(items)

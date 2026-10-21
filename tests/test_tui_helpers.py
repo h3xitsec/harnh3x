@@ -43,6 +43,7 @@ from harnh3x.tui import (
     translate_legacy_key,
     write_export,
 )
+from harnh3x.tui.status import BADGE_STYLE, CONTEXT_STYLES
 
 
 def test_translate_legacy_key_maps_terminal_app_sequences():
@@ -421,9 +422,9 @@ def test_context_badge_style_follows_the_compaction_level():
         state = StatusState(used=used, limit=1000, compact_at=0.5)
         return build_segments(state)[0].style
 
-    assert style(100) == "ansi_white on ansi_bright_black"
-    assert style(450) == "ansi_black on ansi_yellow"
-    assert style(600) == "bold ansi_white on ansi_red"
+    assert style(100) == BADGE_STYLE
+    assert style(450) == CONTEXT_STYLES["warn"]
+    assert style(600) == CONTEXT_STYLES["over"]
 
 
 def test_layout_segments_right_aligns_and_reports_hit_ranges():

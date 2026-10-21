@@ -36,6 +36,8 @@ from harnh3x.tui import (
     UserMessage,
     WarningScreen,
 )
+from harnh3x.tui.status import BADGE_STYLE, CONTEXT_STYLES, DEBUG_STYLE, YOLO_STYLE
+from harnh3x.tui.theme import CYAN, PRIMARY, SECONDARY, SUCCESS
 
 
 def _status(app):
@@ -477,7 +479,7 @@ def test_debug_panels_collapse_and_hide():
             banner = str(app.query_one("#banner").content)
             assert "\nDebug\n" not in banner
             assert _status(app) == ["m", "DEBUG", __version__]
-            assert _status_styles(app)["debug"] == "ansi_black on ansi_cyan"
+            assert _status_styles(app)["debug"] == DEBUG_STYLE
             await pilot.press(*"hi", "enter")
             await _wait_for(pilot, lambda: "Agent: done" in app.transcript_plain())
             boxes = list(app.query(".debug"))
@@ -487,8 +489,8 @@ def test_debug_panels_collapse_and_hide():
                 "Request",
             ]
             assert all("debug" in box.classes for box in boxes)
-            assert all(box.styles.color.ansi == 6 for box in boxes)
-            assert all(box.styles.border.top[1].ansi == 6 for box in boxes)
+            assert all(box.styles.color.hex == CYAN for box in boxes)
+            assert all(box.styles.border.top[1].hex == CYAN for box in boxes)
             plain = app.transcript_plain()
             assert plain.index("You: hi") < plain.index("System")
             assert plain.index("System") < plain.index("Request")
@@ -545,6 +547,55 @@ def test_debug_banner_stays_after_a_new_session(tmp_path, monkeypatch):
     asyncio.run(drive())
 
 
+def test_prompt_box_follows_the_toad_editor(tmp_path):
+    project = tmp_path / "proj"
+    project.mkdir()
+    session = agent.Session(
+        workspace=tmp_path / "work",
+        project=project,
+        coding=True,
+        model="demo-model",
+    )
+    app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            box = app.query_one("#prompt-container")
+            assert app.query_one(Composer).has_focus
+            assert box.styles.border.top[1].hex == SECONDARY
+            assert str(app.query_one("#prompt-mark").content) == "❯"
+            assert str(app.query_one("#prompt-model").content) == "demo-model"
+            assert str(app.query_one("#prompt-path").content).endswith("proj")
+            assert str(app.query_one("#prompt-mode").content) == "Coding"
+            await pilot.press("a", "shift+enter", "b")
+            assert app.query_one(Composer).text == "a\nb"
+            assert str(app.query_one("#prompt-mark").content) == "☰"
+            app.set_focus(None)
+            await pilot.pause()
+            assert box.styles.border.top[1].a == 0
+
+    asyncio.run(drive())
+
+
+def test_composer_keeps_the_cursor_in_view_past_its_height():
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+    app = HarnessApp(session, lambda *args, **kwargs: "ok", show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 30)) as pilot:
+            composer = app.query_one(Composer)
+            for _ in range(14):
+                await pilot.press("shift+enter")
+            await pilot.pause()
+            top = composer.scroll_y
+            height = composer.scrollable_content_region.height
+            row = composer.cursor_location[0]
+            assert composer.document.line_count > height
+            assert top <= row < top + height
+
+    asyncio.run(drive())
+
+
 def test_yolo_banner_stays_after_a_new_session(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("WORKSPACE", raising=False)
@@ -567,9 +618,11 @@ def test_yolo_banner_stays_after_a_new_session(tmp_path, monkeypatch):
                 f"tools {tools}",
                 __version__,
             ]
-            composer = plain_app.query_one("#composer")
+            box = plain_app.query_one("#prompt-container")
+            info = plain_app.query_one("#prompt-info")
             status_bar = plain_app.query_one("#status")
-            assert status_bar.region.y == composer.region.bottom + 1
+            assert info.region.y == box.region.bottom
+            assert status_bar.region.y == info.region.bottom
             assert status_bar.region.bottom == plain_app.size.height
         async with app.run_test(size=(80, 24)) as pilot:
             assert "YOLO" not in str(app.query_one("#banner").content)
@@ -584,14 +637,14 @@ def test_yolo_banner_stays_after_a_new_session(tmp_path, monkeypatch):
                 __version__,
             ]
             yellow = [
-                key
-                for key, style in _status_styles(app).items()
-                if style == "bold ansi_black on ansi_bright_yellow"
+                key for key, style in _status_styles(app).items() if style == YOLO_STYLE
             ]
             assert yellow == ["yolo"]
-            composer = app.query_one("#composer")
+            box = app.query_one("#prompt-container")
+            info = app.query_one("#prompt-info")
             status_bar = app.query_one("#status")
-            assert status_bar.region.y == composer.region.bottom + 1
+            assert info.region.y == box.region.bottom
+            assert status_bar.region.y == info.region.bottom
             assert status_bar.region.bottom == app.size.height
             await pilot.press("ctrl+n")
             assert "YOLO" not in str(app.query_one("#banner").content)
@@ -606,9 +659,7 @@ def test_yolo_banner_stays_after_a_new_session(tmp_path, monkeypatch):
                 __version__,
             ]
             yellow = [
-                key
-                for key, style in _status_styles(app).items()
-                if style == "bold ansi_black on ansi_bright_yellow"
+                key for key, style in _status_styles(app).items() if style == YOLO_STYLE
             ]
             assert yellow == ["yolo"]
             assert session.yolo is True
@@ -1252,6 +1303,37 @@ def test_mousedown_during_markdown_update_does_not_crash():
     asyncio.run(drive())
 
 
+def test_user_message_renders_markdown():
+    text = "Explain this *python* code:\n\n```python\nclass Command:\n    name: str\n```"
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+    app = HarnessApp(session, lambda *args, **kwargs: "ok", show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            app.query_one(Composer).load_text(text)
+            await pilot.press("enter")
+            await _wait_for(pilot, lambda: len(app.query(UserMessage)) == 1)
+            user = app.query_one(UserMessage)
+            assert user.source == text
+            assert f"You: {text}" in app.transcript_plain()
+            paragraph = user.query_one("MarkdownParagraph")
+            plain = paragraph._content.plain
+            assert "python" in plain
+            assert "*" not in plain
+            start = plain.index("python")
+            assert any(
+                span.start <= start < span.end and span.style == ".em"
+                for span in paragraph._content.spans
+            )
+            fence = user.query_one("MarkdownFence")
+            assert "class Command" in fence._highlighted_code.plain
+            assert any(
+                span.style != "$text" for span in fence._highlighted_code.spans
+            )
+
+    asyncio.run(drive())
+
+
 def test_agent_answer_renders_markdown():
     answer = """\
 ### **Ransomware**
@@ -1704,11 +1786,12 @@ def test_subagent_thinking_and_tools_stay_in_their_box():
             await _wait_for(pilot, lambda: "Agent: done" in app.transcript_plain())
             transcript = app.query_one("#transcript")
             box = app.query_one(SubagentBox)
+            assert app.theme == "dracula"
             assert box.border_title == "explore · Find answer"
             assert box.parent is transcript
-            assert box.styles.border.top[1].ansi == 5
-            assert box.styles.border_title_color.ansi == 5
-            assert box.styles.border_subtitle_color.ansi == 5
+            assert box.styles.border.top[1].hex == PRIMARY
+            assert box.styles.border_title_color.hex == PRIMARY
+            assert box.styles.border_subtitle_color.hex == PRIMARY
             assert box.styles.margin.left == 2
             assert [type(child) for child in transcript.children].count(Thinking) == 0
             assert [
@@ -1718,7 +1801,7 @@ def test_subagent_thinking_and_tools_stay_in_their_box():
                 child for child in transcript.children if isinstance(child, ToolBox)
             ]
             assert len(parent_tools) == 1
-            assert parent_tools[0].styles.border.top[1].ansi == 8
+            assert parent_tools[0].styles.border.top[1].hex == SUCCESS
             assert "task" in parent_tools[0].plain
             assert "read_file" not in parent_tools[0].plain
             assert [heading.number for heading in box.query(TurnHeading)] == [1, 2]
@@ -1730,8 +1813,10 @@ def test_subagent_thinking_and_tools_stay_in_their_box():
             assert len(nested) == 1
             assert "✓ read_file  path=app.py" in nested[0].plain
             inner = [*box.query(Thinking), *nested]
-            assert all(block.styles.border.top[1].ansi == 5 for block in inner)
-            assert all(block.styles.border_title_color.ansi == 5 for block in inner)
+            assert all(block.styles.border.top[1].hex == PRIMARY for block in inner)
+            assert all(
+                block.styles.border_title_color.hex == PRIMARY for block in inner
+            )
             assert all(block.styles.margin.left == 0 for block in inner)
             plain = app.transcript_plain()
             assert plain.index("task") < plain.index("checking app.py")
@@ -2131,16 +2216,16 @@ def test_context_warning_colors(monkeypatch):
     async def drive():
         async with app.run_test(size=(100, 24)) as pilot:
             assert _status(app)[1] == "ctx 450/1.0k 45%"
-            assert _status_styles(app)["context"] == "ansi_black on ansi_yellow"
+            assert _status_styles(app)["context"] == CONTEXT_STYLES["warn"]
             session.context_tokens = 600
             app._refresh_status()
             await pilot.pause()
             assert _status(app)[1] == "ctx 600/1.0k 60%"
-            assert _status_styles(app)["context"] == "bold ansi_white on ansi_red"
+            assert _status_styles(app)["context"] == CONTEXT_STYLES["over"]
             session.context_tokens = 100
             app._refresh_status()
             await pilot.pause()
-            assert _status_styles(app)["context"] == "ansi_white on ansi_bright_black"
+            assert _status_styles(app)["context"] == BADGE_STYLE
 
     asyncio.run(drive())
 

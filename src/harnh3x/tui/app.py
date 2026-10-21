@@ -60,6 +60,7 @@ from harnh3x.tui.panels import (
     AgentAnswer,
     Composer,
     DebugBox,
+    PromptBox,
     SubagentBox,
     Thinking,
     ToolBox,
@@ -74,6 +75,7 @@ from harnh3x.tui.text import (
     slash_hint,
     translate_legacy_key,
 )
+from harnh3x.tui.theme import ANSI_THEME, THEME
 from harnh3x.tui.transcript import (
     Compaction,
     _static_text,
@@ -103,7 +105,6 @@ class StatusBar(Widget):
     DEFAULT_CSS = """
     StatusBar {
         height: 1;
-        margin-top: 1;
     }
     """
 
@@ -144,7 +145,7 @@ class HarnessApp(App):
         dock: top;
         height: auto;
         padding: 0 1;
-        border-bottom: solid ansi_bright_black;
+        border-bottom: solid $secondary;
     }
     #transcript {
         height: 1fr;
@@ -153,11 +154,6 @@ class HarnessApp(App):
     #bottom {
         dock: bottom;
         height: auto;
-    }
-    #composer {
-        height: auto;
-        min-height: 3;
-        max-height: 10;
     }
     #activity {
         height: 1;
@@ -179,7 +175,9 @@ class HarnessApp(App):
         display: none;
     }
     .panel {
-        border: round ansi_bright_black;
+        border: round $secondary;
+        border-title-color: $secondary;
+        border-subtitle-color: $secondary;
         padding: 0 1;
         margin: 1 0;
         color: $text-muted;
@@ -188,19 +186,24 @@ class HarnessApp(App):
     .panel:focus {
         border: round $accent;
     }
+    ToolBox.panel {
+        border: round $success;
+        border-title-color: $success;
+        border-subtitle-color: $success;
+    }
     .panel.subagent {
-        border: round ansi_magenta;
-        border-title-color: ansi_magenta;
-        border-subtitle-color: ansi_magenta;
+        border: round $primary;
+        border-title-color: $primary;
+        border-subtitle-color: $primary;
         margin: 1 0 1 2;
     }
     .panel.subagent:focus {
         border: round $accent;
     }
     .panel.subagent .panel {
-        border: round ansi_magenta;
-        border-title-color: ansi_magenta;
-        border-subtitle-color: ansi_magenta;
+        border: round $primary;
+        border-title-color: $primary;
+        border-subtitle-color: $primary;
     }
     .panel.subagent .panel:focus {
         border: round $accent;
@@ -209,8 +212,10 @@ class HarnessApp(App):
         display: none;
     }
     .panel.debug {
-        color: ansi_cyan;
-        border: round ansi_cyan;
+        color: #8BE9FD;
+        border: round #8BE9FD;
+        border-title-color: #8BE9FD;
+        border-subtitle-color: #8BE9FD;
     }
     .user {
         height: auto;
@@ -256,6 +261,8 @@ class HarnessApp(App):
         initial: str | None = None,
     ) -> None:
         super().__init__()
+        self.theme = THEME
+        self.ansi_theme_dark = ANSI_THEME
         self._models = models
         self._fetching_models = False
         self.session = session
@@ -367,6 +374,28 @@ class HarnessApp(App):
 
     def _refresh_status(self) -> None:
         self.query_one("#status", StatusBar).show(build_segments(self._status_state()))
+        self._refresh_prompt()
+
+    def _prompt_path(self) -> str:
+        project = getattr(self.session, "project", None)
+        raw = project or getattr(self.session, "workspace", "")
+        text = str(raw)
+        home = os.path.expanduser("~")
+        if text == home or text.startswith(home + os.sep):
+            return "~" + text[len(home) :]
+        return text
+
+    def _refresh_prompt(self) -> None:
+        boxes = list(self.query(PromptBox))
+        if not boxes:
+            return
+        model = getattr(self.session, "model", None)
+        mode = "Coding" if getattr(self.session, "coding", False) else ""
+        boxes[0].show_info(
+            model if isinstance(model, str) else "",
+            self._prompt_path(),
+            mode,
+        )
 
     def _load_context_limit(self) -> None:
         if self._context_limit is None or self.review is not None:
@@ -400,7 +429,7 @@ class HarnessApp(App):
             if self.review is None and self.initial is None:
                 yield Static("", id="mention-menu", classes="hidden", markup=False)
                 yield Static("", id="slash-hint", classes="hidden", markup=False)
-                yield Composer()
+                yield PromptBox()
             yield StatusBar(build_segments(self._status_state()), id="status")
 
     def _anchor_transcript(self) -> None:
@@ -453,6 +482,9 @@ class HarnessApp(App):
         if isinstance(event.text_area, Composer):
             self._refresh_slash_hint(event.text_area.text)
             self._refresh_mentions(event.text_area)
+            boxes = list(self.query(PromptBox))
+            if boxes:
+                boxes[0].set_multiline("\n" in event.text_area.text)
 
     def _refresh_slash_hint(self, text: str) -> None:
         hints = list(self.query("#slash-hint"))

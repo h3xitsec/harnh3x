@@ -11,6 +11,7 @@ from harnh3x import __version__, agent, config, skills
 from harnh3x.mcp.client import upstream_problem
 from harnh3x.skills import SkillRegistry
 from harnh3x.tui import HarnessApp, StatusBar, WarningScreen
+from harnh3x.tui.status import WARNING_STYLE
 
 
 def test_mcp_handshake_at_start_keeps_schemas_out_until_load(tmp_path):
@@ -290,13 +291,15 @@ def test_status_bar_warns_when_an_mcp_server_is_unavailable(tmp_path):
             red = [
                 segment.text
                 for segment in bar.segments
-                if segment.style == "bold ansi_white on ansi_red"
+                if segment.style == WARNING_STYLE
             ]
             assert red == ["⚠ 1"]
             assert "caido" not in str(app.query_one("#banner").content)
-            composer = app.query_one("#composer")
+            box = app.query_one("#prompt-container")
+            info = app.query_one("#prompt-info")
             status_bar = app.query_one("#status")
-            assert status_bar.region.y == composer.region.bottom + 1
+            assert info.region.y == box.region.bottom
+            assert status_bar.region.y == info.region.bottom
             assert status_bar.region.bottom == app.size.height
             await pilot.press("ctrl+w")
             await pilot.pause()

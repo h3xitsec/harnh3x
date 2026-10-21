@@ -9,18 +9,28 @@ from typing import Literal
 from textual.content import Content
 
 from harnh3x.tui.text import context_level
+from harnh3x.tui.theme import (
+    BACKGROUND,
+    CYAN,
+    ERROR,
+    FOREGROUND,
+    PRIMARY,
+    SECONDARY,
+    WARNING,
+    YELLOW,
+)
 
-MODEL_STYLE = "bold ansi_black on ansi_blue"
-BADGE_STYLE = "ansi_white on ansi_bright_black"
+MODEL_STYLE = f"bold {BACKGROUND} on {PRIMARY}"
+BADGE_STYLE = f"{FOREGROUND} on {SECONDARY}"
 CONTEXT_STYLES = {
     None: BADGE_STYLE,
-    "warn": "ansi_black on ansi_yellow",
-    "over": "bold ansi_white on ansi_red",
+    "warn": f"{BACKGROUND} on {WARNING}",
+    "over": f"bold {FOREGROUND} on {ERROR}",
 }
-YOLO_STYLE = "bold ansi_black on ansi_bright_yellow"
-DEBUG_STYLE = "ansi_black on ansi_cyan"
-WARNING_STYLE = "bold ansi_white on ansi_red"
-VERSION_STYLE = "ansi_bright_black"
+YOLO_STYLE = f"bold {BACKGROUND} on {YELLOW}"
+DEBUG_STYLE = f"{BACKGROUND} on {CYAN}"
+WARNING_STYLE = f"bold {FOREGROUND} on {ERROR}"
+VERSION_STYLE = SECONDARY
 
 
 @dataclass(frozen=True)

@@ -14,6 +14,7 @@ from textual.widgets import OptionList, Static
 from harnh3x.agent import session_label
 from harnh3x.tui.export import answer_preview
 from harnh3x.tui.modals import BackdropCloses
+from harnh3x.tui.theme import ANSI_THEME, THEME
 
 _PROMPT = "Use up/down and Enter, or type a number."
 _FILTER_PROMPT = "Use up/down and Enter, type a number, or type to filter."
@@ -292,6 +293,8 @@ class SwitchModelScreen(BackdropCloses, ModelScreen):
 class ModelApp(App[str]):
     def __init__(self, models: list[str], reason: str | None = None) -> None:
         super().__init__()
+        self.theme = THEME
+        self.ansi_theme_dark = ANSI_THEME
         self.models = models
         self.reason = reason
 
