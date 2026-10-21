@@ -1,33 +1,42 @@
+[project]
+name = "harnh3x"
+version = "0.6.0"
+description = "Custom AI harness"
+authors = [
+    { name = "h3xit", email = "connect@h3x.it" }
+]
+readme = "README.md"
+requires-python = ">=3.14,<4.0"
+dependencies = [
+    "openai==3.24.0",
+    "python-dotenv==1.2.4",
+    "textual>=8.2.0,<9.0.0",
+    "trafilatura>=2.3.0,<3.0.0",
+    "pypdf>=6.0,<7.0",
+    "anthropic>=1.13.0,<2.0.0",
+    "pyyaml>=6.0,<7.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=7.4.0,<8.0.0",
+    "pytest-cov>=7.1.0,<8.0.0",
+    "ruff>=0.17.0,<0.18.0",
+]
+
+[project.scripts]
+harnh3x = "harnh3x.cli:main"
+
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
-name = "harnh3x"
-version = "0.6.0"
-description = "Custom AI harness"
-authors = ["h3xit <connect@h3x.it>"]
-readme = "README.md"
 package-mode = true
 packages = [{include = "harnh3x", from = "src"}]
 include = [
     {path = "src/harnh3x/skills/**/SKILL.md", format = ["sdist", "wheel"]},
 ]
-
-[tool.poetry.dependencies]
-python = "^3.14"
-openai = "3.24.0"
-python-dotenv = "1.2.4"
-textual = "^8.2.0"
-trafilatura = "^2.3.0"
-pypdf = "^6.0"
-anthropic = "^1.13.0"
-pyyaml = "^6.0"
-
-[tool.poetry.group.dev.dependencies]
-pytest = "^7.4.0"
-pytest-cov = "^7.1.0"
-ruff = "^0.17.0"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
@@ -41,9 +50,6 @@ addopts = [
 [tool.coverage.run]
 source = ["src"]
 branch = true 
-
-[tool.poetry.scripts]
-harnh3x = "harnh3x.cli:main"
 
 [tool.ruff]
 include = ["pyproject.toml", "src/**/*.py", "tests/**/*.py"]
