@@ -57,9 +57,13 @@ class CollapsiblePanel(Static, can_focus=True):
         return self.body()
 
     def on_click(self, event: Click) -> None:
-        event.stop()
         if self.text_selection is not None:
+            event.stop()
             return
+        # A panel that already fits lets the click reach a parent subagent box.
+        if not self._expandable:
+            return
+        event.stop()
         self.toggle()
 
     def action_toggle_panel(self) -> None:
@@ -413,6 +417,178 @@ class ToolBox(CollapsiblePanel):
                 changed = True
         if changed:
             self.refresh_body()
+
+
+class SubagentBox(Vertical, can_focus=True):
+    """One subagent's turns, thinking, and tool calls, kept out of the parent.
+
+    A turn heading is mounted only when that round has thinking or a tool
+    call, so a final answer that the parent receives as the task result does
+    not leave an empty heading. The box keeps the last three lines until a
+    click expands it, and Enter or Space toggles it while it is focused.
+    """
+
+    FOCUS_ON_CLICK = False
+    BINDINGS: ClassVar[list[Binding]] = [
+        Binding("enter,space", "toggle_panel", "Toggle", show=False),
+    ]
+
+    DEFAULT_CSS = """
+    SubagentBox {
+        border: round ansi_magenta;
+        border-title-color: ansi_magenta;
+        border-subtitle-color: ansi_magenta;
+        padding: 0 1;
+        margin: 1 0 1 2;
+        height: auto;
+        color: $text-muted;
+    }
+    SubagentBox:focus {
+        border: round $accent;
+    }
+    SubagentBox .subagent-preview {
+        height: auto;
+    }
+    """
+
+    def __init__(self, kind: str, description: str) -> None:
+        super().__init__(classes="panel trace subagent")
+        self.kind = kind
+        self.description = description
+        self.border_title = _subagent_title(kind, description)
+        self.expanded = False
+        self._expandable = False
+        self._syncing = False
+        self._preview = Static("", markup=False, classes="subagent-preview")
+        self._pending_turn: int | None = None
+        self._open_turn: int | None = None
+        self._thinking: Thinking | None = None
+        self._tools: ToolBox | None = None
+        self._reasoning_open = False
+        self._tools_open = False
+
+    def note_turn(self, number: int) -> None:
+        self._pending_turn = number
+
+    def append_reasoning(self, text: str) -> None:
+        if not text:
+            return
+        self._open_round()
+        if not self._reasoning_open:
+            self._reasoning_open = True
+            self._tools_open = False
+            self._thinking = Thinking("", hold=False)
+            self.mount(self._thinking)
+        assert self._thinking is not None
+        self._thinking.append(text)
+        self._sync(self.size.width or 80)
+
+    def add_tool(
+        self, name: str, args: object, *, state: str | None = "running"
+    ) -> None:
+        self._open_round()
+        if not self._tools_open or self._tools is None:
+            self._tools_open = True
+            self._reasoning_open = False
+            self._tools = ToolBox()
+            self.mount(self._tools)
+        self._tools.add(name, args, state=state)
+        self._sync(self.size.width or 80)
+
+    def finish_tool(self, name: str, result: str) -> None:
+        if self._tools is not None:
+            self._tools.finish(name, result)
+            self._sync(self.size.width or 80)
+
+    def on_mount(self) -> None:
+        self.mount(self._preview, before=0)
+        self._sync(self.size.width or 80)
+
+    def on_resize(self, event) -> None:
+        self._sync(event.size.width or 80)
+
+    def on_click(self, event: Click) -> None:
+        event.stop()
+        target = event.widget
+        if self.text_selection is not None or (
+            target is not None and target.text_selection is not None
+        ):
+            return
+        self.toggle()
+
+    def action_toggle_panel(self) -> None:
+        self.toggle()
+
+    def toggle(self) -> None:
+        if not self._expandable:
+            return
+        self.expanded = not self.expanded
+        self._sync(self.size.width or 80)
+
+    def body_text(self) -> str:
+        trace = self._trace()
+        if not trace:
+            return self.border_title
+        return f"{self.border_title}\n{trace}"
+
+    def _trace(self) -> str:
+        parts: list[str] = []
+        for child in self.children:
+            if isinstance(child, TurnHeading):
+                parts.append(f"Turn {child.number}")
+            elif isinstance(child, (Thinking, ToolBox)) and child.plain:
+                parts.append(child.plain)
+        return "\n".join(parts)
+
+    def _sync(self, width: int) -> None:
+        if self._syncing:
+            return
+        self._syncing = True
+        try:
+            text = self._trace()
+            inner = _panel_inner_width(self, width)
+            self._expandable = thinking_overflows(text, width=inner)
+            if not self._expandable:
+                self.expanded = False
+            if self._expandable:
+                self.border_subtitle = thinking_hint(
+                    expanded=self.expanded, hold=False, click=True
+                )
+            else:
+                self.border_subtitle = ""
+            show_preview = self._expandable and not self.expanded
+            if self._preview.parent is self:
+                self._preview.display = show_preview
+                if show_preview:
+                    shown = thinking_shown(text, expanded=False, width=inner)
+                    self._preview.update("\n".join(shown))
+            for child in list(self.children):
+                if child is self._preview:
+                    continue
+                child.display = not show_preview
+        finally:
+            self._syncing = False
+
+    def _open_round(self) -> None:
+        number = self._pending_turn
+        if number is None or number == self._open_turn:
+            return
+        self._open_turn = number
+        self._thinking = None
+        self._tools = None
+        self._reasoning_open = False
+        self._tools_open = False
+        self.mount(TurnHeading(number))
+
+
+def _subagent_title(kind: str, description: str) -> str:
+    text = " ".join(description.split())
+    if not text:
+        return kind
+    title = f"{kind} · {text}"
+    if len(title) <= 60:
+        return title
+    return title[:59] + "…"
 
 
 class Composer(TextArea):

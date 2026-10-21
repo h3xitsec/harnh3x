@@ -56,6 +56,7 @@ def test_config_file_rejects_unknown_keys_and_bad_numbers():
     [
         "max_tokens",
         "max_turns",
+        "subagent_max_turns",
         "max_tool_result",
         "fetch_timeout",
         "fetch_max_bytes",
@@ -168,6 +169,7 @@ def test_missing_default_config_keeps_defaults(tmp_path):
     assert resolved["MODEL"] == "qwen3.5-128k"
     assert resolved["API_KEY"] is None
     assert resolved["MAX_TURNS"] == 45
+    assert resolved["SUBAGENT_MAX_TURNS"] == 12
     assert resolved["MCP_SERVERS"] == ()
 
 

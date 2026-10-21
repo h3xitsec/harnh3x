@@ -66,6 +66,9 @@ _SETTINGS = {
     "context_limit": _Setting("CONTEXT_LIMIT", "HARNH3X_CONTEXT_LIMIT", None, int),
     "model": _Setting("MODEL", "HARNH3X_MODEL", "qwen3.5-128k", str),
     "max_turns": _Setting("MAX_TURNS", "HARNH3X_MAX_TURNS", 45, int),
+    "subagent_max_turns": _Setting(
+        "SUBAGENT_MAX_TURNS", "HARNH3X_SUBAGENT_MAX_TURNS", 12, int
+    ),
     "compact_at": _Setting("COMPACT_AT", "HARNH3X_COMPACT_AT", 0.5, float),
     "max_tool_result": _Setting(
         "MAX_TOOL_RESULT", "HARNH3X_MAX_TOOL_RESULT", 8_000, int
@@ -169,6 +172,7 @@ def resolve_settings(
 
 _POSITIVE_SETTINGS = (
     ("MAX_TURNS", "max_turns"),
+    ("SUBAGENT_MAX_TURNS", "subagent_max_turns"),
     ("MAX_TOOL_RESULT", "max_tool_result"),
     ("FETCH_TIMEOUT", "fetch_timeout"),
     ("FETCH_MAX_BYTES", "fetch_max_bytes"),
@@ -396,6 +400,7 @@ MAX_TOKENS = _loaded["MAX_TOKENS"]
 CONTEXT_LIMIT = _loaded["CONTEXT_LIMIT"]
 MODEL = _loaded["MODEL"]
 MAX_TURNS = _loaded["MAX_TURNS"]
+SUBAGENT_MAX_TURNS = _loaded["SUBAGENT_MAX_TURNS"]
 COMPACT_AT = _loaded["COMPACT_AT"]
 MAX_TOOL_RESULT = _loaded["MAX_TOOL_RESULT"]
 FETCH_TIMEOUT = _loaded["FETCH_TIMEOUT"]

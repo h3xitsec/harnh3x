@@ -251,7 +251,7 @@ _live_registries: weakref.WeakSet = weakref.WeakSet()
 _exit_registered = False
 
 
-def _register_for_exit(registry: "SkillRegistry") -> None:
+def _register_for_exit(registry: SkillRegistry) -> None:
     global _exit_registered
     _live_registries.add(registry)
     if not _exit_registered:
@@ -516,7 +516,9 @@ class SkillRegistry:
                 name = tool["function"]["name"]
                 if name not in active:
                     active[name] = self._scoped(tool)
-        return list(_META_TOOLS) + list(active.values())
+        from harnh3x.agent.subagent import TASK_SCHEMA
+
+        return [*_META_TOOLS, TASK_SCHEMA, *active.values()]
 
     def _scoped(self, tool: dict) -> dict:
         name = tool["function"]["name"]
@@ -590,7 +592,7 @@ class SkillRegistry:
         if len(names) != len(set(names)):
             return f"Error: tool from '{skill_name}' is listed more than once"
         taken = {tool["function"]["name"] for tool in TOOLS}
-        taken.update(("load_skill", "unload_skill"))
+        taken.update(("load_skill", "unload_skill", "task"))
         for other, skill in self._active.items():
             if other == skill_name:
                 continue

@@ -43,6 +43,7 @@ from harnh3x.config import (
     SHELL_MAX_OUTPUT,
     SHELL_MAX_TIMEOUT,
     SHELL_TIMEOUT,
+    SUBAGENT_MAX_TURNS,
     TRANSCRIPT_FILE,
     WIKIPEDIA_LANG,
 )
@@ -88,6 +89,7 @@ __all__ = [
     "SHELL_MAX_OUTPUT",
     "SHELL_MAX_TIMEOUT",
     "SHELL_TIMEOUT",
+    "SUBAGENT_MAX_TURNS",
     "TOOLS",
     "TRANSCRIPT_FILE",
     "WIKIPEDIA_LANG",

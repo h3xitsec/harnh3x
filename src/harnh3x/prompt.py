@@ -36,6 +36,16 @@ def yolo_note(project: Path | None = None) -> str:
     )
 
 
+_TASK_RULE = (
+    "For a broad question about the codebase, where a behavior lives, "
+    "how files fit together, or a search that is more than a couple of lookups, "
+    'call task with subagent_type "explore". '
+    "Put the question and any paths you already know in prompt. "
+    "For one known file or one symbol, use glob, grep, or read_file yourself. "
+    "explore cannot change files. Read a path it names before you edit that file."
+)
+
+
 def _memory_line(keys: list[str]) -> str:
     if not keys:
         return "No saved memories yet. Load the memory skill to keep facts the user wants remembered."
@@ -80,6 +90,7 @@ If a tool returns an error, tell the user the error. Do not guess."""
 Read the project before you change it, and match the code already there.
 When the user writes @path, that path is a file or folder in the project; read it before you answer. A trailing slash is a folder.
 {skills}
+{_TASK_RULE}
 Load the coding skill before you read or change source; it can list, search, edit, and run commands in the project. Use the python skill only to compute an answer.
 When a job takes several steps, load the tasks skill, write a plan, and work through it.
 Follow the project rules in this prompt. When a listed rule has no globs, read that .mdc file if its description matches the task.
@@ -90,6 +101,7 @@ Always confirm what you changed, including the paths.
     return f"""You are a helpful personal assistant.
 {header}
 {skills}
+{_TASK_RULE}
 Answer from sources you have read: search snippets are not answers, so read the pages that matter before answering, and cite them.
 When a job takes several steps, load the tasks skill, write a plan, and work through it.
 When the user asks for a program, script, or code change, load the coding skill and write it to a file in {code_home}. Use the python skill only to compute an answer.

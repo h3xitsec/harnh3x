@@ -28,6 +28,7 @@ from harnh3x.tui import (
     ReviewApp,
     SkillsScreen,
     StatusBar,
+    SubagentBox,
     SwitchModelScreen,
     Thinking,
     ToolBox,
@@ -1668,6 +1669,140 @@ def test_tool_results_mark_each_call():
             assert "✗ run_shell  command=false" in plain
             assert "Error: exit 1" in plain
             assert "more detail" not in plain
+
+    asyncio.run(drive())
+
+
+def test_subagent_thinking_and_tools_stay_in_their_box():
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+
+    def fake_run(message, active, show_tools=True, on_tool=None):
+        on_tool(
+            "task",
+            {
+                "description": "Find answer",
+                "prompt": "where",
+                "subagent_type": "explore",
+            },
+        )
+        active.on_subagent_start("explore", "Find answer")
+        active.on_subagent_turn(1)
+        active.on_subagent_delta("reasoning", "checking app.py")
+        active.on_subagent_tool("read_file", {"path": "app.py"})
+        active.on_subagent_tool_done("read_file", "return 1")
+        active.on_subagent_turn(2)
+        active.on_subagent_delta("reasoning", "it returns 1")
+        active.on_subagent_delta("content", "the final report")
+        active.on_tool_done("task", "returns 1")
+        return "done"
+
+    app = HarnessApp(session, fake_run, show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(100, 36)) as pilot:
+            await pilot.press(*"go", "enter")
+            await _wait_for(pilot, lambda: "Agent: done" in app.transcript_plain())
+            transcript = app.query_one("#transcript")
+            box = app.query_one(SubagentBox)
+            assert box.border_title == "explore · Find answer"
+            assert box.parent is transcript
+            assert box.styles.border.top[1].ansi == 5
+            assert box.styles.border_title_color.ansi == 5
+            assert box.styles.border_subtitle_color.ansi == 5
+            assert box.styles.margin.left == 2
+            assert [type(child) for child in transcript.children].count(Thinking) == 0
+            assert [
+                child for child in transcript.children if isinstance(child, ToolBox)
+            ]
+            parent_tools = [
+                child for child in transcript.children if isinstance(child, ToolBox)
+            ]
+            assert len(parent_tools) == 1
+            assert parent_tools[0].styles.border.top[1].ansi == 8
+            assert "task" in parent_tools[0].plain
+            assert "read_file" not in parent_tools[0].plain
+            assert [heading.number for heading in box.query(TurnHeading)] == [1, 2]
+            thinking = [block.plain for block in box.query(Thinking)]
+            assert any("checking app.py" in text for text in thinking)
+            assert any("it returns 1" in text for text in thinking)
+            assert "the final report" not in box.body_text()
+            nested = list(box.query(ToolBox))
+            assert len(nested) == 1
+            assert "✓ read_file  path=app.py" in nested[0].plain
+            inner = [*box.query(Thinking), *nested]
+            assert all(block.styles.border.top[1].ansi == 5 for block in inner)
+            assert all(block.styles.border_title_color.ansi == 5 for block in inner)
+            assert all(block.styles.margin.left == 0 for block in inner)
+            plain = app.transcript_plain()
+            assert plain.index("task") < plain.index("checking app.py")
+            assert plain.index("checking app.py") < plain.index("read_file")
+            assert plain.index("read_file") < plain.index("it returns 1")
+            assert plain.index("it returns 1") < plain.index("Agent: done")
+            await pilot.press("ctrl+h")
+            assert not box.display
+            assert app.query_one(AgentAnswer).display
+
+    asyncio.run(drive())
+
+
+def test_subagent_box_collapses_and_expands():
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+    app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(80, 36)) as pilot:
+            box = SubagentBox("explore", "Find answer")
+            short = SubagentBox("explore", "Short")
+            app.query_one("#transcript").mount(box, short)
+            await pilot.pause()
+            for number, word in enumerate(("one", "two", "three", "four"), start=1):
+                box.note_turn(number)
+                box.append_reasoning(word)
+            short.note_turn(1)
+            short.append_reasoning("only")
+            await pilot.pause()
+            preview = box.query_one(".subagent-preview")
+            assert not box.expanded
+            assert "click to expand" in (box.border_subtitle or "")
+            assert preview.display
+            assert "four" in str(preview.content)
+            assert "one" not in str(preview.content)
+            assert not box.query(Thinking).first().display
+            assert "click" not in str(short.border_subtitle or "")
+            assert not short.expanded
+            assert short.query_one(Thinking).display
+            composer = app.query_one(Composer)
+            await pilot.click(preview)
+            assert box.expanded
+            assert app.focused is composer
+            assert "click to collapse" in (box.border_subtitle or "")
+            assert not preview.display
+            assert box.query(Thinking).first().display
+            assert "one" in box.query(Thinking).first().plain
+            await pilot.click(short.query_one(Thinking))
+            assert not short.expanded
+            box.focus()
+            await pilot.press("enter")
+            assert not box.expanded
+            assert "four" in str(preview.content)
+            await pilot.press("space")
+            assert box.expanded
+            for name in ("one", "two", "three", "four"):
+                box.add_tool(name, {})
+            await pilot.pause()
+            assert box.expanded
+            tools = box.query_one(ToolBox)
+            assert tools.display
+            assert "click to expand" in (tools.border_subtitle or "")
+            await pilot.click(tools, offset=(2, 2))
+            assert tools.expanded
+            assert box.expanded
+            assert "one" in tools.plain
+            box.focus()
+            await pilot.press("enter")
+            assert not box.expanded
+            assert "one" not in str(preview.content)
+            assert "four" in str(preview.content)
 
     asyncio.run(drive())
 

@@ -751,7 +751,7 @@ def test_run_sends_skill_schemas_after_load(tmp_path):
     text = agent.run("read a file", session, client=client)
 
     assert text == "ready"
-    assert _tool_names(seen[0]) == ["load_skill", "unload_skill"]
+    assert _tool_names(seen[0]) == ["load_skill", "unload_skill", "task"]
     assert "read_file" in _tool_names(seen[1])
     assert "write_file" in _tool_names(seen[1])
     assert "delete_file" in _tool_names(seen[1])

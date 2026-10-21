@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,12 @@ from harnh3x.config import TRANSCRIPT_FILE
 
 if TYPE_CHECKING:
     from harnh3x.agent.session import Session
+
+# Fields merged into session.log lines for the duration of a nested agent.
+_EMPTY_LOG: dict[str, str] = {}
+_log_fields: ContextVar[dict[str, str]] = ContextVar(
+    "harnh3x_log_fields", default=_EMPTY_LOG
+)
 
 
 def _expand(value: str | Path) -> Path:
@@ -199,6 +206,9 @@ def _save_transcript(session: Session) -> None:
 
 
 def write_log(event: dict, workspace: Path) -> None:
+    extra = _log_fields.get()
+    if extra:
+        event = {**extra, **event}
     path = workspace / "session.log"
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(event, ensure_ascii=False) + "\n")

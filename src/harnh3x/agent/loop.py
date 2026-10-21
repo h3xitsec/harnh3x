@@ -9,6 +9,7 @@ from harnh3x.agent.compact import _compact
 from harnh3x.agent.complete import _completion, _emit_debug
 from harnh3x.agent.messages import _log_preview, _visible_answer, assistant_message
 from harnh3x.agent.session import Session
+from harnh3x.agent.subagent import execute_task
 from harnh3x.agent.transcript import _save_transcript, write_log
 from harnh3x.anthropic_api import AnthropicClient, CompletionError, status_message
 from harnh3x.config import MAX_TURNS
@@ -38,12 +39,14 @@ def _complete(
     client: OpenAI | AnthropicClient | None,
     show_tools: bool,
     on_tool: Callable[[str, object], None] | None,
+    max_turns: int | None = None,
 ) -> str:
     api = client or api_client.get_client()
     turn = 0
+    limit = MAX_TURNS if max_turns is None else max_turns
 
     while True:
-        for _ in range(MAX_TURNS):
+        for _ in range(limit):
             if session.abort.is_set():
                 return ""
             write_log({"event": "turn", "turn": turn}, session.workspace)
@@ -80,14 +83,17 @@ def _complete(
                     return ""
                 if show_tools:
                     _show_tool(session, tc, on_tool)
-                args, result = _tool_result(
-                    tc.function.name,
-                    tc.function.arguments,
-                    session.workspace,
-                    session.skills,
-                    yolo=session.yolo,
-                    project=session.project,
-                )
+                if tc.function.name == "task":
+                    args, result = execute_task(session, tc.function.arguments, api)
+                else:
+                    args, result = _tool_result(
+                        tc.function.name,
+                        tc.function.arguments,
+                        session.workspace,
+                        session.skills,
+                        yolo=session.yolo,
+                        project=session.project,
+                    )
                 if session.coding:
                     result = append_matching_rules(
                         session.project, args, result, session.applied_rules

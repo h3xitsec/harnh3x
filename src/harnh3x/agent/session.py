@@ -51,6 +51,11 @@ class Session:
         self.on_compact: Callable[[str], None] | None = None
         self.on_tool_done: Callable[[str, str], None] | None = None
         self.on_model_turn: Callable[[int], None] | None = None
+        self.on_subagent_start: Callable[[str, str], None] | None = None
+        self.on_subagent_turn: Callable[[int], None] | None = None
+        self.on_subagent_delta: Callable[[str, str], None] | None = None
+        self.on_subagent_tool: Callable[[str, object], None] | None = None
+        self.on_subagent_tool_done: Callable[[str, str], None] | None = None
         self.confirm_continue: Callable[[], bool] | None = None
         self.abort = threading.Event()
         self.messages: list[dict] = [self._system_message()]

@@ -60,6 +60,7 @@ from harnh3x.tui.panels import (
     AgentAnswer,
     Composer,
     DebugBox,
+    SubagentBox,
     Thinking,
     ToolBox,
     TurnHeading,
@@ -187,6 +188,23 @@ class HarnessApp(App):
     .panel:focus {
         border: round $accent;
     }
+    .panel.subagent {
+        border: round ansi_magenta;
+        border-title-color: ansi_magenta;
+        border-subtitle-color: ansi_magenta;
+        margin: 1 0 1 2;
+    }
+    .panel.subagent:focus {
+        border: round $accent;
+    }
+    .panel.subagent .panel {
+        border: round ansi_magenta;
+        border-title-color: ansi_magenta;
+        border-subtitle-color: ansi_magenta;
+    }
+    .panel.subagent .panel:focus {
+        border: round $accent;
+    }
     #transcript.details-hidden .trace {
         display: none;
     }
@@ -250,6 +268,7 @@ class HarnessApp(App):
         self._compacting: Static | None = None
         self._rendering = False
         self.tools: ToolBox | None = None
+        self._subagent: SubagentBox | None = None
         self._hold_close = False
         self._quitting = False
         self._busy = False
@@ -408,8 +427,13 @@ class HarnessApp(App):
         self.session.on_delta = self._queue_delta
         self.session.on_compact = self._on_compact
         self.session.on_debug = self._queue_debug
+        self.session.on_subagent_start = self._queue_subagent_start
+        self.session.on_subagent_turn = self._queue_subagent_turn
+        self.session.on_subagent_delta = self._queue_subagent_delta
         if self.show_tools:
             self.session.on_tool_done = self._queue_tool_done
+            self.session.on_subagent_tool = self._queue_subagent_tool
+            self.session.on_subagent_tool_done = self._queue_subagent_tool_done
         if self.initial:
             self._append_user(self.initial)
             self._begin_busy()
@@ -657,8 +681,8 @@ class HarnessApp(App):
         abort = getattr(self.session, "abort", None)
         if abort is not None:
             abort.clear()
-        if self.tools is not None:
-            self.tools.stop_running()
+        for box in self.query(ToolBox):
+            box.stop_running()
         self._mount_new_compactions()
         self._end_busy()
         self._note("Stopped.")
@@ -1005,6 +1029,8 @@ class HarnessApp(App):
                 parts.append(f"Turn {child.number}")
             elif isinstance(child, Thinking):
                 parts.append(child.plain)
+            elif isinstance(child, SubagentBox):
+                parts.append(child.body_text())
             elif isinstance(child, Static):
                 parts.append(_static_text(child))
         return "\n".join(parts)
@@ -1018,6 +1044,7 @@ class HarnessApp(App):
         self._msg_content = ""
         self._live_thinking: Thinking | None = None
         self._live_answer: AgentAnswer | None = None
+        self._subagent = None
 
     def _queue_model_turn(self, number: int) -> None:
         self._from_thread(self._begin_model_turn, number)
@@ -1031,6 +1058,7 @@ class HarnessApp(App):
         self._live_thinking = None
         self._live_answer = None
         self.tools = None
+        self._subagent = None
         self.query_one("#transcript").mount(TurnHeading(number))
 
     def _queue_debug(self, system: str | None, request: str) -> None:
@@ -1137,6 +1165,56 @@ class HarnessApp(App):
             self._from_thread(self._after_stop)
             return
         self._from_thread(self._after_turn, answer, start)
+
+    def _queue_subagent_start(self, kind: str, description: str) -> None:
+        self._from_thread(self._begin_subagent, kind, description)
+
+    def _queue_subagent_turn(self, number: int) -> None:
+        self._from_thread(self._subagent_turn, number)
+
+    def _queue_subagent_delta(self, kind: str, text: str) -> None:
+        self._from_thread(self._subagent_delta, kind, text)
+
+    def _queue_subagent_tool(self, name: str, args: object) -> None:
+        self._from_thread(self._subagent_tool, name, args)
+
+    def _queue_subagent_tool_done(self, name: str, result: str) -> None:
+        self._from_thread(self._subagent_tool_done, name, result)
+
+    def _begin_subagent(self, kind: str, description: str) -> None:
+        self._mount_new_compactions()
+        box = SubagentBox(kind, description)
+        self._subagent = box
+        self.query_one("#transcript").mount(box)
+        self._set_phase(f"Running {kind}…")
+        self._refresh_banner()
+
+    def _subagent_turn(self, number: int) -> None:
+        if self._subagent is not None:
+            self._subagent.note_turn(number)
+
+    def _subagent_delta(self, kind: str, text: str) -> None:
+        box = self._subagent
+        if box is None or kind != "reasoning" or not text:
+            return
+        self._set_phase(f"{box.kind} · Thinking…")
+        box.append_reasoning(text)
+        self._refresh_banner()
+
+    def _subagent_tool(self, name: str, args: object) -> None:
+        box = self._subagent
+        if box is None:
+            return
+        self._set_phase(f"{box.kind} · Running {name}…")
+        box.add_tool(name, args)
+        self._refresh_banner()
+
+    def _subagent_tool_done(self, name: str, result: str) -> None:
+        box = self._subagent
+        if box is None:
+            return
+        box.finish_tool(name, result)
+        self._set_phase(f"Running {box.kind}…")
 
     def _queue_tool_done(self, name: str, result: str) -> None:
         self._from_thread(self._tool_done, name, result)

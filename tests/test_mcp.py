@@ -28,7 +28,11 @@ def test_mcp_handshake_at_start_keeps_schemas_out_until_load(tmp_path):
         menu = registry.get_menu()
         assert "mcp:\n- caido: Browse and replay HTTP traffic in Caido." in menu
         assert menu.index("- tasks:") < menu.index("mcp:")
-        assert _tool_names(registry.schemas()) == ["load_skill", "unload_skill"]
+        assert _tool_names(registry.schemas()) == [
+            "load_skill",
+            "unload_skill",
+            "task",
+        ]
 
         loaded = registry.load_skill("caido")
 
@@ -428,6 +432,7 @@ def test_custom_skill_uses_mcp_tools_by_server_name(tmp_path):
         assert _tool_names(registry.schemas()) == [
             "load_skill",
             "unload_skill",
+            "task",
             "read_file",
             "caido_list_requests",
         ]

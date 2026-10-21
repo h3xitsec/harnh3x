@@ -158,6 +158,7 @@ def test_session_reset_starts_a_new_conversation(tmp_path, monkeypatch):
     assert [tool["function"]["name"] for tool in session.skills.schemas()] == [
         "load_skill",
         "unload_skill",
+        "task",
     ]
 
 

@@ -31,7 +31,7 @@ def test_skill_menu_starts_unloaded():
     assert "news:" not in menu
     assert "- search:" not in menu
     assert "[loaded" not in menu
-    assert _tool_names(registry.schemas()) == ["load_skill", "unload_skill"]
+    assert _tool_names(registry.schemas()) == ["load_skill", "unload_skill", "task"]
 
 
 def test_skill_load_unload_and_gated_execute(tmp_path):
