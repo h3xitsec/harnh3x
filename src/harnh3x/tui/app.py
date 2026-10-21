@@ -105,6 +105,7 @@ class StatusBar(Widget):
     DEFAULT_CSS = """
     StatusBar {
         height: 1;
+        margin-top: 1;
     }
     """
 
@@ -374,28 +375,6 @@ class HarnessApp(App):
 
     def _refresh_status(self) -> None:
         self.query_one("#status", StatusBar).show(build_segments(self._status_state()))
-        self._refresh_prompt()
-
-    def _prompt_path(self) -> str:
-        project = getattr(self.session, "project", None)
-        raw = project or getattr(self.session, "workspace", "")
-        text = str(raw)
-        home = os.path.expanduser("~")
-        if text == home or text.startswith(home + os.sep):
-            return "~" + text[len(home) :]
-        return text
-
-    def _refresh_prompt(self) -> None:
-        boxes = list(self.query(PromptBox))
-        if not boxes:
-            return
-        model = getattr(self.session, "model", None)
-        mode = "Coding" if getattr(self.session, "coding", False) else ""
-        boxes[0].show_info(
-            model if isinstance(model, str) else "",
-            self._prompt_path(),
-            mode,
-        )
 
     def _load_context_limit(self) -> None:
         if self._context_limit is None or self.review is not None:

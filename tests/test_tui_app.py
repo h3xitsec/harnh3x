@@ -564,9 +564,13 @@ def test_prompt_box_follows_the_toad_editor(tmp_path):
             assert app.query_one(Composer).has_focus
             assert box.styles.border.top[1].hex == SECONDARY
             assert str(app.query_one("#prompt-mark").content) == "❯"
-            assert str(app.query_one("#prompt-model").content) == "demo-model"
-            assert str(app.query_one("#prompt-path").content).endswith("proj")
-            assert str(app.query_one("#prompt-mode").content) == "Coding"
+            assert not app.query("#prompt-model")
+            assert not app.query("#prompt-path")
+            assert not app.query("#prompt-mode")
+            assert _status(app).count("demo-model") == 1
+            banner = str(app.query_one("#banner").content)
+            assert str(project) in banner
+            assert "Coding" in banner
             await pilot.press("a", "shift+enter", "b")
             assert app.query_one(Composer).text == "a\nb"
             assert str(app.query_one("#prompt-mark").content) == "☰"
@@ -619,10 +623,8 @@ def test_yolo_banner_stays_after_a_new_session(tmp_path, monkeypatch):
                 __version__,
             ]
             box = plain_app.query_one("#prompt-container")
-            info = plain_app.query_one("#prompt-info")
             status_bar = plain_app.query_one("#status")
-            assert info.region.y == box.region.bottom
-            assert status_bar.region.y == info.region.bottom
+            assert status_bar.region.y == box.region.bottom + 1
             assert status_bar.region.bottom == plain_app.size.height
         async with app.run_test(size=(80, 24)) as pilot:
             assert "YOLO" not in str(app.query_one("#banner").content)
@@ -641,10 +643,8 @@ def test_yolo_banner_stays_after_a_new_session(tmp_path, monkeypatch):
             ]
             assert yellow == ["yolo"]
             box = app.query_one("#prompt-container")
-            info = app.query_one("#prompt-info")
             status_bar = app.query_one("#status")
-            assert info.region.y == box.region.bottom
-            assert status_bar.region.y == info.region.bottom
+            assert status_bar.region.y == box.region.bottom + 1
             assert status_bar.region.bottom == app.size.height
             await pilot.press("ctrl+n")
             assert "YOLO" not in str(app.query_one("#banner").content)

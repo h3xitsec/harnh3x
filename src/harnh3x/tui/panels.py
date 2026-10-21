@@ -610,12 +610,11 @@ def _subagent_title(kind: str, description: str) -> str:
 
 
 class PromptBox(Vertical):
-    """The message editor: a tall border, a prompt mark, and a line under it.
+    """The message editor: a tall border and a prompt mark.
 
     The border is clear until the editor is focused, then it uses the
     secondary color. The mark is ``❯`` on one line and ``☰`` once the draft
-    wraps to another. The line under the box names the model, the project or
-    workspace, and ``Coding`` when this is a coding session.
+    wraps to another.
     """
 
     DEFAULT_CSS = """
@@ -652,52 +651,12 @@ class PromptBox(Vertical):
     PromptBox #composer:focus {
         text-opacity: 100%;
     }
-    #prompt-info {
-        height: 1;
-        width: 1fr;
-        margin: 0;
-    }
-    #prompt-model {
-        width: auto;
-        height: 1;
-        padding: 0 1;
-        margin: 0 1 0 0;
-        color: $text;
-        background: $primary 10%;
-    }
-    #prompt-path {
-        width: 1fr;
-        height: 1;
-        color: $text-muted;
-        text-wrap: nowrap;
-        text-overflow: ellipsis;
-    }
-    #prompt-mode {
-        width: auto;
-        height: 1;
-        dock: right;
-        padding: 0 1;
-        color: $text-muted;
-    }
     """
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="prompt-container"):
             yield Static("❯", id="prompt-mark", markup=False)
             yield Composer()
-        with Horizontal(id="prompt-info"):
-            yield Static("", id="prompt-model", markup=False)
-            yield Static("", id="prompt-path", markup=False)
-            yield Static("", id="prompt-mode", markup=False)
-
-    def show_info(self, model: str, path: str, mode: str) -> None:
-        badge = self.query_one("#prompt-model", Static)
-        badge.update(model)
-        badge.display = bool(model)
-        self.query_one("#prompt-path", Static).update(path)
-        label = self.query_one("#prompt-mode", Static)
-        label.update(mode)
-        label.display = bool(mode)
 
     def set_multiline(self, multiline: bool) -> None:
         self.query_one("#prompt-mark", Static).update("☰" if multiline else "❯")

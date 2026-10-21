@@ -296,10 +296,8 @@ def test_status_bar_warns_when_an_mcp_server_is_unavailable(tmp_path):
             assert red == ["⚠ 1"]
             assert "caido" not in str(app.query_one("#banner").content)
             box = app.query_one("#prompt-container")
-            info = app.query_one("#prompt-info")
             status_bar = app.query_one("#status")
-            assert info.region.y == box.region.bottom
-            assert status_bar.region.y == info.region.bottom
+            assert status_bar.region.y == box.region.bottom + 1
             assert status_bar.region.bottom == app.size.height
             await pilot.press("ctrl+w")
             await pilot.pause()
