@@ -143,7 +143,7 @@ class TurnHeading(Vertical):
     """
 
     def __init__(self, number: int) -> None:
-        super().__init__()
+        super().__init__(classes="trace")
         self.number = number
 
     def compose(self) -> ComposeResult:

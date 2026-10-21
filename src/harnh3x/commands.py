@@ -38,7 +38,10 @@ COMMANDS: tuple[Command, ...] = (
         takes_argument=True,
         usage=EXPORT_USAGE,
     ),
-    Command("details", "hide or show thinking, tool, debug, and compaction boxes"),
+    Command(
+        "details",
+        "hide or show thinking, tool, debug, compaction, and turn headings",
+    ),
     Command("exit", "quit"),
 )
 

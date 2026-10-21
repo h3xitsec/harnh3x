@@ -26,7 +26,7 @@ Hotkeys
   @            in a coding session, pick a project file or folder
   Esc          close the @ list, or stop the running request
   Ctrl+N       new session
-  Ctrl+H       hide or show thinking, tool calls, debug, and compaction boxes
+  Ctrl+H       hide or show thinking, tools, debug, compaction, and turn headings
   Ctrl+W       open warning details
   Ctrl+Q       quit and stop the running request"""
 

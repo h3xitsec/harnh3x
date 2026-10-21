@@ -958,11 +958,12 @@ def test_drag_selection_keeps_the_panel_expanded():
     asyncio.run(drive())
 
 
-def test_ctrl_h_hides_thinking_tools_and_compaction():
+def test_ctrl_h_hides_thinking_tools_compaction_and_turn_headings():
     from textual.widgets import Static
 
     session = SimpleNamespace(workspace="ws", model="m", messages=[])
     app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+    heading = TurnHeading(1)
     thinking = Thinking("alpha\nbeta\ngamma\ndelta", hold=False)
     tools = ToolBox()
     tools.add("read_file", {"path": "a.txt"})
@@ -974,24 +975,30 @@ def test_ctrl_h_hides_thinking_tools_and_compaction():
     async def drive():
         async with app.run_test(size=(80, 24)) as pilot:
             transcript = app.query_one("#transcript")
-            transcript.mount(note, thinking, tools, compact, answer)
+            transcript.mount(note, heading, thinking, tools, compact, answer)
             await pilot.pause()
             assert thinking.display
+            assert heading.display
             await pilot.press("ctrl+h")
+            assert not heading.display
             assert not thinking.display
             assert not tools.display
             assert not compact.display
             assert note.display
             assert answer.display
             later = Thinking("one\ntwo\nthree\nfour", hold=False)
-            transcript.mount(later)
+            later_heading = TurnHeading(2)
+            transcript.mount(later_heading, later)
             await pilot.pause()
             assert not later.display
+            assert not later_heading.display
             await pilot.press("ctrl+h")
+            assert heading.display
             assert thinking.display
             assert tools.display
             assert compact.display
             assert later.display
+            assert later_heading.display
             assert note.display
             assert answer.display
 
