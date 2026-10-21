@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.7.0](https://github.com/h3xitsec/harnh3x/compare/harnh3x-v0.6.0...harnh3x-v0.7.0) (2026-10-21)
+
+
+### Features
+
+* ask to continue when the turn limit is reached ([0d0283d](https://github.com/h3xitsec/harnh3x/commit/0d0283d9fee6fe680fc05857b8d9ef1986dd1c90))
+* **cli:** ask for a model when the configured one is missing ([b91ab11](https://github.com/h3xitsec/harnh3x/commit/b91ab115ec1a076ca2f111565cfae727eb0d1696))
+* **cli:** start a coding session with --coding PATH ([b0c6739](https://github.com/h3xitsec/harnh3x/commit/b0c673948fcfd7680137eee3784eed5599856878))
+* **config:** set OpenAI and Anthropic credentials separately ([25f510d](https://github.com/h3xitsec/harnh3x/commit/25f510d9e46935b5d3f45b0726fd576a4137b996))
+* label each model round in the transcript ([79c675e](https://github.com/h3xitsec/harnh3x/commit/79c675ede431115f3bb205b79daf96987b83c024))
+* **sandbox:** run sandboxed shell and Python on Linux ([84227bd](https://github.com/h3xitsec/harnh3x/commit/84227bd5a2d100476ac1158e9a65dccada01d683))
+* **skills:** load your own skills from ~/.harnh3x/skills ([0cfcddc](https://github.com/h3xitsec/harnh3x/commit/0cfcddc840df906b2d12a5ba2628ed58b149040d))
+* **tools:** find files and text with glob and grep ([fa7328b](https://github.com/h3xitsec/harnh3x/commit/fa7328b385bf3acd014d3b9f99726ee279acf7c5))
+* **tools:** outline Python classes and functions with line spans ([0ede2d5](https://github.com/h3xitsec/harnh3x/commit/0ede2d5856e9a710d870d3ea6876c99dcce2436c))
+* **tui:** close status bar boxes by clicking outside them ([191772b](https://github.com/h3xitsec/harnh3x/commit/191772b486f9f341591c6145e7df0d87581276eb))
+* **tui:** list loaded skills and their tools from the status bar ([7ef4b55](https://github.com/h3xitsec/harnh3x/commit/7ef4b554eefdad474ce4508f0748f750c3fd55d3))
+* **tui:** pick a project file or folder with @ ([bf7f06b](https://github.com/h3xitsec/harnh3x/commit/bf7f06b52cfe407344591624978e2a3184ad5d2a))
+* **tui:** show the status bar as compact badges that fit narrow terminals ([964e7df](https://github.com/h3xitsec/harnh3x/commit/964e7df6f6d6f5b6d972d19fa44ac25254eae82d))
+* **tui:** switch models by clicking the model name in the status bar ([9a044a6](https://github.com/h3xitsec/harnh3x/commit/9a044a6829fec1f6f3f622a59e407b20b8e40a5e))
+
+
+### Documentation
+
+* use a placeholder model name in the example config ([4c6c189](https://github.com/h3xitsec/harnh3x/commit/4c6c1898b7d2b6dfbd3f506c2d1fe97a12c0bb7b))
+
 ## [0.6.0](https://github.com/h3xitsec/harnh3x/compare/harnh3x-v0.5.1...harnh3x-v0.6.0) (2026-10-17)
 
 
