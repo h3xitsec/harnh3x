@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.8.0](https://github.com/h3xitsec/harnh3x/compare/harnh3x-v0.7.0...harnh3x-v0.8.0) (2026-10-22)
+
+
+### Features
+
+* **agent:** cache Claude prompts between requests ([52ed779](https://github.com/h3xitsec/harnh3x/commit/52ed779776ce01fa2a1becef606dca2ea5b91010))
+* explore the codebase with a read-only subagent ([7a24676](https://github.com/h3xitsec/harnh3x/commit/7a246768a88242e7105b9e7d2659e2e3a730281c))
+* **tui:** show prompt cache use in the status bar ([c5b443b](https://github.com/h3xitsec/harnh3x/commit/c5b443bd252db407e38b25c9f5c90c2f3a4e79f4))
+* **tui:** use the Dracula palette and a bordered prompt ([f6edc39](https://github.com/h3xitsec/harnh3x/commit/f6edc392f1fb61cab6fdf67e6ad879642d656678))
+
+
+### Bug Fixes
+
+* **tui:** hide turn headings with the rest of the trace ([2be2426](https://github.com/h3xitsec/harnh3x/commit/2be24265f0e03afdc8297a41a21808e88b8351e2))
+* **tui:** show the model and workspace only once ([13e59e0](https://github.com/h3xitsec/harnh3x/commit/13e59e083b8613fcc7f884b7e4baa3eeebcef3c3))
+
+
+### Performance Improvements
+
+* **prompt:** keep the system prompt cacheable when a skill loads ([b7c2b38](https://github.com/h3xitsec/harnh3x/commit/b7c2b38e47a9ce878cdcc4ec20b4aaf338ef891b))
+
 ## [0.7.0](https://github.com/h3xitsec/harnh3x/compare/harnh3x-v0.6.0...harnh3x-v0.7.0) (2026-10-21)
 
 
