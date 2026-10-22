@@ -166,7 +166,8 @@ def test_system_prompt_includes_date_listing_and_memory_index(tmp_path):
     now = datetime(2026, 10, 6, 16, 30, tzinfo=UTC)
 
     empty = system_prompt(tmp_path, "MENU", now=now)
-    assert "Today is Tuesday, October 06, 2026, 16:30 UTC." in empty
+    assert "Today is Tuesday, October 06, 2026." in empty
+    assert "16:30" not in empty
     assert f"Your workspace is {tmp_path}." in empty
     assert "The workspace is empty." in empty
     assert "No saved memories yet." in empty

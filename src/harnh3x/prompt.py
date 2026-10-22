@@ -66,7 +66,8 @@ def system_prompt(
     coding: bool = False,
 ) -> str:
     moment = now or datetime.now().astimezone()
-    today = moment.strftime("%A, %B %d, %Y, %H:%M %Z").rstrip()
+    # No time of day: the prompt is a cached prefix and is rebuilt on skill loads.
+    today = moment.strftime("%A, %B %d, %Y")
     note = f"\n{yolo_note(project)}\n" if yolo else ""
     rules_block = f"{rules}\n" if rules else ""
     if project is None:
