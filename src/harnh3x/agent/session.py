@@ -5,7 +5,11 @@ from collections.abc import Callable
 from pathlib import Path
 
 from harnh3x import config
-from harnh3x.agent.client import _stored_context_tokens
+from harnh3x.agent.client import (
+    CacheRound,
+    _stored_cache_rounds,
+    _stored_context_tokens,
+)
 from harnh3x.agent.transcript import (
     _bind_project,
     _expand,
@@ -48,6 +52,7 @@ class Session:
         self.applied_rules: set[str] = set()
         self.context_tokens: int | None = None
         self.context_limit: int | None = None
+        self.cache_rounds: list[CacheRound] = []
         self.on_compact: Callable[[str], None] | None = None
         self.on_tool_done: Callable[[str, str], None] | None = None
         self.on_model_turn: Callable[[int], None] | None = None
@@ -92,6 +97,7 @@ class Session:
         self.skills = self._skills()
         self.applied_rules = set()
         self.context_tokens = None
+        self.cache_rounds = []
         self._debug_system = None
         self.abort.clear()
         self.messages = [self._system_message()]
@@ -109,6 +115,7 @@ class Session:
         self.messages = data["messages"]
         self.context_tokens = _stored_context_tokens(data)
         self.context_limit = None
+        self.cache_rounds = _stored_cache_rounds(data)
         self.skills.close()
         self.skills = self._skills()
         self.applied_rules = set()

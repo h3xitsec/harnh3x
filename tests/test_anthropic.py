@@ -299,6 +299,7 @@ def test_stream_turn_marks_the_system_and_the_last_two_user_messages():
     assert messages[3] == {"role": "user", "content": "second"}
     assert message.content == "ok"
     assert response.usage.total_tokens == 7 + 100 + 20 + 3
+    assert response.usage.prompt_tokens == 7 + 100 + 20
     assert response.usage.cache_read_tokens == 100
     assert response.usage.cache_write_tokens == 20
 
@@ -313,6 +314,9 @@ def test_run_counts_cached_tokens_and_logs_them(tmp_path, monkeypatch):
 
     assert agent.run("hi", session, client=_anthropic_client(stream)) == "done"
     assert session.context_tokens == 7 + 900 + 50 + 3
+    assert session.cache_rounds == [
+        agent.CacheRound(read=900, write=50, reusable=None, prompt=7 + 900 + 50)
+    ]
     model = [
         json.loads(line)
         for line in (tmp_path / "session.log").read_text(encoding="utf-8").splitlines()

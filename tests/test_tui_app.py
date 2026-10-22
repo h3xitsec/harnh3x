@@ -12,6 +12,7 @@ from harnh3x import __version__, agent
 from harnh3x.tui import (
     EXPORT_USAGE,
     AgentAnswer,
+    CacheScreen,
     Composer,
     ContinueScreen,
     CopyAnswer,
@@ -1731,6 +1732,71 @@ def test_model_turns_head_each_round():
             headings = list(app.query(TurnHeading))
             assert [heading.number for heading in headings] == [1, 2]
             assert all(list(heading.query(Rule)) for heading in headings)
+
+    asyncio.run(drive())
+
+
+def test_status_shows_cache_reads_from_each_model_round():
+    session = SimpleNamespace(
+        workspace="ws", model="m", messages=[], context_tokens=None, cache_rounds=[]
+    )
+    seen = threading.Event()
+
+    def fake_run(message, active, show_tools=True, on_tool=None):
+        active.on_model_turn(1)
+        active.context_tokens = 4000
+        active.cache_rounds.append(agent.CacheRound(3600, None, 3900, 7800))
+        active.on_model_turn(2)
+        seen.wait(5)
+        active.cache_rounds.append(agent.CacheRound(100, None, 4000, 4100))
+        return "done"
+
+    app = HarnessApp(session, fake_run, show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(100, 24)) as pilot:
+            assert not any(text.startswith("cache") for text in _status(app))
+            await pilot.press(*"go", "enter")
+            await _wait_for(pilot, lambda: "cache 3.6k 92%" in _status(app))
+            assert _status(app)[:3] == ["m", "ctx 4.0k", "cache 3.6k 92%"]
+            seen.set()
+            await _wait_for(pilot, lambda: "Agent: done" in app.transcript_plain())
+            assert "cache 100 2%" in _status(app)
+
+    asyncio.run(drive())
+
+
+def test_clicking_the_cache_badge_opens_cache_details():
+    session = SimpleNamespace(
+        workspace="ws",
+        model="m",
+        messages=[],
+        context_tokens=4000,
+        cache_rounds=[
+            agent.CacheRound(0, None, None, 1386),
+            agent.CacheRound(3600, None, 3900, 7800),
+        ],
+    )
+    app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(100, 24)) as pilot:
+            await _click_badge(pilot, app, "cache")
+            assert isinstance(app.screen, CacheScreen)
+            shown = str(app.screen.query_one("#cache-box").content)
+            assert shown.startswith("Last completion\n")
+            assert "Session (2 completions)" in shown
+            frame = app.screen.query_one("#cache-frame")
+            assert frame.border_title == "Prompt cache"
+            assert frame.border_subtitle == "Escape to close"
+            await pilot.press("escape")
+            await pilot.pause()
+            assert not isinstance(app.screen, CacheScreen)
+            await _click_badge(pilot, app, "cache")
+            await pilot.click(offset=(0, 0))
+            await pilot.pause()
+            assert not isinstance(app.screen, CacheScreen)
+            assert app.focused is app.query_one(Composer)
 
     asyncio.run(drive())
 

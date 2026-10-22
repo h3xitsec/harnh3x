@@ -1,7 +1,8 @@
-"""Modal overlays: the export path prompt, the max-turns prompt, the help box, the skill list, and warning details."""
+"""Modal overlays: the export path prompt, the max-turns prompt, the help box, the skill list, prompt-cache details, and warning details."""
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import ClassVar
@@ -13,8 +14,10 @@ from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Input, Static
 
+from harnh3x.agent import CacheRound
 from harnh3x.commands import help_lines
 from harnh3x.config import MAX_TURNS
+from harnh3x.tui.status import CACHE_LOW, cache_share
 
 _HOTKEYS = """\
 Hotkeys
@@ -197,6 +200,151 @@ def skills_text(entries: list[tuple[str, str, bool, tuple[str, ...]]]) -> str:
         return lines
 
     return "\n".join([*block("Loaded", True), "", *block("Not loaded", False)])
+
+
+_CACHE_HELP_INTRO = [
+    "How to read this",
+    "  Each request sends the whole conversation again, and the model",
+    "  reads all of it before it replies. The cache lets it skip the part",
+    "  it already read on the previous request, so the reply starts sooner.",
+    "",
+]
+_CACHE_TERMS = [
+    ("Prompt", ["everything sent on that request"]),
+    (
+        "Reusable",
+        [
+            "the part already read on the previous request;",
+            "only this can come from the cache",
+        ],
+    ),
+    ("Read from cache", ["the tokens the model skipped"]),
+    (
+        "Written to cache",
+        [
+            "tokens stored for the next request; writing costs",
+            "a little more than plain input, reading far less",
+        ],
+    ),
+    (
+        "% reused",
+        [
+            "read from cache / reusable. Near 100% is healthy,",
+            "and this is the number on the status bar badge",
+        ],
+    ),
+    (
+        "% from cache",
+        [
+            "read from cache / prompt. It drops after large tool",
+            "results, which are new text the model must read",
+        ],
+    ),
+    (
+        "Misses",
+        [
+            "requests that re-read most of what they could have",
+            "skipped. Expect one after a skill loads, after a",
+            "compaction, and on some models after a new message",
+        ],
+    ),
+]
+
+
+def _cache_terms(writes: bool) -> list[str]:
+    lines = []
+    for label, text in _CACHE_TERMS:
+        if label == "Written to cache" and not writes:
+            continue
+        lines.append(f"  {label:<18}{text[0]}")
+        lines += [f"  {'':<18}{more}" for more in text[1:]]
+    return lines
+
+
+def _percent(part: int, whole: int) -> str:
+    return f"{round(min(part / whole, 1.0) * 100)}%"
+
+
+def _cache_row(label: str, value: int, note: str = "") -> str:
+    return f"  {label:<17}{value:>9,}  {note}".rstrip()
+
+
+def cache_details(rounds: Sequence[CacheRound]) -> str:
+    """The last completion's prompt-cache numbers, then the session's totals."""
+    reported = [entry for entry in rounds if entry.read is not None]
+    if not reported:
+        return "No completion has reported cached tokens yet."
+    lines = ["Last completion"]
+    last = rounds[-1]
+    if last.read is None:
+        lines.append("  no cached count reported")
+    else:
+        lines.append(_cache_row("Read from cache", last.read))
+        if last.write is not None:
+            lines.append(_cache_row("Written to cache", last.write))
+        if last.reusable:
+            note = f"{_percent(last.read, last.reusable)} reused"
+            lines.append(_cache_row("Reusable", last.reusable, note))
+        if last.prompt:
+            note = f"{_percent(last.read, last.prompt)} from cache"
+            lines.append(_cache_row("Prompt", last.prompt, note))
+    count = len(reported)
+    title = f"Session ({count} completion{'' if count == 1 else 's'})"
+    if count < len(rounds):
+        title = f"Session ({count} of {len(rounds)} completions reported a count)"
+    read = sum(entry.read for entry in reported)
+    lines += ["", title, _cache_row("Read from cache", read)]
+    writes = [entry.write for entry in reported if entry.write is not None]
+    if writes:
+        lines.append(_cache_row("Written to cache", sum(writes)))
+    reuse = [entry for entry in reported if entry.reusable]
+    if reuse:
+        reusable = sum(entry.reusable for entry in reuse)
+        reused = sum(min(entry.read, entry.reusable) for entry in reuse)
+        lines.append(
+            _cache_row("Reusable", reusable, f"{_percent(reused, reusable)} reused")
+        )
+    prompted = [entry for entry in reported if entry.prompt]
+    if prompted:
+        prompt = sum(entry.prompt for entry in prompted)
+        cached = sum(entry.read for entry in prompted)
+        lines.append(
+            _cache_row("Prompt", prompt, f"{_percent(cached, prompt)} from cache")
+        )
+    if reuse:
+        misses = sum(
+            1 for entry in reuse if cache_share(entry.read, entry.reusable) < CACHE_LOW
+        )
+        lines.append(
+            _cache_row("Misses", misses, f"under {round(CACHE_LOW * 100)}% reused")
+        )
+    lines += ["", *_CACHE_HELP_INTRO, *_cache_terms(bool(writes))]
+    return "\n".join(lines)
+
+
+class CacheScreen(BackdropCloses, ModalScreen):
+    BINDINGS: ClassVar[list[Binding]] = [
+        Binding("escape", "close", "Close", priority=True),
+    ]
+    DEFAULT_CSS = _FRAME_CSS.format(
+        screen="CacheScreen", frame="cache-frame", border="$secondary"
+    )
+
+    def __init__(self, rounds: Sequence[CacheRound]) -> None:
+        super().__init__()
+        self.rounds = list(rounds)
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(id="cache-frame"):
+            yield Static(cache_details(self.rounds), id="cache-box", markup=False)
+
+    def on_mount(self) -> None:
+        frame = self.query_one("#cache-frame", VerticalScroll)
+        frame.border_title = "Prompt cache"
+        frame.border_subtitle = CLOSE_HINT
+
+    def action_close(self) -> None:
+        self.dismiss()
 
 
 class SkillsScreen(BackdropCloses, ModalScreen):

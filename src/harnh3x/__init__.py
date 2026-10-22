@@ -1,4 +1,5 @@
 from harnh3x.agent import (
+    CacheRound,
     Session,
     SessionInfo,
     assistant_message,
@@ -93,6 +94,7 @@ __all__ = [
     "TOOLS",
     "TRANSCRIPT_FILE",
     "WIKIPEDIA_LANG",
+    "CacheRound",
     "Command",
     "Session",
     "SessionInfo",

@@ -2,6 +2,7 @@ import json
 import re
 import urllib.error
 import urllib.request
+from typing import NamedTuple
 
 from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI
 
@@ -137,9 +138,48 @@ def _cache_stats(response) -> dict[str, int]:
     return stats
 
 
+class CacheRound(NamedTuple):
+    """One completion's prompt-cache numbers; None where the server sent none.
+
+    `reusable` is the previous completion's prompt plus reply, the most this
+    one could read back from the cache.
+    """
+
+    read: int | None
+    write: int | None
+    reusable: int | None
+    prompt: int | None
+
+
+def _stored_cache_rounds(data: dict) -> list[CacheRound]:
+    stored = data.get("cache_rounds")
+    if not isinstance(stored, list):
+        return []
+    rounds = []
+    for entry in stored:
+        if not isinstance(entry, dict):
+            continue
+        values = {name: entry.get(name) for name in CacheRound._fields}
+        if any(
+            value is not None and _count(value) is None for value in values.values()
+        ):
+            continue
+        rounds.append(CacheRound(**values))
+    return rounds
+
+
 def _remember_context(session, response, client) -> None:
     usage = getattr(response, "usage", None)
     total = _count(getattr(usage, "total_tokens", None))
+    stats = _cache_stats(response)
+    session.cache_rounds.append(
+        CacheRound(
+            read=stats.get("cache_read"),
+            write=stats.get("cache_write"),
+            reusable=_count(session.context_tokens),
+            prompt=_count(getattr(usage, "prompt_tokens", None)),
+        )
+    )
     if total is not None:
         session.context_tokens = total
     if session.context_limit is None:

@@ -452,8 +452,10 @@ def _usage_total(counts: dict[str, int]) -> SimpleNamespace | None:
     if not counts:
         return None
     # input_tokens leaves out the cached prefix, so the context size is the sum.
+    prompt = [counts[name] for name in _USAGE_FIELDS[:3] if name in counts]
     return SimpleNamespace(
         total_tokens=sum(counts.get(name, 0) for name in _USAGE_FIELDS),
+        prompt_tokens=sum(prompt) if prompt else None,
         cache_read_tokens=counts.get("cache_read_input_tokens"),
         cache_write_tokens=counts.get("cache_creation_input_tokens"),
     )

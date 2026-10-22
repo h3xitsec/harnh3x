@@ -214,6 +214,10 @@ def test_run_logs_cached_prompt_tokens(tmp_path, monkeypatch):
 
     assert agent.run("one", session, client=client) == "first"
     assert agent.run("two", session, client=client) == "second"
+    assert session.cache_rounds == [
+        agent.CacheRound(read=None, write=None, reusable=None, prompt=None),
+        agent.CacheRound(read=48, write=None, reusable=50, prompt=60),
+    ]
     assert session.context_tokens == 80
     events = [
         json.loads(line)

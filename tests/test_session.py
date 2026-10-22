@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from helpers import FILE_OPS_LOADED, _write_transcript
+from helpers import FILE_OPS_LOADED, _delta, _write_transcript
 
 from harnh3x import agent, config
 from harnh3x.config import TRANSCRIPT_FILE
@@ -416,6 +416,48 @@ def test_resume_restores_context_tokens(tmp_path):
 
     assert session.context_tokens == 4321
     assert session.context_limit is None
+
+
+def test_cache_rounds_are_saved_and_restored_on_resume(tmp_path):
+    def create(**kwargs):
+        usage = SimpleNamespace(
+            total_tokens=90,
+            prompt_tokens=80,
+            prompt_tokens_details=SimpleNamespace(cached_tokens=70),
+        )
+        return [_delta(content="ok"), SimpleNamespace(choices=[], usage=usage)]
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    past = tmp_path / "past"
+    session = agent.Session(workspace=past)
+    session.context_limit = 8192
+    session.context_tokens = 75
+
+    assert agent.run("hi", session, client=client) == "ok"
+    saved = json.loads((past / TRANSCRIPT_FILE).read_text(encoding="utf-8"))
+    assert saved["cache_rounds"] == [
+        {"read": 70, "write": None, "reusable": 75, "prompt": 80}
+    ]
+
+    saved["cache_rounds"] += [
+        {"read": "many", "write": None, "reusable": 1, "prompt": 2},
+        "junk",
+        {"read": 5},
+    ]
+    (past / TRANSCRIPT_FILE).write_text(json.dumps(saved), encoding="utf-8")
+    fresh = agent.Session(workspace=tmp_path / "current")
+    fresh.cache_rounds.append(agent.CacheRound(1, None, 1, 1))
+
+    fresh.resume(past)
+
+    assert fresh.cache_rounds == [
+        agent.CacheRound(read=70, write=None, reusable=75, prompt=80),
+        agent.CacheRound(read=5, write=None, reusable=None, prompt=None),
+    ]
+    fresh.reset()
+    assert fresh.cache_rounds == []
 
 
 def test_resume_rejects_a_broken_transcript(tmp_path):

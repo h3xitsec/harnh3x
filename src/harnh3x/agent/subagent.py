@@ -140,6 +140,7 @@ class _ChildSession:
         self.abort = parent.abort
         self.context_tokens = None
         self.context_limit = parent.context_limit
+        self.cache_rounds = []
         self.debug = False
         self.on_debug = None
         self._debug_system = None

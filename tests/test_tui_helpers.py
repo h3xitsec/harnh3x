@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 from helpers import _export_messages
 
-from harnh3x import is_failure_answer, matching_commands
+from harnh3x import CacheRound, is_failure_answer, matching_commands
 from harnh3x.tui import (
     MENTION_ROWS,
     Mention,
@@ -16,6 +16,8 @@ from harnh3x.tui import (
     StatusState,
     activity_text,
     build_segments,
+    cache_details,
+    cache_text,
     compact_count,
     context_level,
     context_text,
@@ -425,6 +427,87 @@ def test_context_badge_style_follows_the_compaction_level():
     assert style(100) == BADGE_STYLE
     assert style(450) == CONTEXT_STYLES["warn"]
     assert style(600) == CONTEXT_STYLES["over"]
+
+
+def test_cache_badge_compares_the_read_with_what_was_reusable():
+    assert cache_text(None, 4000) is None
+    assert cache_text(3600, 3900) == "cache 3.6k 92%"
+    assert cache_text(4588, 4369) == "cache 4.6k 100%"
+    assert cache_text(0, 3900) == "cache 0 0%"
+    assert cache_text(512, None) == "cache 512"
+    assert cache_text(0, 0) == "cache 0"
+
+    def cache(read, reusable):
+        state = StatusState(
+            model="m", used=10, cache_read=read, cache_reusable=reusable
+        )
+        return {segment.key: segment for segment in build_segments(state)}
+
+    assert "cache" not in cache(None, 4000)
+    hit = cache(3600, 3900)
+    assert list(hit) == ["model", "context", "cache"]
+    assert hit["cache"].style == BADGE_STYLE
+    assert hit["cache"].side == "left"
+    assert hit["cache"].action == "cache"
+    assert cache(1000, 3900)["cache"].style == CONTEXT_STYLES["warn"]
+    assert cache(512, None)["cache"].style == BADGE_STYLE
+
+
+def test_cache_details_show_the_last_completion_and_session_totals():
+    rounds = [
+        CacheRound(read=0, write=None, reusable=None, prompt=1386),
+        CacheRound(read=0, write=None, reusable=1520, prompt=2881),
+        CacheRound(read=3027, write=None, reusable=3027, prompt=4369),
+        CacheRound(read=4588, write=None, reusable=4588, prompt=10505),
+        CacheRound(read=2369, write=None, reusable=11260, prompt=11260),
+        CacheRound(read=11366, write=None, reusable=11366, prompt=12172),
+        CacheRound(read=12347, write=None, reusable=12347, prompt=16726),
+    ]
+
+    lines = [" ".join(line.split()) for line in cache_details(rounds).splitlines()]
+
+    assert lines[:4] == [
+        "Last completion",
+        "Read from cache 12,347",
+        "Reusable 12,347 100% reused",
+        "Prompt 16,726 74% from cache",
+    ]
+    assert lines[5:10] == [
+        "Session (7 completions)",
+        "Read from cache 33,697",
+        "Reusable 44,108 76% reused",
+        "Prompt 59,299 57% from cache",
+        "Misses 2 under 50% reused",
+    ]
+    assert "How to read this" in lines
+    terms = [line.split()[0] for line in lines[lines.index("How to read this") + 5 :]]
+    assert "Prompt" in terms and "Misses" in terms
+    assert "Written" not in terms
+
+
+def test_cache_details_cover_writes_and_missing_counts():
+    rounds = [
+        CacheRound(read=900, write=50, reusable=None, prompt=957),
+        CacheRound(read=None, write=None, reusable=960, prompt=None),
+    ]
+
+    lines = [" ".join(line.split()) for line in cache_details(rounds).splitlines()]
+
+    assert lines[:2] == ["Last completion", "no cached count reported"]
+    assert lines[3:7] == [
+        "Session (1 of 2 completions reported a count)",
+        "Read from cache 900",
+        "Written to cache 50",
+        "Prompt 957 94% from cache",
+    ]
+    assert not any(
+        line.startswith("Misses") and line.split()[1].isdigit() for line in lines
+    )
+    assert any(line.startswith("Written to cache tokens stored") for line in lines)
+    assert cache_details([]) == "No completion has reported cached tokens yet."
+    assert cache_details([CacheRound(None, None, None, None)]) == (
+        "No completion has reported cached tokens yet."
+    )
 
 
 def test_layout_segments_right_aligns_and_reports_hit_ranges():

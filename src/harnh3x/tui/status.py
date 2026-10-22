@@ -39,6 +39,8 @@ class StatusState:
     used: int | None = None
     limit: int | None = None
     compact_at: float = 0.0
+    cache_read: int | None = None
+    cache_reusable: int | None = None
     counts: tuple[int, int, int, int, int] | None = None
     warnings: tuple[tuple[str, str], ...] = ()
     yolo: bool = False
@@ -93,6 +95,36 @@ def _context(state: StatusState) -> Segment | None:
         return None
     level = context_level(state.used, state.limit, state.compact_at)
     return Segment("context", text, CONTEXT_STYLES[level], priority=80)
+
+
+CACHE_LOW = 0.5
+
+
+def cache_share(read: int | None, reusable: int | None) -> float | None:
+    """How much of the previous prompt and reply this completion read back."""
+    if read is None or not reusable:
+        return None
+    return min(read / reusable, 1.0)
+
+
+def cache_text(read: int | None, reusable: int | None) -> str | None:
+    if read is None:
+        return None
+    text = f"cache {compact_count(read)}"
+    share = cache_share(read, reusable)
+    if share is not None:
+        text += f" {round(share * 100)}%"
+    return text
+
+
+def _cache(state: StatusState) -> Segment | None:
+    text = cache_text(state.cache_read, state.cache_reusable)
+    if text is None:
+        return None
+    share = cache_share(state.cache_read, state.cache_reusable)
+    low = share is not None and share < CACHE_LOW
+    style = CONTEXT_STYLES["warn"] if low else BADGE_STYLE
+    return Segment("cache", text, style, priority=50, action="cache")
 
 
 def _yolo(state: StatusState) -> Segment | None:
@@ -154,6 +186,7 @@ def _version(state: StatusState) -> Segment | None:
 SEGMENT_BUILDERS: tuple[Callable[[StatusState], Segment | None], ...] = (
     _model,
     _context,
+    _cache,
     _yolo,
     _debug,
     _skills,

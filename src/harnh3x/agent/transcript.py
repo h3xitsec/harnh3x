@@ -190,6 +190,9 @@ def _save_transcript(session: Session) -> None:
     payload = {"model": session.model, "messages": session.messages}
     if _count(session.context_tokens) is not None:
         payload["context_tokens"] = session.context_tokens
+    rounds = getattr(session, "cache_rounds", None)
+    if rounds:
+        payload["cache_rounds"] = [entry._asdict() for entry in rounds]
     loaded = session.skills.loaded_names()
     if loaded:
         payload["skills"] = loaded

@@ -22,6 +22,7 @@ from textual.widgets import Static, TextArea
 
 from harnh3x import __version__
 from harnh3x.agent import (
+    CacheRound,
     compact_session,
     list_models,
     list_sessions,
@@ -50,6 +51,7 @@ from harnh3x.tui.mentions import (
     replace_mention_query,
 )
 from harnh3x.tui.modals import (
+    CacheScreen,
     ContinueScreen,
     ExportPathScreen,
     HelpScreen,
@@ -349,6 +351,12 @@ class HarnessApp(App):
                 found.append(item)
         return found
 
+    def _cache_rounds(self) -> list[CacheRound]:
+        rounds = getattr(self.session, "cache_rounds", None)
+        if not isinstance(rounds, list):
+            return []
+        return [entry for entry in rounds if isinstance(entry, CacheRound)]
+
     def _status_state(self) -> StatusState:
         def count(name: str) -> int | None:
             value = getattr(self.session, name, None)
@@ -357,11 +365,15 @@ class HarnessApp(App):
             return value
 
         model = getattr(self.session, "model", None)
+        rounds = self._cache_rounds()
+        last = rounds[-1] if rounds else None
         return StatusState(
             model=model if isinstance(model, str) and model else None,
             used=count("context_tokens"),
             limit=count("context_limit"),
             compact_at=COMPACT_AT,
+            cache_read=None if last is None else last.read,
+            cache_reusable=None if last is None else last.reusable,
             counts=self._available_counts(),
             warnings=tuple(self._warnings()),
             yolo=self._yolo(),
@@ -711,6 +723,12 @@ class HarnessApp(App):
         if not warnings or len(self.screen_stack) > 1:
             return
         self.push_screen(WarningScreen(warnings))
+
+    def action_cache(self) -> None:
+        rounds = self._cache_rounds()
+        if not rounds or len(self.screen_stack) > 1:
+            return
+        self.push_screen(CacheScreen(rounds))
 
     def action_skills(self) -> None:
         skills = getattr(self.session, "skills", None)
@@ -1071,6 +1089,7 @@ class HarnessApp(App):
         self.tools = None
         self._subagent = None
         self.query_one("#transcript").mount(TurnHeading(number))
+        self._refresh_status()
 
     def _queue_debug(self, system: str | None, request: str) -> None:
         self._from_thread(self._show_debug, system, request)
