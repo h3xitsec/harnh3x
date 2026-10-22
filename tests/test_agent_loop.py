@@ -185,6 +185,46 @@ def test_run_streams_deltas_into_one_message(tmp_path, monkeypatch):
     assert assistant["reasoning"] == "need the file"
 
 
+def test_run_logs_cached_prompt_tokens(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        agent_client, "model_context_limit", lambda model, client=None: None
+    )
+    replies = [
+        [_delta(content="first"), _usage_chunk(50)],
+        [
+            _delta(content="second"),
+            SimpleNamespace(
+                choices=[],
+                usage=SimpleNamespace(
+                    total_tokens=80,
+                    prompt_tokens=60,
+                    prompt_tokens_details=SimpleNamespace(cached_tokens=48),
+                ),
+            ),
+        ],
+    ]
+
+    def create(**kwargs):
+        return replies.pop(0)
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    session = agent.Session(workspace=tmp_path)
+
+    assert agent.run("one", session, client=client) == "first"
+    assert agent.run("two", session, client=client) == "second"
+    assert session.context_tokens == 80
+    events = [
+        json.loads(line)
+        for line in (tmp_path / "session.log").read_text(encoding="utf-8").splitlines()
+    ]
+    model = [event for event in events if event["event"] == "model"]
+    assert "cache_read" not in model[0]
+    assert model[1]["cache_read"] == 48
+    assert "cache_write" not in model[1]
+
+
 def test_run_emits_a_whole_message_once(tmp_path, monkeypatch):
     monkeypatch.setattr(
         agent_client, "model_context_limit", lambda model, client=None: None

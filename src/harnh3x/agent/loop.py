@@ -4,7 +4,7 @@ from collections.abc import Callable
 from openai import APIConnectionError, APIStatusError, OpenAI
 
 import harnh3x.agent.client as api_client
-from harnh3x.agent.client import _api_failure, _remember_context
+from harnh3x.agent.client import _api_failure, _cache_stats, _remember_context
 from harnh3x.agent.compact import _compact
 from harnh3x.agent.complete import _completion, _emit_debug
 from harnh3x.agent.messages import _log_preview, _visible_answer, assistant_message
@@ -70,7 +70,12 @@ def _complete(
             session.messages.append(stored)
             _remember_context(session, usage, api)
             write_log(
-                {"event": "model", "turn": turn, "message": _log_preview(stored)},
+                {
+                    "event": "model",
+                    "turn": turn,
+                    "message": _log_preview(stored),
+                    **_cache_stats(usage),
+                },
                 session.workspace,
             )
             if not msg.tool_calls:

@@ -26,7 +26,7 @@ class AnthropicClient:
         self.sdk = sdk
 
     def stream_turn(self, session, *, model: str, messages: list, tools: list):
-        payload = _request(model, messages, tools)
+        payload = _request(model, messages, tools, cache=True)
 
         def run():
             return _assemble(_iter_events(self.sdk.messages.stream(**payload)), session)
@@ -111,11 +111,43 @@ def to_anthropic(messages: list, tools: list | None = None) -> dict:
     return payload
 
 
-def _request(model: str, messages: list, tools: list | None) -> dict:
+def _request(
+    model: str, messages: list, tools: list | None, *, cache: bool = False
+) -> dict:
     payload = to_anthropic(messages, tools)
+    if cache:
+        _mark_cache(payload)
     payload["model"] = model
     payload["max_tokens"] = config.MAX_TOKENS
     return payload
+
+
+_EPHEMERAL = {"type": "ephemeral"}
+
+
+def _mark_cache(payload: dict) -> None:
+    # The last user message writes the cache for the next call; the one
+    # before it is where the previous call wrote, so it always reads back
+    # even past the 20-block lookback.
+    system = payload.get("system")
+    if isinstance(system, str) and system:
+        payload["system"] = [
+            {"type": "text", "text": system, "cache_control": dict(_EPHEMERAL)}
+        ]
+    marked = 0
+    for message in reversed(payload.get("messages") or []):
+        if marked == 2:
+            break
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            content = [{"type": "text", "text": content}]
+            message["content"] = content
+        if not content:
+            continue
+        content[-1] = {**content[-1], "cache_control": dict(_EPHEMERAL)}
+        marked += 1
 
 
 def _append(pending: list[dict], role: str, blocks: list[dict]) -> None:
@@ -260,27 +292,17 @@ class _Slot:
 
 def _assemble(events, session) -> tuple[SimpleNamespace, SimpleNamespace | None] | None:
     slots: dict[int, _Slot] = {}
-    input_tokens = None
-    output_tokens = None
+    counts: dict[str, int] = {}
     for event in events:
         abort = getattr(session, "abort", None)
         if abort is not None and abort.is_set():
             return None
         kind = _field(event, "type")
         if kind == "message_start":
-            usage = _field(_field(event, "message"), "usage")
-            incoming = _count(_field(usage, "input_tokens"))
-            if incoming is not None:
-                input_tokens = incoming
+            _read_usage(counts, _field(_field(event, "message"), "usage"))
             continue
         if kind == "message_delta":
-            usage = _field(event, "usage")
-            incoming = _count(_field(usage, "input_tokens"))
-            outgoing = _count(_field(usage, "output_tokens"))
-            if incoming is not None:
-                input_tokens = incoming
-            if outgoing is not None:
-                output_tokens = outgoing
+            _read_usage(counts, _field(event, "usage"))
             continue
         if kind == "content_block_start":
             index = _index(event)
@@ -290,7 +312,7 @@ def _assemble(events, session) -> tuple[SimpleNamespace, SimpleNamespace | None]
             index = _index(event)
             slot = slots.setdefault(index, _Slot("text"))
             _apply_delta(slot, _field(event, "delta"), session)
-    return _draft(slots), _usage_total(input_tokens, output_tokens)
+    return _draft(slots), _usage_total(counts)
 
 
 def _start_slot(block, session) -> _Slot:
@@ -406,17 +428,35 @@ def _message_text(response) -> str:
 
 
 def _usage_namespace(response) -> SimpleNamespace | None:
-    usage = _field(response, "usage")
-    return _usage_total(
-        _count(_field(usage, "input_tokens")),
-        _count(_field(usage, "output_tokens")),
-    )
+    counts: dict[str, int] = {}
+    _read_usage(counts, _field(response, "usage"))
+    return _usage_total(counts)
 
 
-def _usage_total(incoming: int | None, outgoing: int | None) -> SimpleNamespace | None:
-    if incoming is None and outgoing is None:
+_USAGE_FIELDS = (
+    "input_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+    "output_tokens",
+)
+
+
+def _read_usage(counts: dict[str, int], usage) -> None:
+    for name in _USAGE_FIELDS:
+        value = _count(_field(usage, name))
+        if value is not None:
+            counts[name] = value
+
+
+def _usage_total(counts: dict[str, int]) -> SimpleNamespace | None:
+    if not counts:
         return None
-    return SimpleNamespace(total_tokens=(incoming or 0) + (outgoing or 0))
+    # input_tokens leaves out the cached prefix, so the context size is the sum.
+    return SimpleNamespace(
+        total_tokens=sum(counts.get(name, 0) for name in _USAGE_FIELDS),
+        cache_read_tokens=counts.get("cache_read_input_tokens"),
+        cache_write_tokens=counts.get("cache_creation_input_tokens"),
+    )
 
 
 def _notify(session, kind: str, text: str) -> None:

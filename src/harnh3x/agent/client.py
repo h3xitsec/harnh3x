@@ -122,6 +122,21 @@ def _stored_context_tokens(data: dict) -> int | None:
     return _count(data.get("context_tokens"))
 
 
+def _cache_stats(response) -> dict[str, int]:
+    usage = getattr(response, "usage", None)
+    stats = {}
+    read = _count(getattr(usage, "cache_read_tokens", None))
+    if read is None:
+        details = getattr(usage, "prompt_tokens_details", None)
+        read = _count(getattr(details, "cached_tokens", None))
+    if read is not None:
+        stats["cache_read"] = read
+    write = _count(getattr(usage, "cache_write_tokens", None))
+    if write is not None:
+        stats["cache_write"] = write
+    return stats
+
+
 def _remember_context(session, response, client) -> None:
     usage = getattr(response, "usage", None)
     total = _count(getattr(usage, "total_tokens", None))

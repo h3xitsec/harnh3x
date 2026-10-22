@@ -219,6 +219,109 @@ def test_run_streams_anthropic_thinking_and_replays_it(tmp_path, monkeypatch):
     assert assistant["content"][0]["thinking"] == "need the file"
 
 
+def _cached_start(read: int, write: int):
+    return SimpleNamespace(
+        type="message_start",
+        message=SimpleNamespace(
+            usage=SimpleNamespace(
+                input_tokens=7,
+                cache_read_input_tokens=read,
+                cache_creation_input_tokens=write,
+            )
+        ),
+    )
+
+
+def _text_events(text: str):
+    return [
+        SimpleNamespace(
+            type="content_block_delta",
+            index=0,
+            delta=SimpleNamespace(type="text_delta", text=text),
+        ),
+        SimpleNamespace(type="message_delta", usage=SimpleNamespace(output_tokens=3)),
+    ]
+
+
+def test_stream_turn_marks_the_system_and_the_last_two_user_messages():
+    seen = []
+
+    def stream(**kwargs):
+        seen.append(kwargs)
+        return [_cached_start(100, 20), *_text_events("ok")]
+
+    messages = [
+        {"role": "system", "content": "be brief"},
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": "answer"},
+        {"role": "user", "content": "second"},
+        {
+            "role": "assistant",
+            "content": "",
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "hmm", "signature": "sig"}
+            ],
+            "tool_calls": [
+                {
+                    "id": "toolu_1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": "{}"},
+                },
+                {
+                    "id": "toolu_2",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": "{}"},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "toolu_1", "content": "one"},
+        {"role": "tool", "tool_call_id": "toolu_2", "content": "two"},
+    ]
+
+    message, response = _anthropic_client(stream).stream_turn(
+        SimpleNamespace(), model="claude", messages=messages, tools=[]
+    )
+
+    payload = seen[0]
+    assert payload["system"] == [
+        {"type": "text", "text": "be brief", "cache_control": {"type": "ephemeral"}}
+    ]
+    first, answer, second, calls, results = payload["messages"]
+    assert first == {"role": "user", "content": "first"}
+    assert "cache_control" not in json.dumps(answer)
+    assert "cache_control" not in json.dumps(calls)
+    assert second["content"] == [
+        {"type": "text", "text": "second", "cache_control": {"type": "ephemeral"}}
+    ]
+    assert "cache_control" not in results["content"][0]
+    assert results["content"][1]["type"] == "tool_result"
+    assert results["content"][1]["cache_control"] == {"type": "ephemeral"}
+    assert messages[3] == {"role": "user", "content": "second"}
+    assert message.content == "ok"
+    assert response.usage.total_tokens == 7 + 100 + 20 + 3
+    assert response.usage.cache_read_tokens == 100
+    assert response.usage.cache_write_tokens == 20
+
+
+def test_run_counts_cached_tokens_and_logs_them(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "CONTEXT_LIMIT", None)
+
+    def stream(**kwargs):
+        return [_cached_start(900, 50), *_text_events("done")]
+
+    session = agent.Session(workspace=tmp_path)
+
+    assert agent.run("hi", session, client=_anthropic_client(stream)) == "done"
+    assert session.context_tokens == 7 + 900 + 50 + 3
+    model = [
+        json.loads(line)
+        for line in (tmp_path / "session.log").read_text(encoding="utf-8").splitlines()
+        if json.loads(line)["event"] == "model"
+    ]
+    assert model[0]["cache_read"] == 900
+    assert model[0]["cache_write"] == 50
+
+
 def test_run_reports_an_anthropic_rejection(tmp_path):
     notice = (
         "Your credit balance is too low to access the Anthropic API. "
@@ -397,6 +500,7 @@ def test_compact_session_uses_the_messages_api(tmp_path, monkeypatch):
     assert seen[0]["max_tokens"] == 512
     assert seen[0]["model"] == "claude"
     assert seen[0]["system"].startswith("Summarize")
+    assert "cache_control" not in json.dumps(seen[0])
     assert "tools" not in seen[0]
     assert all(message["role"] != "system" for message in seen[0]["messages"])
     assert session.context_tokens == session.messages[1]["context_after"]
