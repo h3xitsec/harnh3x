@@ -453,7 +453,7 @@ def test_cache_badge_compares_the_read_with_what_was_reusable():
     assert cache(512, None)["cache"].style == BADGE_STYLE
 
 
-def test_cache_details_show_the_last_completion_and_session_totals():
+def test_cache_details_show_the_last_request_and_session_reuse():
     rounds = [
         CacheRound(read=0, write=None, reusable=None, prompt=1386),
         CacheRound(read=0, write=None, reusable=1520, prompt=2881),
@@ -467,22 +467,19 @@ def test_cache_details_show_the_last_completion_and_session_totals():
     lines = [" ".join(line.split()) for line in cache_details(rounds).splitlines()]
 
     assert lines[:4] == [
-        "Last completion",
+        "Last request",
         "Read from cache 12,347",
         "Reusable 12,347 100% reused",
         "Prompt 16,726 74% from cache",
     ]
-    assert lines[5:10] == [
-        "Session (7 completions)",
-        "Read from cache 33,697",
-        "Reusable 44,108 76% reused",
-        "Prompt 59,299 57% from cache",
+
+    assert lines[5:8] == [
+        "This session",
+        "Reused 76% across 6 requests that had a prefix",
         "Misses 2 under 50% reused",
     ]
-    assert "How to read this" in lines
-    terms = [line.split()[0] for line in lines[lines.index("How to read this") + 5 :]]
-    assert "Prompt" in terms and "Misses" in terms
-    assert "Written" not in terms
+    assert "Read from cache 33,697" not in lines
+    assert "Prompt 59,299" not in lines
 
 
 def test_cache_details_cover_writes_and_missing_counts():
@@ -492,18 +489,24 @@ def test_cache_details_cover_writes_and_missing_counts():
     ]
 
     lines = [" ".join(line.split()) for line in cache_details(rounds).splitlines()]
-
-    assert lines[:2] == ["Last completion", "no cached count reported"]
-    assert lines[3:7] == [
-        "Session (1 of 2 completions reported a count)",
-        "Read from cache 900",
-        "Written to cache 50",
-        "Prompt 957 94% from cache",
-    ]
+    assert lines[:2] == ["Last request", "no cached count reported"]
+    assert "This session" not in lines
+    assert "Written" not in " ".join(lines)
     assert not any(
         line.startswith("Misses") and line.split()[1].isdigit() for line in lines
     )
-    assert any(line.startswith("Written to cache tokens stored") for line in lines)
+    written = [
+        " ".join(line.split())
+        for line in cache_details(
+            [
+                CacheRound(read=100, write=40, reusable=None, prompt=200),
+                CacheRound(read=180, write=20, reusable=200, prompt=220),
+            ]
+        ).splitlines()
+    ]
+    assert "Written to cache 20" in written
+    assert "Written to cache 40" not in written
+    assert "Reused 90% across 1 request that had a prefix" in written
     assert cache_details([]) == "No completion has reported cached tokens yet."
     assert cache_details([CacheRound(None, None, None, None)]) == (
         "No completion has reported cached tokens yet."

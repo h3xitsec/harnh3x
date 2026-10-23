@@ -1805,8 +1805,8 @@ def test_clicking_the_cache_badge_opens_cache_details():
             await _click_badge(pilot, app, "cache")
             assert isinstance(app.screen, CacheScreen)
             shown = str(app.screen.query_one("#cache-box").content)
-            assert shown.startswith("Last completion\n")
-            assert "Session (2 completions)" in shown
+            assert shown.startswith("Last request\n")
+            assert "across 1 request that had a prefix" in shown
             frame = app.screen.query_one("#cache-frame")
             assert frame.border_title == "Prompt cache"
             assert frame.border_subtitle == "Escape to close"
