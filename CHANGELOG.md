@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.0](https://github.com/h3xitsec/harnh3x/compare/harnh3x-v0.8.0...harnh3x-v0.9.0) (2026-10-23)
+
+
+### Features
+
+* **tui:** copy the workspace path from the header ([6403ea9](https://github.com/h3xitsec/harnh3x/commit/6403ea9561a65b821a8efd84e042a837e1ce5c37))
+* **tui:** show session cache reuse instead of summed prompts ([d854ee7](https://github.com/h3xitsec/harnh3x/commit/d854ee73f7c7a0d1091f69269e7e5f08b694593d))
+
 ## [0.8.0](https://github.com/h3xitsec/harnh3x/compare/harnh3x-v0.7.0...harnh3x-v0.8.0) (2026-10-22)
 
 
