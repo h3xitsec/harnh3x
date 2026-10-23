@@ -4,7 +4,7 @@ import asyncio
 import threading
 from types import SimpleNamespace
 
-from helpers import _export_messages, _past_workspace, _write_transcript
+from helpers import _banner_text, _export_messages, _past_workspace, _write_transcript
 from textual import events
 from textual.widgets import Rule
 
@@ -16,6 +16,7 @@ from harnh3x.tui import (
     Composer,
     ContinueScreen,
     CopyAnswer,
+    CopyWorkspace,
     DebugBox,
     ExportAnswer,
     ExportPathScreen,
@@ -150,7 +151,7 @@ def test_banner_shows_context_and_updates_after_a_turn():
 
     async def drive():
         async with app.run_test(size=(80, 24)) as pilot:
-            banner = str(app.query_one("#banner").content)
+            banner = _banner_text(app)
             assert "🤖 Harnh3x" in banner
             assert __version__ not in banner
             bar = app.query_one("#status", StatusBar)
@@ -164,11 +165,31 @@ def test_banner_shows_context_and_updates_after_a_turn():
             assert _status(app) == ["m", "ctx 1.2k/8.2k 15%", __version__]
             await pilot.press(*"hi", "enter")
             await _wait_for(pilot, lambda: "Agent: done" in app.transcript_plain())
-            banner = str(app.query_one("#banner").content)
+            banner = _banner_text(app)
             assert "Context:" not in banner
             assert _status(app) == ["m", "ctx 5.0k/8.2k 61%", __version__]
             assert "Shift+Enter" not in banner
             assert "/resume" not in banner
+
+    asyncio.run(drive())
+
+
+def test_workspace_copy_icon_copies_the_path():
+    session = SimpleNamespace(workspace="ws", model="m", messages=[])
+    app = HarnessApp(session, lambda *args, **kwargs: "", show_tools=True)
+    toasts = _record_toasts(app)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            path = app.query_one("#workspace-path")
+            copy = app.query_one(CopyWorkspace)
+            assert str(copy.content) == "⧉"
+            assert copy.region.y == path.region.y
+            assert copy.region.x == path.region.right
+            await pilot.click(copy)
+            await pilot.pause()
+            assert app.clipboard == "ws"
+            assert toasts == [("Copied to the clipboard.", "information")]
 
     asyncio.run(drive())
 
@@ -477,7 +498,7 @@ def test_debug_panels_collapse_and_hide():
 
     async def drive():
         async with app.run_test(size=(80, 24)) as pilot:
-            banner = str(app.query_one("#banner").content)
+            banner = _banner_text(app)
             assert "\nDebug\n" not in banner
             assert _status(app) == ["m", "DEBUG", __version__]
             assert _status_styles(app)["debug"] == DEBUG_STYLE
@@ -527,8 +548,8 @@ def test_debug_banner_stays_after_a_new_session(tmp_path, monkeypatch):
                 f"tools {tools}",
                 __version__,
             ]
-            assert "\nDebug\n" not in str(app.query_one("#banner").content)
-            assert "Model:" not in str(app.query_one("#banner").content)
+            assert "\nDebug\n" not in _banner_text(app)
+            assert "Model:" not in _banner_text(app)
             assert _status(app) == expected
             await pilot.press("ctrl+n")
             skills, tools, _custom, _servers, _mcp_tools = (
@@ -541,7 +562,7 @@ def test_debug_banner_stays_after_a_new_session(tmp_path, monkeypatch):
                 f"tools {tools}",
                 __version__,
             ]
-            assert "\nDebug\n" not in str(app.query_one("#banner").content)
+            assert "\nDebug\n" not in _banner_text(app)
             assert _status(app) == expected
             assert session.debug is True
 
@@ -569,7 +590,7 @@ def test_prompt_box_follows_the_toad_editor(tmp_path):
             assert not app.query("#prompt-path")
             assert not app.query("#prompt-mode")
             assert _status(app).count("demo-model") == 1
-            banner = str(app.query_one("#banner").content)
+            banner = _banner_text(app)
             assert str(project) in banner
             assert "Coding" in banner
             await pilot.press("a", "shift+enter", "b")
@@ -613,7 +634,7 @@ def test_yolo_banner_stays_after_a_new_session(tmp_path, monkeypatch):
 
     async def drive():
         async with plain_app.run_test(size=(80, 24)) as pilot:
-            assert "YOLO" not in str(plain_app.query_one("#banner").content)
+            assert "YOLO" not in _banner_text(plain_app)
             skills, tools, _custom, _servers, _mcp_tools = (
                 plain.skills.available_counts()
             )
@@ -628,7 +649,7 @@ def test_yolo_banner_stays_after_a_new_session(tmp_path, monkeypatch):
             assert status_bar.region.y == box.region.bottom + 1
             assert status_bar.region.bottom == plain_app.size.height
         async with app.run_test(size=(80, 24)) as pilot:
-            assert "YOLO" not in str(app.query_one("#banner").content)
+            assert "YOLO" not in _banner_text(app)
             skills, tools, _custom, _servers, _mcp_tools = (
                 session.skills.available_counts()
             )
@@ -648,7 +669,7 @@ def test_yolo_banner_stays_after_a_new_session(tmp_path, monkeypatch):
             assert status_bar.region.y == box.region.bottom + 1
             assert status_bar.region.bottom == app.size.height
             await pilot.press("ctrl+n")
-            assert "YOLO" not in str(app.query_one("#banner").content)
+            assert "YOLO" not in _banner_text(app)
             skills, tools, _custom, _servers, _mcp_tools = (
                 session.skills.available_counts()
             )
@@ -678,12 +699,12 @@ def test_coding_banner_stays_after_a_new_session(tmp_path, monkeypatch):
 
     async def drive():
         async with app.run_test(size=(80, 24)) as pilot:
-            banner = str(app.query_one("#banner").content)
+            banner = _banner_text(app)
             project_line = f"Project: {project.resolve()}"
             assert project_line in banner
             assert banner.index(project_line) < banner.index("Coding")
             await pilot.press("ctrl+n")
-            banner = str(app.query_one("#banner").content)
+            banner = _banner_text(app)
             assert "Coding" in banner
             assert session.coding is True
 
@@ -718,7 +739,7 @@ def test_ctrl_n_starts_a_new_session(tmp_path, monkeypatch):
             assert "You: hello" in app.transcript_plain()
             assert session.messages[-1]["content"] == "hello"
             assert session.workspace == previous
-            assert f"Workspace: {previous}" in str(app.query_one("#banner").content)
+            assert f"Workspace: {previous}" in _banner_text(app)
             app.query_one("#composer").disabled = False
             app.query_one("#composer").load_text("draft")
             await pilot.press("ctrl+n")
@@ -726,7 +747,7 @@ def test_ctrl_n_starts_a_new_session(tmp_path, monkeypatch):
             assert app.query_one("#composer").text == ""
             assert session.workspace != previous
             assert [message["role"] for message in session.messages] == ["system"]
-            banner = str(app.query_one("#banner").content)
+            banner = _banner_text(app)
             assert f"Workspace: {session.workspace}" in banner
             assert f"Workspace: {previous}" not in banner
             await pilot.press(*"next", "enter")
@@ -811,7 +832,7 @@ def test_resume_restores_the_transcript(tmp_path, monkeypatch):
             assert "alpha" not in thinking.plain
             assert "delta" in thinking.plain
             assert app.query_one("MarkdownH3")
-            banner = str(app.query_one("#banner").content)
+            banner = _banner_text(app)
             assert f"Workspace: {past.resolve()}" in banner
             assert "Model:" not in banner
             assert _status(app)[0] == "saved-model"
@@ -2231,9 +2252,7 @@ def test_new_command_starts_a_new_session(tmp_path, monkeypatch):
             await _wait_for(pilot, lambda: session.workspace != previous)
             await pilot.pause()
             assert app.transcript_plain() == ""
-            assert f"Workspace: {session.workspace}" in str(
-                app.query_one("#banner").content
-            )
+            assert f"Workspace: {session.workspace}" in _banner_text(app)
 
     asyncio.run(drive())
 

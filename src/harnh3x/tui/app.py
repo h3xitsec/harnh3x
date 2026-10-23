@@ -12,7 +12,7 @@ from typing import ClassVar
 from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import VerticalGroup, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalGroup, VerticalScroll
 from textual.content import Content
 from textual.geometry import Offset
 from textual.screen import Screen
@@ -61,6 +61,7 @@ from harnh3x.tui.modals import (
 from harnh3x.tui.panels import (
     AgentAnswer,
     Composer,
+    CopyWorkspace,
     DebugBox,
     PromptBox,
     SubagentBox,
@@ -150,6 +151,18 @@ class HarnessApp(App):
         padding: 0 1;
         border-bottom: solid $secondary;
     }
+    #workspace-row {
+        height: 1;
+        width: 1fr;
+    }
+    #workspace-path {
+        width: auto;
+        height: 1;
+    }
+    #banner-title, #banner-project, #banner-coding {
+        height: 1;
+        width: 1fr;
+    }
     #transcript {
         height: 1fr;
         padding: 1;
@@ -174,7 +187,8 @@ class HarnessApp(App):
         padding: 0 1;
         color: $text-muted;
     }
-    #activity.hidden, #mention-menu.hidden, #slash-hint.hidden {
+    #activity.hidden, #mention-menu.hidden, #slash-hint.hidden,
+    #banner-project.hidden, #banner-coding.hidden {
         display: none;
     }
     .panel {
@@ -307,18 +321,6 @@ class HarnessApp(App):
     def _yolo(self) -> bool:
         return bool(getattr(self.session, "yolo", False))
 
-    def _banner(self) -> Content:
-        lines = []
-        if self.review is None:
-            lines.append("🤖 Harnh3x")
-        lines.append(f"Workspace: {self.session.workspace}")
-        project = getattr(self.session, "project", None)
-        if project:
-            lines.append(f"Project: {project}")
-        if getattr(self.session, "coding", False):
-            lines.append("Coding")
-        return Content("\n".join(lines))
-
     def _available_counts(self) -> tuple[int, int, int, int, int] | None:
         skills = getattr(self.session, "skills", None)
         counts = getattr(skills, "available_counts", None)
@@ -382,7 +384,21 @@ class HarnessApp(App):
         )
 
     def _refresh_banner(self) -> None:
-        self.query_one("#banner", Static).update(self._banner())
+        self.query_one("#workspace-path", Static).update(
+            f"Workspace: {self.session.workspace}"
+        )
+        project = getattr(self.session, "project", None)
+        project_line = self.query_one("#banner-project", Static)
+        if project:
+            project_line.update(f"Project: {project}")
+            project_line.remove_class("hidden")
+        else:
+            project_line.add_class("hidden")
+        coding = self.query_one("#banner-coding", Static)
+        if getattr(self.session, "coding", False):
+            coding.remove_class("hidden")
+        else:
+            coding.add_class("hidden")
         self._refresh_status()
 
     def _refresh_status(self) -> None:
@@ -413,7 +429,29 @@ class HarnessApp(App):
         return HarnessScreen(id="_default")
 
     def compose(self) -> ComposeResult:
-        yield Static(self._banner(), id="banner", markup=False)
+        project = getattr(self.session, "project", None)
+        with Vertical(id="banner"):
+            if self.review is None:
+                yield Static("🤖 Harnh3x", id="banner-title", markup=False)
+            with Horizontal(id="workspace-row"):
+                yield Static(
+                    f"Workspace: {self.session.workspace}",
+                    id="workspace-path",
+                    markup=False,
+                )
+                yield CopyWorkspace()
+            yield Static(
+                f"Project: {project}" if project else "",
+                id="banner-project",
+                classes=None if project else "hidden",
+                markup=False,
+            )
+            yield Static(
+                "Coding",
+                id="banner-coding",
+                classes=None if getattr(self.session, "coding", False) else "hidden",
+                markup=False,
+            )
         yield VerticalScroll(id="transcript")
         with VerticalGroup(id="bottom"):
             yield Static("", id="activity", classes="hidden", markup=False)

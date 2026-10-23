@@ -223,6 +223,27 @@ class CopyAnswer(AnswerIcon):
         self.app.notify("Copied to the clipboard.", timeout=2)
 
 
+class CopyWorkspace(AnswerIcon):
+    BINDINGS: ClassVar[list[Binding]] = [
+        Binding("enter", "copy", "Copy", priority=True),
+    ]
+
+    def __init__(self) -> None:
+        super().__init__("⧉", markup=False)
+        self.tooltip = "Copy workspace path"
+
+    def on_click(self, event: Click) -> None:
+        event.stop()
+        self._copy()
+
+    def action_copy(self) -> None:
+        self._copy()
+
+    def _copy(self) -> None:
+        copy_response(self.app, str(self.app.session.workspace))
+        self.app.notify("Copied to the clipboard.", timeout=2)
+
+
 class ExportAnswer(AnswerIcon):
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("enter", "export", "Export", priority=True),

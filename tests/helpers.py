@@ -11,6 +11,24 @@ from harnh3x import config
 from harnh3x.config import TRANSCRIPT_FILE
 
 
+def _banner_text(app) -> str:
+    """Header lines, skipping the copy control and hidden rows."""
+    lines = []
+    for widget_id in (
+        "#banner-title",
+        "#workspace-path",
+        "#banner-project",
+        "#banner-coding",
+    ):
+        found = list(app.query(widget_id))
+        if not found or "hidden" in found[0].classes:
+            continue
+        text = str(found[0].content)
+        if text:
+            lines.append(text)
+    return "\n".join(lines)
+
+
 def _delta(**fields):
     usage = fields.pop("usage", None)
     return SimpleNamespace(

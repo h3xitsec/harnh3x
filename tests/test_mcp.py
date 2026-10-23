@@ -5,7 +5,7 @@ import json
 import socket
 import sys
 
-from helpers import _FAKE_MCP, _mcp_server, _tool_names
+from helpers import _FAKE_MCP, _banner_text, _mcp_server, _tool_names
 
 from harnh3x import __version__, agent, config, skills
 from harnh3x.mcp.client import upstream_problem
@@ -294,7 +294,7 @@ def test_status_bar_warns_when_an_mcp_server_is_unavailable(tmp_path):
                 if segment.style == WARNING_STYLE
             ]
             assert red == ["⚠ 1"]
-            assert "caido" not in str(app.query_one("#banner").content)
+            assert "caido" not in _banner_text(app)
             box = app.query_one("#prompt-container")
             status_bar = app.query_one("#status")
             assert status_bar.region.y == box.region.bottom + 1
