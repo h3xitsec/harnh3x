@@ -35,6 +35,13 @@ def assistant_message(msg) -> dict:
         ]
         if copied:
             stored["thinking_blocks"] = copied
+    items = getattr(msg, "response_items", None)
+    if isinstance(items, list):
+        copied_items = [
+            dict(item) for item in items if isinstance(item, dict) and item.get("type")
+        ]
+        if copied_items:
+            stored["response_items"] = copied_items
     return stored
 
 

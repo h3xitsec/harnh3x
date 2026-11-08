@@ -484,15 +484,44 @@ def test_run_drops_a_partial_stream_when_the_api_drops(tmp_path):
     assert session.messages[-1] == {"role": "assistant", "content": text}
 
 
-def _status_error(message: str):
+def _status_error(message: str, status: int = 400):
     import httpx2
-    from openai import BadRequestError
+    from openai import BadRequestError, NotFoundError
 
     response = httpx2.Response(
-        400,
+        status,
         request=httpx2.Request("POST", "http://127.0.0.1:9/v1/chat/completions"),
     )
-    return BadRequestError(message, response=response, body=None)
+    error = NotFoundError if status == 404 else BadRequestError
+    return error(message, response=response, body=None)
+
+
+_ASTRO_REJECTION = (
+    "Function tools with reasoning_effort are not supported for gpt-6-astra "
+    "in /v1/chat/completions. To use function tools, use /v1/responses or "
+    "set reasoning_effort to 'none'."
+)
+
+
+def _responses_message(text: str):
+    return {
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": text}],
+    }
+
+
+def _responses_output(text: str):
+    return SimpleNamespace(output=[_responses_message(text)])
+
+
+def _client(chat_create, responses_create=None):
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=chat_create))
+    )
+    if responses_create is not None:
+        client.responses = SimpleNamespace(create=responses_create)
+    return client
 
 
 def test_run_reports_an_openai_rejection(tmp_path):
@@ -932,3 +961,358 @@ def test_run_uses_the_session_model(tmp_path):
 
     assert text == "ok"
     assert seen["model"] == "custom-model"
+
+
+def _reject_astra(**kwargs):
+    raise _status_error(_ASTRO_REJECTION)
+
+
+def test_run_switches_to_responses_and_replays_items(tmp_path):
+    session = agent.Session(workspace=tmp_path, model="gpt-6-astra")
+    chat_calls = []
+    response_calls = []
+    reasoning = {
+        "type": "reasoning",
+        "id": "rs_1",
+        "encrypted_content": "secret",
+    }
+    call = {
+        "type": "function_call",
+        "call_id": "call_1",
+        "name": "load_skill",
+        "arguments": '{"name": "shell"}',
+    }
+
+    def chat_create(**kwargs):
+        chat_calls.append(kwargs)
+        raise _status_error(_ASTRO_REJECTION)
+
+    def responses_create(**kwargs):
+        response_calls.append(kwargs)
+        if len(response_calls) == 1:
+            return SimpleNamespace(output=[reasoning, call])
+        return _responses_output("ready")
+
+    client = _client(chat_create, responses_create)
+
+    assert agent.run("load shell", session, client=client) == "ready"
+
+    assert len(chat_calls) == 1
+    assert "reasoning_effort" not in chat_calls[0]
+    sent = response_calls[0]
+    assert sent["model"] == "gpt-6-astra"
+    assert sent["stream"] is True
+    assert sent["store"] is False
+    assert sent["include"] == ["reasoning.encrypted_content"]
+    assert sent["max_output_tokens"] == config.MAX_TOKENS
+    assert all(
+        tool["type"] == "function" and "function" not in tool for tool in sent["tools"]
+    )
+    assert any(tool["name"] == "load_skill" for tool in sent["tools"])
+    stored = session.messages[2]
+    assert stored["tool_calls"][0]["id"] == "call_1"
+    assert stored["response_items"] == [reasoning, call]
+    follow = response_calls[1]
+    assert follow["model"] == "gpt-6-astra"
+    assert reasoning in follow["input"]
+    assert call in follow["input"]
+    output = next(
+        item for item in follow["input"] if item.get("type") == "function_call_output"
+    )
+    assert output["call_id"] == "call_1"
+    assert output["output"].startswith("Loaded skill 'shell'")
+
+
+def test_a_different_model_stays_on_chat_completions(tmp_path):
+    session = agent.Session(workspace=tmp_path, model="gpt-6-astra")
+    response_calls = []
+
+    def chat_create(**kwargs):
+        if kwargs["model"] == "gpt-6-astra":
+            raise _status_error(_ASTRO_REJECTION)
+        message = SimpleNamespace(content="from chat", tool_calls=None)
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    def responses_create(**kwargs):
+        response_calls.append(kwargs["model"])
+        return _responses_output("from responses")
+
+    client = _client(chat_create, responses_create)
+
+    assert agent.run("hi", session, client=client) == "from responses"
+    session.model = "qwen"
+    assert agent.run("next", session, client=client) == "from chat"
+    assert response_calls == ["gpt-6-astra"]
+
+
+def test_missing_responses_route_uses_reasoning_effort_none(tmp_path):
+    session = agent.Session(workspace=tmp_path, model="gpt-6-astra")
+    chat_calls = []
+    response_calls = []
+
+    def chat_create(**kwargs):
+        chat_calls.append(kwargs)
+        if kwargs.get("reasoning_effort") != "none":
+            raise _status_error(_ASTRO_REJECTION)
+        message = SimpleNamespace(content="ok", tool_calls=None)
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    def responses_create(**kwargs):
+        response_calls.append(kwargs)
+        raise _status_error("unknown route /v1/responses", status=404)
+
+    client = _client(chat_create, responses_create)
+
+    assert agent.run("hi", session, client=client) == "ok"
+    assert chat_calls[0].get("reasoning_effort") is None
+    assert chat_calls[1]["reasoning_effort"] == "none"
+    assert "tools" in chat_calls[1]
+    assert len(response_calls) == 1
+
+    assert agent.run("again", session, client=client) == "ok"
+    assert len(response_calls) == 1
+    assert chat_calls[-1]["reasoning_effort"] == "none"
+
+
+def test_responses_model_compacts_without_tools(tmp_path):
+    session = agent.Session(workspace=tmp_path, model="gpt-6-astra")
+    _prior_turn(session)
+    chat_calls = []
+    response_calls = []
+
+    def chat_create(**kwargs):
+        chat_calls.append(kwargs)
+        raise _status_error(_ASTRO_REJECTION)
+
+    def responses_create(**kwargs):
+        response_calls.append(kwargs)
+        text = "ok" if "tools" in kwargs else "the summary"
+        return _responses_output(text)
+
+    client = _client(chat_create, responses_create)
+
+    assert agent.run("hi", session, client=client) == "ok"
+    assert len(chat_calls) == 1
+    session.context_tokens = 80
+    session.context_limit = 100
+
+    assert agent.compact_session(session, client=client) == "Context compacted."
+
+    assert len(chat_calls) == 1
+    assert "tools" in response_calls[0]
+    assert "tools" not in response_calls[-1]
+    assert "stream" not in response_calls[-1]
+    assert "the summary" in session.messages[1]["content"]
+
+
+def test_chat_completions_omit_response_items(tmp_path):
+    session = agent.Session(workspace=tmp_path)
+    session.messages.append({"role": "user", "content": "earlier"})
+    session.messages.append(
+        {
+            "role": "assistant",
+            "content": "done",
+            "response_items": [{"type": "reasoning", "encrypted_content": "secret"}],
+        }
+    )
+    seen = []
+
+    def chat_create(**kwargs):
+        seen.append(kwargs["messages"])
+        message = SimpleNamespace(content="ok", tool_calls=None)
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    assert agent.run("next", session, client=_client(chat_create)) == "ok"
+    assert "response_items" not in json.dumps(seen[0])
+    assert "secret" not in json.dumps(seen[0])
+
+
+def test_responses_stream_joins_text_and_tool_calls(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        agent_client, "model_context_limit", lambda model, client=None: None
+    )
+    session = agent.Session(workspace=tmp_path, model="gpt-6-astra")
+    deltas = []
+    session.on_delta = lambda kind, text: deltas.append((kind, text))
+    calls = []
+
+    def responses_create(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return [
+                SimpleNamespace(type="response.reasoning_text.delta", delta="need "),
+                SimpleNamespace(
+                    type="response.output_item.added",
+                    output_index=0,
+                    item=SimpleNamespace(
+                        type="function_call",
+                        call_id="call_1",
+                        name="load_skill",
+                        arguments="",
+                    ),
+                ),
+                SimpleNamespace(
+                    type="response.function_call_arguments.delta",
+                    output_index=0,
+                    delta='{"name": ',
+                ),
+                SimpleNamespace(
+                    type="response.function_call_arguments.delta",
+                    output_index=0,
+                    delta='"shell"}',
+                ),
+                SimpleNamespace(
+                    type="response.output_item.done",
+                    output_index=1,
+                    item={
+                        "type": "reasoning",
+                        "id": "rs_1",
+                        "encrypted_content": "secret",
+                    },
+                ),
+                SimpleNamespace(
+                    type="response.completed",
+                    response=SimpleNamespace(
+                        usage=SimpleNamespace(
+                            input_tokens=20,
+                            total_tokens=30,
+                            input_tokens_details=SimpleNamespace(
+                                cached_tokens=4, cache_write_tokens=2
+                            ),
+                        )
+                    ),
+                ),
+            ]
+        return [
+            SimpleNamespace(type="response.output_text.delta", delta="all "),
+            SimpleNamespace(type="response.output_text.delta", delta="set"),
+        ]
+
+    assert (
+        agent.run("load", session, client=_client(_reject_astra, responses_create))
+        == "all set"
+    )
+    assert deltas == [
+        ("reasoning", "need "),
+        ("content", "all "),
+        ("content", "set"),
+    ]
+    stored = session.messages[2]
+    assert stored["reasoning"] == "need "
+    assert stored["tool_calls"] == [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {
+                "name": "load_skill",
+                "arguments": '{"name": "shell"}',
+            },
+        }
+    ]
+    assert stored["response_items"][0]["encrypted_content"] == "secret"
+    assert session.context_tokens == 30
+    assert session.cache_rounds[0] == agent.CacheRound(
+        read=4, write=2, reusable=None, prompt=20
+    )
+
+
+def test_responses_summary_is_kept_only_without_reasoning_text(tmp_path):
+    session = agent.Session(workspace=tmp_path, model="gpt-6-astra")
+    calls = []
+
+    def responses_create(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return [
+                SimpleNamespace(
+                    type="response.reasoning_summary_text.delta", delta="sum"
+                ),
+                SimpleNamespace(type="response.reasoning_text.delta", delta="real"),
+                SimpleNamespace(type="response.output_text.delta", delta="ok"),
+            ]
+        return [
+            SimpleNamespace(
+                type="response.reasoning_summary_text.delta", delta="only summary"
+            ),
+            SimpleNamespace(type="response.output_text.delta", delta="done"),
+        ]
+
+    client = _client(_reject_astra, responses_create)
+
+    assert agent.run("hi", session, client=client) == "ok"
+    assert session.messages[-1]["reasoning"] == "real"
+    assert agent.run("next", session, client=client) == "done"
+    assert session.messages[-1]["reasoning"] == "only summary"
+
+
+def test_responses_rebuilds_a_chat_tool_call(tmp_path):
+    session = agent.Session(workspace=tmp_path, model="gpt-6-astra")
+    session.messages.append({"role": "user", "content": "earlier"})
+    session.messages.append(
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_9",
+                    "type": "function",
+                    "function": {
+                        "name": "load_skill",
+                        "arguments": '{"name": "shell"}',
+                    },
+                }
+            ],
+        }
+    )
+    session.messages.append(
+        {"role": "tool", "tool_call_id": "call_9", "content": "loaded"}
+    )
+    seen = []
+
+    def responses_create(**kwargs):
+        seen.append(kwargs)
+        return _responses_output("ready")
+
+    assert (
+        agent.run("continue", session, client=_client(_reject_astra, responses_create))
+        == "ready"
+    )
+    call = next(
+        item for item in seen[0]["input"] if item.get("type") == "function_call"
+    )
+    assert call == {
+        "type": "function_call",
+        "call_id": "call_9",
+        "name": "load_skill",
+        "arguments": '{"name": "shell"}',
+    }
+    output = next(
+        item for item in seen[0]["input"] if item.get("type") == "function_call_output"
+    )
+    assert output == {
+        "type": "function_call_output",
+        "call_id": "call_9",
+        "output": "loaded",
+    }
+
+
+def test_missing_responses_attribute_uses_reasoning_effort_none(tmp_path):
+    session = agent.Session(workspace=tmp_path, model="gpt-6-astra")
+    calls = []
+
+    def chat_create(**kwargs):
+        calls.append(kwargs)
+        if kwargs.get("reasoning_effort") != "none":
+            raise _status_error(_ASTRO_REJECTION)
+        message = SimpleNamespace(content="ok", tool_calls=None)
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    client = _client(chat_create)
+
+    assert agent.run("hi", session, client=client) == "ok"
+    assert calls[0].get("reasoning_effort") is None
+    assert calls[1]["reasoning_effort"] == "none"
+
+    assert agent.run("again", session, client=client) == "ok"
+    assert len(calls) == 3
+    assert calls[-1]["reasoning_effort"] == "none"

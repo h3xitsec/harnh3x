@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from openai import OpenAI
 
 import harnh3x.agent.client as api_client
+from harnh3x import responses_api
 from harnh3x.agent.client import _count
 from harnh3x.agent.complete import create_completion
 from harnh3x.agent.session import Session
@@ -238,6 +239,8 @@ def _summary_response(session: Session, api, body: str):
         summary, response = api.complete_text(model=session.model, messages=messages)
         response.choices = [SimpleNamespace(message=SimpleNamespace(content=summary))]
         return response
+    if responses_api.uses(api, session.model):
+        return responses_api.complete_text(api, model=session.model, messages=messages)
     return create_completion(api, model=session.model, messages=messages)
 
 

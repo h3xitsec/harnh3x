@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 from openai import APIConnectionError, APIStatusError
 
-from harnh3x import config
+from harnh3x import config, responses_api
 from harnh3x.agent.messages import _reasoning_text
 from harnh3x.agent.session import Session
 from harnh3x.anthropic_api import AnthropicClient
@@ -58,20 +58,23 @@ def create_completion(api, **kwargs):
             raise
 
 
-def _without_thinking_blocks(messages: list) -> list:
+_CHAT_OMITTED = ("thinking_blocks", "response_items")
+
+
+def _without_replay_fields(messages: list) -> list:
     if not any(
-        isinstance(message, dict) and "thinking_blocks" in message
+        isinstance(message, dict) and any(key in message for key in _CHAT_OMITTED)
         for message in messages
     ):
         return messages
     cleaned = []
     for message in messages:
-        if isinstance(message, dict) and "thinking_blocks" in message:
+        if isinstance(message, dict) and any(key in message for key in _CHAT_OMITTED):
             cleaned.append(
                 {
                     key: value
                     for key, value in message.items()
-                    if key != "thinking_blocks"
+                    if key not in _CHAT_OMITTED
                 }
             )
         else:
@@ -82,7 +85,7 @@ def _without_thinking_blocks(messages: list) -> list:
 def _request_completion(api, **kwargs):
     messages = kwargs.get("messages")
     if isinstance(messages, list):
-        kwargs["messages"] = _without_thinking_blocks(messages)
+        kwargs["messages"] = _without_replay_fields(messages)
     return create_completion(
         api, stream=True, stream_options={"include_usage": True}, **kwargs
     )
@@ -177,12 +180,44 @@ def _completion(session: Session, api):
         if message is None:
             return None
         return message, usage
-    response = _request_completion(
-        api,
-        model=session.model,
-        messages=session.messages,
-        tools=session.skills.schemas(),
-    )
+    if responses_api.uses(api, session.model):
+        return responses_api.stream_turn(api, session)
+    kwargs = {
+        "model": session.model,
+        "messages": session.messages,
+        "tools": session.skills.schemas(),
+    }
+    if responses_api.uses_reasoning_none(api, session.model):
+        kwargs["reasoning_effort"] = "none"
+    try:
+        response = _request_completion(api, **kwargs)
+    except APIStatusError as exc:
+        if not responses_api.asks_for_responses(exc):
+            raise
+        return _complete_with_responses(session, api, kwargs)
+    return _consume_stream(session, response)
+
+
+def _complete_with_responses(session: Session, api, kwargs: dict):
+    try:
+        completed = responses_api.stream_turn(api, session)
+    except AttributeError as exc:
+        if "responses" not in str(exc).lower():
+            raise
+        return _complete_without_reasoning(session, api, kwargs)
+    except APIStatusError as exc:
+        if not responses_api.route_missing(exc):
+            raise
+        return _complete_without_reasoning(session, api, kwargs)
+    if completed is not None:
+        responses_api.remember(api, session.model)
+    return completed
+
+
+def _complete_without_reasoning(session: Session, api, kwargs: dict):
+    responses_api.remember_reasoning_none(api, kwargs.get("model"))
+    kwargs["reasoning_effort"] = "none"
+    response = _request_completion(api, **kwargs)
     return _consume_stream(session, response)
 
 
