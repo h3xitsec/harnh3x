@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.0](https://github.com/h3xitsec/harnh3x/compare/harnh3x-v0.9.0...harnh3x-v0.10.0) (2026-11-08)
+
+
+### Features
+
+* **agent:** use the Responses API for models that require it ([84ce941](https://github.com/h3xitsec/harnh3x/commit/84ce94164648192d1cee0229647bb436c06f2c1d))
+* **config:** choose models from several providers in one list ([61bba24](https://github.com/h3xitsec/harnh3x/commit/61bba24fdceb21f9ccacbaf835447bed2945dac7))
+
 ## [0.9.0](https://github.com/h3xitsec/harnh3x/compare/harnh3x-v0.8.0...harnh3x-v0.9.0) (2026-10-23)
 
 
