@@ -65,7 +65,7 @@ from harnh3x.tools import (
     workspace_listing,
 )
 
-__version__ = "0.9.0"
+__version__ = "0.10.0"
 
 __all__ = [
     "BASE_DIR",
