@@ -179,6 +179,7 @@ def test_run_saves_the_full_transcript(tmp_path):
     assert session.context_tokens is None
     saved = json.loads((tmp_path / TRANSCRIPT_FILE).read_text(encoding="utf-8"))
     assert saved["model"] == "custom-model"
+    assert saved["provider"] == "local"
     assert "context_tokens" not in saved
     assert saved["messages"][-1]["reasoning"] == thinking
     assert not (tmp_path / f".{TRANSCRIPT_FILE}.tmp").exists()
@@ -189,6 +190,129 @@ def test_run_saves_the_full_transcript(tmp_path):
         event["message"]["reasoning"] for event in events if event["event"] == "model"
     )
     assert logged == "r" * 500 + "...[truncated]"
+
+
+def _two_providers(monkeypatch):
+    monkeypatch.setattr(
+        config,
+        "PROVIDERS",
+        (
+            config.Provider("routerly", "openai", "http://localhost:3000/v1", "k1"),
+            config.Provider("claude", "anthropic", "https://api.anthropic.com", "k2"),
+        ),
+    )
+
+
+def test_session_provider_defaults_to_the_first_and_must_be_configured(
+    tmp_path, monkeypatch
+):
+    _two_providers(monkeypatch)
+
+    assert agent.Session(workspace=tmp_path).provider == "routerly"
+    session = agent.Session(workspace=tmp_path, provider="claude")
+    assert session.provider == "claude"
+    session.reset()
+    assert session.provider == "claude"
+    with pytest.raises(ValueError, match="Provider gone is not configured"):
+        agent.Session(workspace=tmp_path, provider="gone")
+
+
+def test_resume_restores_the_provider(tmp_path, monkeypatch):
+    _two_providers(monkeypatch)
+    messages = [
+        {"role": "system", "content": "stale"},
+        {"role": "user", "content": "hello"},
+    ]
+    saved = tmp_path / "saved"
+    saved.mkdir()
+    (saved / TRANSCRIPT_FILE).write_text(
+        json.dumps({"model": "sonnet", "provider": "claude", "messages": messages})
+    )
+    old = tmp_path / "old"
+    _write_transcript(old, "qwen", messages)
+    gone = tmp_path / "gone"
+    gone.mkdir()
+    (gone / TRANSCRIPT_FILE).write_text(
+        json.dumps({"model": "m", "provider": "removed", "messages": messages})
+    )
+    session = agent.Session(workspace=tmp_path / "live")
+
+    session.resume(saved)
+    assert (session.provider, session.model) == ("claude", "sonnet")
+    session.resume(old)
+    assert (session.provider, session.model) == ("routerly", "qwen")
+    with pytest.raises(ValueError, match="provider removed is not configured"):
+        session.resume(gone)
+    assert session.workspace == old.resolve()
+
+
+def test_switch_model_drops_replay_items_only_across_providers(tmp_path, monkeypatch):
+    _two_providers(monkeypatch)
+    session = agent.Session(workspace=tmp_path, model="qwen")
+    session.context_limit = 8192
+    turn = {
+        "role": "assistant",
+        "content": "hi",
+        "reasoning": "kept",
+        "thinking_blocks": [{"type": "thinking", "thinking": "t", "signature": "s"}],
+        "response_items": [{"type": "reasoning"}],
+    }
+    session.messages.append(dict(turn))
+
+    session.switch_model("routerly", "gemma")
+    assert session.messages[-1] == turn
+    assert session.context_limit is None
+
+    session.context_limit = 8192
+    session.switch_model("claude", "sonnet")
+    assert (session.provider, session.model) == ("claude", "sonnet")
+    assert session.context_limit is None
+    assert session.messages[-1] == {
+        "role": "assistant",
+        "content": "hi",
+        "reasoning": "kept",
+    }
+
+
+def test_session_label_names_the_provider_with_several(tmp_path, monkeypatch):
+    info = agent.SessionInfo(
+        workspace=tmp_path / "abcdef01-rest",
+        model="sonnet",
+        updated=0,
+        preview="hello",
+        provider="claude",
+    )
+    assert "  sonnet  hello" in agent.session_label(info, 0)
+    _two_providers(monkeypatch)
+    assert "  claude/sonnet  hello" in agent.session_label(info, 0)
+
+
+def test_run_uses_the_client_for_the_session_provider(tmp_path, monkeypatch):
+    _two_providers(monkeypatch)
+    import harnh3x.agent.client as agent_client
+
+    asked = []
+
+    def create(**kwargs):
+        message = SimpleNamespace(content="ok", tool_calls=None)
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+
+    def get_client(provider=None):
+        asked.append(provider)
+        return client
+
+    monkeypatch.setattr(agent_client, "get_client", get_client)
+    monkeypatch.setattr(
+        agent_client, "model_context_limit", lambda model, client=None: None
+    )
+    session = agent.Session(workspace=tmp_path, provider="claude")
+
+    assert agent.run("hi", session) == "ok"
+    assert asked == ["claude"]
 
 
 def test_resume_restores_skills_without_load_messages(tmp_path):

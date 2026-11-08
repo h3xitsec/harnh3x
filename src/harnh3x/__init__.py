@@ -1,13 +1,17 @@
 from harnh3x.agent import (
     CacheRound,
+    ModelRef,
+    ProviderModels,
     Session,
     SessionInfo,
     assistant_message,
     compact_session,
     list_models,
+    list_provider_models,
     list_sessions,
     model_context_limit,
     parse_command,
+    parse_model_ref,
     run,
     session_label,
 )
@@ -19,8 +23,6 @@ from harnh3x.commands import (
     matching_commands,
 )
 from harnh3x.config import (
-    API_KEY,
-    API_URL,
     BASE_DIR,
     COMPACT_AT,
     CONTEXT_LIMIT,
@@ -38,7 +40,8 @@ from harnh3x.config import (
     PDF_MAX_PAGES,
     PLAN_FILE,
     PREVIEW_ROWS,
-    PROVIDER,
+    PROVIDER_WARNINGS,
+    PROVIDERS,
     SEARCH_FILES_MAX,
     SEARCH_MAX_RESULTS,
     SHELL_MAX_OUTPUT,
@@ -47,6 +50,7 @@ from harnh3x.config import (
     SUBAGENT_MAX_TURNS,
     TRANSCRIPT_FILE,
     WIKIPEDIA_LANG,
+    Provider,
 )
 from harnh3x.failures import is_failure_answer
 from harnh3x.prompt import system_prompt
@@ -64,8 +68,6 @@ from harnh3x.tools import (
 __version__ = "0.9.0"
 
 __all__ = [
-    "API_KEY",
-    "API_URL",
     "BASE_DIR",
     "COMMANDS",
     "COMPACT_AT",
@@ -84,7 +86,8 @@ __all__ = [
     "PDF_MAX_PAGES",
     "PLAN_FILE",
     "PREVIEW_ROWS",
-    "PROVIDER",
+    "PROVIDERS",
+    "PROVIDER_WARNINGS",
     "SEARCH_FILES_MAX",
     "SEARCH_MAX_RESULTS",
     "SHELL_MAX_OUTPUT",
@@ -96,6 +99,9 @@ __all__ = [
     "WIKIPEDIA_LANG",
     "CacheRound",
     "Command",
+    "ModelRef",
+    "Provider",
+    "ProviderModels",
     "Session",
     "SessionInfo",
     "SkillRegistry",
@@ -109,11 +115,13 @@ __all__ = [
     "help_lines",
     "is_failure_answer",
     "list_models",
+    "list_provider_models",
     "list_sessions",
     "matching_commands",
     "memory_keys",
     "model_context_limit",
     "parse_command",
+    "parse_model_ref",
     "run",
     "session_label",
     "strip_html",

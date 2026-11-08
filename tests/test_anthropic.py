@@ -513,77 +513,34 @@ def test_compact_session_uses_the_messages_api(tmp_path, monkeypatch):
     )
 
 
-def test_anthropic_provider_prefers_its_own_key():
+def test_anthropic_provider_keeps_its_own_url_and_global_limits():
     path = Path("harnh3x.yaml")
-    values, _servers = config.parse_config(
-        "provider: anthropic\n"
-        "anthropic_api_key: file-key\n"
-        "openai_api_key: openai-file\n"
-        "openai_api_url: http://file/v1\n",
+    values, _servers, providers = config.parse_config(
+        "providers:\n"
+        "  claude:\n"
+        "    type: anthropic\n"
+        "    api_key: file-key\n"
+        "  proxy:\n"
+        "    type: anthropic\n"
+        "    api_url: http://proxy\n"
+        "    api_key: proxy-key\n",
         path,
     )
-
-    preferred = config.resolve_settings(
-        values,
-        {"OPENAI_API_KEY": "openai-key", "ANTHROPIC_API_KEY": "ant-key"},
-        path,
-    )
-    from_file = config.resolve_settings(values, {"OPENAI_API_KEY": "openai-key"}, path)
-
-    assert preferred["API_KEY"] == "ant-key"
-    assert preferred["API_URL"] == "https://api.anthropic.com"
-    assert preferred["PROVIDER"] == "anthropic"
-    assert preferred["MAX_TOKENS"] == 8192
-    assert preferred["CONTEXT_LIMIT"] is None
-    assert from_file["API_KEY"] == "file-key"
-    assert from_file["API_URL"] == "https://api.anthropic.com"
-
-
-def test_openai_provider_ignores_the_anthropic_key():
-    path = Path("harnh3x.yaml")
-    values, _servers = config.parse_config(
-        "provider: openai\n"
-        "openai_api_key: file-key\n"
-        "openai_api_url: http://file/v1\n"
-        "anthropic_api_key: ant-file\n",
-        path,
-    )
-
     resolved = config.resolve_settings(values, {"ANTHROPIC_API_KEY": "ant-env"}, path)
 
-    assert resolved["API_KEY"] == "file-key"
-    assert resolved["API_URL"] == "http://file/v1"
-    assert resolved["ANTHROPIC_API_KEY"] == "ant-env"
+    assert providers.entries == (
+        config.Provider("claude", "anthropic", "https://api.anthropic.com", "file-key"),
+        config.Provider("proxy", "anthropic", "http://proxy", "proxy-key"),
+    )
+    assert resolved["MAX_TOKENS"] == 8192
+    assert resolved["CONTEXT_LIMIT"] is None
 
 
-def test_provider_must_be_openai_or_anthropic():
-    path = Path("demo.yaml")
-    with pytest.raises(SystemExit, match="expected openai or anthropic"):
-        values, _servers = config.parse_config("provider: claude\n", path)
-        config.resolve_settings(values, {}, path)
-
-
-def test_startup_names_the_anthropic_key(monkeypatch, tmp_path):
-    conf = tmp_path / "harnh3x.yaml"
-    monkeypatch.setenv("HARNH3X_CONFIG", str(conf))
-    monkeypatch.setattr(config, "PROVIDER", "anthropic")
-    monkeypatch.setattr(config, "API_KEY", None)
-    monkeypatch.setattr(config, "API_URL", "https://api.anthropic.com")
-
-    with pytest.raises(SystemExit, match="Missing anthropic_api_key") as missing:
-        config.require_api_settings()
-
-    message = str(missing.value)
-    assert "ANTHROPIC_API_KEY" in message
-    assert "openai_api_key" not in message
-    assert "openai_api_url" not in message
-
-
-def test_get_client_builds_an_anthropic_client(monkeypatch):
-    monkeypatch.setattr(config, "PROVIDER", "anthropic")
-    monkeypatch.setattr(config, "API_KEY", "sk-ant")
-    monkeypatch.setattr(config, "API_URL", "https://api.anthropic.com")
-    monkeypatch.setattr(agent_client, "_client", None)
+def test_get_client_builds_an_anthropic_client_for_that_provider(monkeypatch):
+    local = config.Provider("local", "openai", "http://local/v1", "key")
+    claude = config.Provider("claude", "anthropic", "https://api.anthropic.com", "sk")
+    monkeypatch.setattr(config, "PROVIDERS", (local, claude))
+    monkeypatch.setattr(agent_client, "_clients", {})
     seen = {}
 
     def fake(**kwargs):
@@ -591,15 +548,14 @@ def test_get_client_builds_an_anthropic_client(monkeypatch):
         return SimpleNamespace()
 
     monkeypatch.setattr(anthropic_api, "Anthropic", fake)
+    monkeypatch.setattr(agent_client, "OpenAI", lambda **kwargs: SimpleNamespace())
 
-    client = agent.get_client()
+    client = agent.get_client("claude")
 
     assert isinstance(client, AnthropicClient)
-    assert seen == {
-        "api_key": "sk-ant",
-        "base_url": "https://api.anthropic.com",
-    }
-    assert agent.get_client() is client
+    assert seen == {"api_key": "sk", "base_url": "https://api.anthropic.com"}
+    assert agent.get_client("claude") is client
+    assert not isinstance(agent.get_client(), AnthropicClient)
 
 
 def test_status_message_reads_nested_and_top_level_text():

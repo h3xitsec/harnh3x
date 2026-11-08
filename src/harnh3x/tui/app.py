@@ -20,13 +20,18 @@ from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import Static, TextArea
 
-from harnh3x import __version__
+from harnh3x import __version__, config
 from harnh3x.agent import (
     CacheRound,
+    ModelRef,
+    ProviderModels,
     compact_session,
-    list_models,
+    default_provider,
+    get_client,
+    list_provider_models,
     list_sessions,
     model_context_limit,
+    model_label,
     parse_command,
 )
 from harnh3x.commands import NO_EXPORT, dispatch, matching_commands
@@ -273,8 +278,8 @@ class HarnessApp(App):
         *,
         show_tools: bool = True,
         review: tuple | None = None,
-        context_limit: Callable[[str], int | None] | None = None,
-        models: Callable[[], list[str]] | None = None,
+        context_limit: Callable[[str | None, str], int | None] | None = None,
+        models: Callable[[], list[ProviderModels]] | None = None,
         initial: str | None = None,
     ) -> None:
         super().__init__()
@@ -341,9 +346,9 @@ class HarnessApp(App):
         skills = getattr(self.session, "skills", None)
         warnings = getattr(skills, "warnings", None)
         if not isinstance(warnings, list):
-            return []
+            warnings = []
         found = []
-        for item in warnings:
+        for item in [*config.PROVIDER_WARNINGS, *warnings]:
             if (
                 isinstance(item, tuple)
                 and len(item) == 2
@@ -370,7 +375,11 @@ class HarnessApp(App):
         rounds = self._cache_rounds()
         last = rounds[-1] if rounds else None
         return StatusState(
-            model=model if isinstance(model, str) and model else None,
+            model=(
+                model_label(self._provider(), model)
+                if isinstance(model, str) and model
+                else None
+            ),
             used=count("context_tokens"),
             limit=count("context_limit"),
             compact_at=COMPACT_AT,
@@ -404,20 +413,27 @@ class HarnessApp(App):
     def _refresh_status(self) -> None:
         self.query_one("#status", StatusBar).show(build_segments(self._status_state()))
 
+    def _provider(self) -> str | None:
+        provider = getattr(self.session, "provider", None)
+        return provider if isinstance(provider, str) else default_provider()
+
+    def _current_model(self) -> ModelRef:
+        return ModelRef(self._provider(), self.session.model)
+
     def _load_context_limit(self) -> None:
         if self._context_limit is None or self.review is not None:
             return
-        model = self.session.model
+        current = self._current_model()
 
         def fetch() -> None:
-            limit = self._context_limit(model)
-            self._from_thread(self._apply_limit, model, limit)
+            limit = self._context_limit(current.provider, current.model)
+            self._from_thread(self._apply_limit, current, limit)
 
         self._spawn(fetch)
 
-    def _apply_limit(self, model: str, limit: int | None) -> None:
+    def _apply_limit(self, current: ModelRef, limit: int | None) -> None:
         if (
-            self.session.model != model
+            self._current_model() != current
             or isinstance(limit, bool)
             or not isinstance(limit, int)
         ):
@@ -791,7 +807,7 @@ class HarnessApp(App):
 
         def work() -> None:
             try:
-                found: list[str] | str = fetch()
+                found: list[ProviderModels] | str = fetch()
             except SystemExit as exc:
                 found = str(exc.code)
             except Exception as exc:
@@ -800,26 +816,39 @@ class HarnessApp(App):
 
         self._spawn(work)
 
-    def _show_models(self, found: list[str] | str) -> None:
+    def _show_models(self, found: list[ProviderModels] | str) -> None:
         self._fetching_models = False
         if isinstance(found, str):
             self.notify(found, severity="error")
             return
-        if not found:
-            self.notify("No models available from the API.", severity="warning")
+        if not any(group.models for group in found):
+            errors = [group for group in found if group.error]
+            if len(errors) == 1 and len(found) == 1:
+                self.notify(errors[0].error, severity="error")
+            elif errors:
+                lines = [f"{group.provider}: {group.error}" for group in errors]
+                self.notify("\n".join(lines), severity="error")
+            else:
+                self.notify("No models available from the API.", severity="warning")
             return
         if len(self.screen_stack) > 1 or self.query_one(Composer).disabled:
             return
-        current = getattr(self.session, "model", None)
-        self.push_screen(SwitchModelScreen(found, current), self._on_model)
+        self.push_screen(
+            SwitchModelScreen(found, self._current_model()), self._on_model
+        )
 
-    def _on_model(self, chosen: str | None) -> None:
-        if chosen and chosen != self.session.model:
-            self.session.model = chosen
-            self.session.context_limit = None
+    def _on_model(self, chosen: ModelRef | None) -> None:
+        if chosen is not None and chosen != self._current_model():
+            switch = getattr(self.session, "switch_model", None)
+            if callable(switch):
+                switch(chosen.provider, chosen.model)
+            else:
+                self.session.provider = chosen.provider
+                self.session.model = chosen.model
+                self.session.context_limit = None
             self._refresh_status()
             self._load_context_limit()
-            self.notify(f"Model: {chosen}")
+            self.notify(f"Model: {model_label(chosen.provider, chosen.model)}")
         self._focus_composer()
 
     def action_toggle_trace(self) -> None:
@@ -1407,6 +1436,10 @@ class ReviewApp(HarnessApp):
         )
 
 
+def _provider_context_limit(provider: str | None, model: str) -> int | None:
+    return model_context_limit(model, get_client(provider))
+
+
 def run_interactive(
     session, run: Callable, *, show_tools: bool, initial: str | None = None
 ) -> None:
@@ -1415,8 +1448,8 @@ def run_interactive(
         session,
         run,
         show_tools=show_tools,
-        context_limit=model_context_limit,
-        models=list_models,
+        context_limit=_provider_context_limit,
+        models=list_provider_models,
         initial=initial,
     ).run()
 

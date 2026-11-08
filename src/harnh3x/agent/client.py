@@ -2,30 +2,87 @@ import json
 import re
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from typing import NamedTuple
 
-from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI
+from anthropic import AnthropicError
+from openai import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    OpenAI,
+    OpenAIError,
+)
 
 from harnh3x import anthropic_api, config
 from harnh3x.anthropic_api import AnthropicClient, status_message
+from harnh3x.config import Provider
 from harnh3x.failures import TIMED_OUT, UNREACHABLE
 
-_client = None
+_clients: dict[Provider, OpenAI | AnthropicClient] = {}
 
 
-def get_client() -> OpenAI | AnthropicClient:
-    global _client
-    if _client is None:
-        kwargs = {}
-        if config.API_KEY:
-            kwargs["api_key"] = config.API_KEY
-        if config.API_URL:
-            kwargs["base_url"] = config.API_URL
-        if config.PROVIDER == "anthropic":
-            _client = AnthropicClient(anthropic_api.Anthropic(**kwargs))
+class ModelRef(NamedTuple):
+    """A model id and the configured provider that serves it (None when unqualified)."""
+
+    provider: str | None
+    model: str
+
+
+class ProviderModels(NamedTuple):
+    """One provider's model list, or the error text when it could not be listed."""
+
+    provider: str
+    models: list[str]
+    error: str | None = None
+
+
+def find_provider(name: str | None = None) -> Provider | None:
+    """The provider called `name`, or the first configured one when `name` is None."""
+    providers = config.PROVIDERS
+    if name is None:
+        return providers[0] if providers else None
+    for entry in providers:
+        if entry.name == name:
+            return entry
+    return None
+
+
+def default_provider() -> str | None:
+    entry = find_provider()
+    return None if entry is None else entry.name
+
+
+def parse_model_ref(text: str) -> ModelRef:
+    """Split `provider/model` when the first segment names a configured provider."""
+    head, sep, rest = text.partition("/")
+    if sep and rest and find_provider(head) is not None:
+        return ModelRef(head, rest)
+    return ModelRef(None, text)
+
+
+def model_label(provider: str | None, model: str) -> str:
+    """`provider/model` when more than one provider is configured, else the model."""
+    if provider is None or len(config.PROVIDERS) <= 1:
+        return model
+    return f"{provider}/{model}"
+
+
+def get_client(provider: str | None = None) -> OpenAI | AnthropicClient:
+    entry = find_provider(provider)
+    if entry is None:
+        if provider is None:
+            raise ValueError("No provider is configured.")
+        raise ValueError(f"Provider {provider} is not configured.")
+    client = _clients.get(entry)
+    if client is None:
+        kwargs = {"api_key": entry.api_key, "base_url": entry.api_url}
+        if entry.kind == "anthropic":
+            client = AnthropicClient(anthropic_api.Anthropic(**kwargs))
         else:
-            _client = OpenAI(**kwargs)
-    return _client
+            client = OpenAI(**kwargs)
+        _clients[entry] = client
+    return client
 
 
 def _api_failure(exc: APIConnectionError) -> str:
@@ -45,6 +102,28 @@ def list_models(client: OpenAI | AnthropicClient | None = None) -> list[str]:
     except APIStatusError as exc:
         raise SystemExit(status_message(exc)) from None
     return sorted(names)
+
+
+def _provider_models(entry: Provider) -> ProviderModels:
+    if entry.models is not None:
+        return ProviderModels(entry.name, list(entry.models))
+    try:
+        return ProviderModels(entry.name, list_models(get_client(entry.name)))
+    except SystemExit as exc:
+        return ProviderModels(entry.name, [], str(exc.code))
+    except (OpenAIError, AnthropicError, OSError, ValueError) as exc:
+        return ProviderModels(entry.name, [], f"Could not list models: {exc}")
+
+
+def list_provider_models(only: str | None = None) -> list[ProviderModels]:
+    """Every configured provider's models (or just `only`'s), in config order."""
+    providers = [
+        entry for entry in config.PROVIDERS if only is None or entry.name == only
+    ]
+    if len(providers) <= 1:
+        return [_provider_models(entry) for entry in providers]
+    with ThreadPoolExecutor(max_workers=len(providers)) as pool:
+        return list(pool.map(_provider_models, providers))
 
 
 _SHOW_TIMEOUT = 3

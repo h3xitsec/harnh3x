@@ -8,7 +8,9 @@ from helpers import _banner_text, _export_messages, _past_workspace, _write_tran
 from textual import events
 from textual.widgets import Rule
 
-from harnh3x import __version__, agent
+from harnh3x import __version__, agent, config
+from harnh3x.agent import ProviderModels
+from harnh3x.config import Provider
 from harnh3x.tui import (
     EXPORT_USAGE,
     AgentAnswer,
@@ -1333,7 +1335,9 @@ def test_mousedown_during_markdown_update_does_not_crash():
 
 
 def test_user_message_renders_markdown():
-    text = "Explain this *python* code:\n\n```python\nclass Command:\n    name: str\n```"
+    text = (
+        "Explain this *python* code:\n\n```python\nclass Command:\n    name: str\n```"
+    )
     session = SimpleNamespace(workspace="ws", model="m", messages=[])
     app = HarnessApp(session, lambda *args, **kwargs: "ok", show_tools=True)
 
@@ -1356,9 +1360,7 @@ def test_user_message_renders_markdown():
             )
             fence = user.query_one("MarkdownFence")
             assert "class Command" in fence._highlighted_code.plain
-            assert any(
-                span.style != "$text" for span in fence._highlighted_code.spans
-            )
+            assert any(span.style != "$text" for span in fence._highlighted_code.spans)
 
     asyncio.run(drive())
 
@@ -1498,8 +1500,8 @@ def test_clicking_the_model_switches_to_a_listed_model():
     )
     asked = []
 
-    def context_limit(model):
-        asked.append(model)
+    def context_limit(provider, model):
+        asked.append((provider, model))
         return {"beta": 8192, "gamma": 32768}.get(model)
 
     app = HarnessApp(
@@ -1507,7 +1509,7 @@ def test_clicking_the_model_switches_to_a_listed_model():
         lambda *args, **kwargs: "",
         show_tools=True,
         context_limit=context_limit,
-        models=lambda: ["alpha", "beta", "gamma"],
+        models=lambda: [ProviderModels("local", ["alpha", "beta", "gamma"])],
     )
     toasts = _record_toasts(app)
 
@@ -1539,10 +1541,93 @@ def test_clicking_the_model_switches_to_a_listed_model():
             await pilot.press("down", "enter")
             await _wait_for(pilot, lambda: session.context_limit == 32768)
             assert session.model == "gamma"
-            assert asked[-1] == "gamma"
+            assert session.provider == "local"
+            assert asked[-1] == ("local", "gamma")
             assert _status(app)[:2] == ["gamma", "ctx 500/33k 2%"]
             assert toasts[-1] == ("Model: gamma", "information")
             assert app.focused is app.query_one(Composer)
+
+    asyncio.run(drive())
+
+
+def test_switching_provider_uses_the_session_and_labels_the_badge(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        config,
+        "PROVIDERS",
+        (
+            Provider("routerly", "openai", "http://localhost:3000/v1", "k1"),
+            Provider("claude", "anthropic", "https://api.anthropic.com", "k2"),
+        ),
+    )
+    session = agent.Session(workspace=tmp_path, model="qwen")
+    session.messages.append(
+        {
+            "role": "assistant",
+            "content": "hi",
+            "reasoning": "kept",
+            "response_items": [{"type": "reasoning"}],
+        }
+    )
+    asked = []
+
+    def context_limit(provider, model):
+        asked.append((provider, model))
+        return 200_000
+
+    app = HarnessApp(
+        session,
+        lambda *args, **kwargs: "",
+        show_tools=True,
+        context_limit=context_limit,
+        models=lambda: [
+            ProviderModels("routerly", ["qwen"]),
+            ProviderModels("claude", ["sonnet"]),
+        ],
+    )
+    toasts = _record_toasts(app)
+
+    async def drive():
+        async with app.run_test(size=(120, 24)) as pilot:
+            assert _status(app)[0] == "routerly/qwen"
+            await _click_badge(pilot, app, "model")
+            await _wait_for(pilot, lambda: isinstance(app.screen, SwitchModelScreen))
+            options = app.screen.query_one("#models")
+            assert str(options.get_option_at_index(1).prompt) == "  1. qwen (current)"
+            assert options.highlighted == 1
+            await pilot.press("down", "enter")
+            await _wait_for(pilot, lambda: session.context_limit == 200_000)
+            assert (session.provider, session.model) == ("claude", "sonnet")
+            assert asked[-1] == ("claude", "sonnet")
+            assert session.messages[-1] == {
+                "role": "assistant",
+                "content": "hi",
+                "reasoning": "kept",
+            }
+            assert _status(app)[0] == "claude/sonnet"
+            assert toasts[-1] == ("Model: claude/sonnet", "information")
+
+    asyncio.run(drive())
+
+
+def test_skipped_provider_shows_in_the_warning_badge(monkeypatch):
+    monkeypatch.setattr(
+        config,
+        "PROVIDER_WARNINGS",
+        (("providers.litellm", "type is required (openai or anthropic)"),),
+    )
+    app = HarnessApp(_warned_session(), lambda *args, **kwargs: "", show_tools=True)
+
+    async def drive():
+        async with app.run_test(size=(100, 24)) as pilot:
+            assert "⚠ 2" in _status(app)
+            await pilot.press("ctrl+w")
+            await pilot.pause()
+            assert isinstance(app.screen, WarningScreen)
+            text = str(app.screen.query_one("#warning-box").content)
+            assert text.index("providers.litellm") < text.index("caido")
+            assert "type is required (openai or anthropic)" in text
 
     asyncio.run(drive())
 

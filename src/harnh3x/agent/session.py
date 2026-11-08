@@ -9,6 +9,8 @@ from harnh3x.agent.client import (
     CacheRound,
     _stored_cache_rounds,
     _stored_context_tokens,
+    default_provider,
+    find_provider,
 )
 from harnh3x.agent.transcript import (
     _bind_project,
@@ -17,6 +19,7 @@ from harnh3x.agent.transcript import (
     _session_workspace,
     _stored_coding,
     _stored_project,
+    _stored_provider,
     _workspaces_dir,
 )
 from harnh3x.config import CUSTOM_SKILLS_DIR, MODEL, TRANSCRIPT_FILE
@@ -35,9 +38,13 @@ class Session:
         project: Path | str | None = None,
         coding: bool = False,
         debug: bool = False,
+        provider: str | None = None,
     ):
+        if provider is not None and find_provider(provider) is None:
+            raise ValueError(f"Provider {provider} is not configured.")
         self.workspace = _session_workspace(workspace)
         self.model = model or MODEL
+        self.provider = provider or default_provider()
         self.yolo = yolo
         self.debug = debug
         self.on_debug: Callable[[str | None, str], None] | None = None
@@ -105,12 +112,25 @@ class Session:
     def sync_prompt(self) -> None:
         self.messages[0]["content"] = self._system_message()["content"]
 
+    def switch_model(self, provider: str | None, model: str) -> None:
+        """Use another model; a new provider cannot verify the old replay items."""
+        if provider != self.provider:
+            for message in self.messages:
+                if isinstance(message, dict):
+                    message.pop("thinking_blocks", None)
+                    message.pop("response_items", None)
+        self.provider = provider
+        self.model = model
+        self.context_limit = None
+
     def resume(self, workspace: Path) -> None:
         path = _expand(workspace).resolve()
         data = _read_transcript(path / TRANSCRIPT_FILE)
+        provider = _stored_provider(data)
         self.workspace = path
         self.project = _stored_project(data, path)
         self.coding = _stored_coding(data, self.project)
+        self.provider = provider
         self.model = data["model"]
         self.messages = data["messages"]
         self.context_tokens = _stored_context_tokens(data)

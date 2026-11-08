@@ -41,7 +41,7 @@ def _complete(
     on_tool: Callable[[str, object], None] | None,
     max_turns: int | None = None,
 ) -> str:
-    api = client or api_client.get_client()
+    api = client or api_client.get_client(session.provider)
     turn = 0
     limit = MAX_TURNS if max_turns is None else max_turns
 

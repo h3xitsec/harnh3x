@@ -103,7 +103,9 @@ def _load_cli():
     spec = importlib.util.spec_from_file_location("harnh3x_cli", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    module.list_models = lambda: [module.MODEL]
+    module.list_provider_models = lambda only=None: [
+        module.ProviderModels("local", [module.MODEL])
+    ]
     return module
 
 

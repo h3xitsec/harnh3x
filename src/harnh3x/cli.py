@@ -2,13 +2,18 @@ import argparse
 import shutil
 import sys
 
-from harnh3x import __version__
+from harnh3x import __version__, config
 from harnh3x.agent import (
+    ModelRef,
+    ProviderModels,
     Session,
     compact_session,
-    list_models,
+    default_provider,
+    list_provider_models,
     list_sessions,
+    model_label,
     parse_command,
+    parse_model_ref,
     run,
     session_label,
 )
@@ -82,50 +87,100 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="MODEL",
         help=(
-            "Model to use. Pass a name to select it, or pass the flag alone "
-            f"to choose from the API. Defaults to {MODEL}."
+            "Model to use. Pass a name (or provider/name) to select it, or "
+            f"pass the flag alone to choose from the providers. Defaults to {MODEL}."
         ),
     )
     return parser
 
 
-def unavailable_model_reason(name: str) -> str:
-    return f"{name} is missing from this provider. Choose a model to continue."
+def unavailable_model_reason(ref: ModelRef) -> str:
+    if ref.provider is None and len(config.PROVIDERS) > 1:
+        where = "every configured provider"
+    else:
+        where = ref.provider or default_provider() or "this provider"
+    return f"{ref.model} is missing from {where}. Choose a model to continue."
 
 
-def _choose_model_by_number(models: list[str], reason: str | None = None) -> str:
+def _choose_model_by_number(
+    groups: list[ProviderModels], reason: str | None = None
+) -> ModelRef:
     if reason:
         print(reason)
     print("Available models:")
-    for index, name in enumerate(models, start=1):
-        print(f"  {index}. {name}")
+    choices: list[ModelRef] = []
+    headed = len(groups) > 1
+    indent = "    " if headed else "  "
+    for group in groups:
+        if headed:
+            print(f"  {group.provider}")
+        if group.error:
+            print(f"{indent}{group.error}")
+        for name in group.models:
+            choices.append(ModelRef(group.provider, name))
+            print(f"{indent}{len(choices)}. {name}")
     while True:
         choice = input("Select a model: ").strip()
-        if choice.isdigit() and 1 <= int(choice) <= len(models):
-            return models[int(choice) - 1]
-        print(f"Enter a number from 1 to {len(models)}.")
+        if choice.isdigit() and 1 <= int(choice) <= len(choices):
+            return choices[int(choice) - 1]
+        print(f"Enter a number from 1 to {len(choices)}.")
 
 
-def choose_model(models: list[str], reason: str | None = None) -> str:
-    if not models:
-        raise SystemExit("No models available from the API.")
+def choose_model(groups: list[ProviderModels], reason: str | None = None) -> ModelRef:
+    if not any(group.models for group in groups):
+        lines = ["No models available from the API."]
+        lines.extend(
+            f"{group.provider}: {group.error}" for group in groups if group.error
+        )
+        raise SystemExit("\n".join(lines))
     if sys.stdin.isatty() and sys.stdout.isatty():
-        return pick_model(models, reason)
-    return _choose_model_by_number(models, reason)
+        return pick_model(groups, reason)
+    return _choose_model_by_number(groups, reason)
 
 
-def resolve_model(spec: str | None) -> str:
-    if spec is not None:
-        if spec.strip() == "":
-            return choose_model(list_models())
-        return spec
-    try:
-        models = list_models()
-    except SystemExit:
-        return MODEL
-    if MODEL in models:
-        return MODEL
-    return choose_model(models, unavailable_model_reason(MODEL))
+def _first_listing(groups: list[ProviderModels], model: str) -> ModelRef | None:
+    for group in groups:
+        if model in group.models:
+            return ModelRef(group.provider, model)
+    return None
+
+
+def _explicit_model(spec: str) -> ModelRef:
+    ref = parse_model_ref(spec)
+    if ref.provider is not None:
+        return ref
+    if len(config.PROVIDERS) > 1:
+        found = _first_listing(list_provider_models(), ref.model)
+        if found is not None:
+            return found
+    return ModelRef(default_provider(), ref.model)
+
+
+def _configured_model(name: str) -> ModelRef:
+    ref = parse_model_ref(name)
+    fallback = ModelRef(ref.provider or default_provider(), ref.model)
+    groups = list_provider_models(ref.provider)
+    found = _first_listing(groups, ref.model)
+    if found is not None:
+        return found
+    if all(group.error for group in groups):
+        return fallback
+    if ref.provider is not None and len(config.PROVIDERS) > 1:
+        groups = list_provider_models()
+    return choose_model(groups, unavailable_model_reason(ref))
+
+
+def resolve_model(spec: str | None) -> ModelRef:
+    if spec is None:
+        return _configured_model(MODEL)
+    if spec.strip() == "":
+        return choose_model(list_provider_models())
+    return _explicit_model(spec)
+
+
+def _print_provider_warnings() -> None:
+    for location, reason in config.PROVIDER_WARNINGS:
+        print(f"Warning: {location}: {reason}", file=sys.stderr)
 
 
 def format_thinking(reasoning: str, *, expanded: bool, width: int, hold: bool) -> str:
@@ -180,7 +235,7 @@ def _print_session(session, *, answer_only: bool) -> None:
         print("Coding")
     if getattr(session, "debug", False):
         print("Debug")
-    print(f"Model: {session.model}")
+    print(f"Model: {model_label(getattr(session, 'provider', None), session.model)}")
 
 
 def _print_tools(tools: list[tuple[str, object]]) -> None:
@@ -399,9 +454,15 @@ def _run_printed(session, text: str, *, show_tools: bool, answer_only: bool) -> 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     require_api_settings()
+    show_tools = not args.answer_only
+    use_tui = _tty() and not args.answer_only
+    if not use_tui:
+        _print_provider_warnings()
+    chosen = resolve_model(args.model)
     try:
         session = Session(
-            model=resolve_model(args.model),
+            model=chosen.model,
+            provider=chosen.provider,
             yolo=args.yolo,
             project=args.coding,
             coding=args.coding is not None,
@@ -409,8 +470,6 @@ def main(argv: list[str] | None = None) -> None:
         )
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
-    show_tools = not args.answer_only
-    use_tui = _tty() and not args.answer_only
     if getattr(session, "debug", False) and not use_tui:
         session.on_debug = _print_debug
     if args.query is not None:

@@ -6,14 +6,17 @@ from types import SimpleNamespace
 
 import pytest
 from helpers import _export_messages
+from textual.app import App
 
 from harnh3x import CacheRound, is_failure_answer, matching_commands
+from harnh3x.agent import ModelRef, ProviderModels
 from harnh3x.tui import (
     MENTION_ROWS,
     Mention,
     ModelApp,
     Segment,
     StatusState,
+    SwitchModelScreen,
     activity_text,
     build_segments,
     cache_details,
@@ -36,6 +39,7 @@ from harnh3x.tui import (
     mention_children,
     mention_menu,
     mention_window,
+    model_rows,
     pick_model,
     render_export,
     replace_mention_query,
@@ -270,12 +274,16 @@ def _run(app, keys: list[str]):
     asyncio.run(drive())
 
 
-def test_model_screen_accepts_arrows_or_a_number():
-    app = ModelApp(["alpha", "beta", "gamma"])
-    _run(app, ["down", "down", "enter"])
-    assert app.return_value == "gamma"
+def _local(*names):
+    return [ProviderModels("local", list(names))]
 
-    app = ModelApp(["alpha", "beta"])
+
+def test_model_screen_accepts_arrows_or_a_number():
+    app = ModelApp(_local("alpha", "beta", "gamma"))
+    _run(app, ["down", "down", "enter"])
+    assert app.return_value == ModelRef("local", "gamma")
+
+    app = ModelApp(_local("alpha", "beta"))
 
     async def invalid_then_one():
         async with app.run_test(size=(80, 24)) as pilot:
@@ -285,12 +293,120 @@ def test_model_screen_accepts_arrows_or_a_number():
             await pilot.press("1", "enter")
 
     asyncio.run(invalid_then_one())
-    assert app.return_value == "alpha"
+    assert app.return_value == ModelRef("local", "alpha")
+
+
+_GROUPS = [
+    ProviderModels("routerly", ["qwen", "gemma"]),
+    ProviderModels("litellm", [], "Could not reach the API."),
+    ProviderModels("claude", ["sonnet"]),
+]
+
+
+def test_model_rows_head_each_provider_and_number_across_them():
+    refs, labels, sections, search = model_rows(_GROUPS)
+
+    assert refs == [
+        ModelRef("routerly", "qwen"),
+        ModelRef("routerly", "gemma"),
+        ModelRef("claude", "sonnet"),
+    ]
+    assert labels == ["  1. qwen", "  2. gemma", "  3. sonnet"]
+    assert [
+        (start, end, [str(row) for row in rows]) for start, end, rows in sections
+    ] == [
+        (0, 2, ["routerly"]),
+        (2, 2, ["litellm", "  Could not reach the API."]),
+        (2, 3, ["claude"]),
+    ]
+    assert search == ["routerly/qwen", "routerly/gemma", "claude/sonnet"]
+
+    refs, labels, sections, _search = model_rows(_local("alpha"))
+    assert labels == ["1. alpha"]
+    assert sections == []
+
+
+def _prompts(screen):
+    options = screen.query_one("#models")
+    return [
+        (
+            str(options.get_option_at_index(i).prompt),
+            options.get_option_at_index(i).disabled,
+        )
+        for i in range(options.option_count)
+    ]
+
+
+def test_grouped_model_screen_skips_headings():
+    app = ModelApp(_GROUPS)
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            assert _prompts(app.screen) == [
+                ("routerly", True),
+                ("  1. qwen", False),
+                ("  2. gemma", False),
+                ("litellm", True),
+                ("  Could not reach the API.", True),
+                ("claude", True),
+                ("  3. sonnet", False),
+            ]
+            options = app.screen.query_one("#models")
+            assert options.highlighted == 1
+            await pilot.press("down", "down")
+            assert options.highlighted == 6
+            await pilot.press("2")
+            assert options.highlighted == 2
+            await pilot.press("enter")
+
+    asyncio.run(drive())
+    assert app.return_value == ModelRef("routerly", "gemma")
+
+
+def test_switch_model_screen_filters_by_provider_and_marks_the_current():
+    class Host(App):
+        def on_mount(self):
+            self.push_screen(
+                SwitchModelScreen(_GROUPS, ModelRef("claude", "sonnet")), self.exit
+            )
+
+    app = Host()
+
+    async def drive():
+        async with app.run_test(size=(80, 24)) as pilot:
+            options = app.screen.query_one("#models")
+            assert options.highlighted == 6
+            assert _prompts(app.screen)[6] == ("  3. sonnet (current)", False)
+            await pilot.press("n")
+            status = str(app.screen.query_one("#status").content)
+            assert "2 matches" in status
+            assert _prompts(app.screen) == [
+                ("routerly", True),
+                ("  1. qwen", False),
+                ("claude", True),
+                ("  3. sonnet (current)", False),
+            ]
+            assert options.highlighted == 1
+            await pilot.press("backspace", *"claude")
+            assert _prompts(app.screen) == [
+                ("claude", True),
+                ("  3. sonnet (current)", False),
+            ]
+            await pilot.press(*["backspace"] * 6, *"router")
+            assert _prompts(app.screen) == [
+                ("routerly", True),
+                ("  1. qwen", False),
+                ("  2. gemma", False),
+            ]
+            await pilot.press("down", "enter")
+
+    asyncio.run(drive())
+    assert app.return_value == ModelRef("routerly", "gemma")
 
 
 def test_model_screen_explains_a_required_choice():
-    reason = "qwen3.5-128k is missing from this provider. Choose a model to continue."
-    app = ModelApp(["alpha", "beta"], reason)
+    reason = "qwen3.5-128k is missing from local. Choose a model to continue."
+    app = ModelApp(_local("alpha", "beta"), reason)
 
     async def drive():
         async with app.run_test(size=(80, 24)) as pilot:
@@ -298,9 +414,9 @@ def test_model_screen_explains_a_required_choice():
             await pilot.press("enter")
 
     asyncio.run(drive())
-    assert app.return_value == "alpha"
+    assert app.return_value == ModelRef("local", "alpha")
 
-    plain = ModelApp(["alpha"])
+    plain = ModelApp(_local("alpha"))
 
     async def no_note():
         async with plain.run_test(size=(80, 24)) as pilot:
@@ -311,7 +427,7 @@ def test_model_screen_explains_a_required_choice():
 
 
 def test_escape_closes_the_model_screen():
-    app = ModelApp(["alpha", "beta"])
+    app = ModelApp(_local("alpha", "beta"))
 
     async def drive():
         async with app.run_test(size=(80, 24)) as pilot:
@@ -327,7 +443,7 @@ def test_pick_model_exits_when_the_list_is_closed(monkeypatch):
     monkeypatch.setattr("harnh3x.tui.pickers.ModelApp.run", lambda self: None)
 
     with pytest.raises(SystemExit) as exc:
-        pick_model(["alpha"])
+        pick_model(_local("alpha"))
 
     assert exc.value.code == 1
 

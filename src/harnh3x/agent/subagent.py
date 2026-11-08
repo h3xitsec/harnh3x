@@ -133,6 +133,7 @@ class _ChildSession:
     def __init__(self, parent, spec: Subagent):
         self.workspace = parent.workspace
         self.model = parent.model
+        self.provider = getattr(parent, "provider", None)
         self.yolo = parent.yolo
         self.project = parent.project
         self.coding = False

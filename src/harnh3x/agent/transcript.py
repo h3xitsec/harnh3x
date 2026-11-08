@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from harnh3x import config
-from harnh3x.agent.client import _count
+from harnh3x.agent.client import _count, default_provider, find_provider, model_label
 from harnh3x.config import TRANSCRIPT_FILE
 
 if TYPE_CHECKING:
@@ -66,6 +66,17 @@ def _stored_project(data: dict, workspace: Path) -> Path | None:
         raise ValueError(f"Cannot resume: {exc}") from exc
 
 
+def _stored_provider(data: dict) -> str | None:
+    if "provider" not in data or data["provider"] is None:
+        return default_provider()
+    raw = data["provider"]
+    if not isinstance(raw, str) or not raw:
+        raise ValueError("Cannot resume: invalid provider")
+    if find_provider(raw) is None:
+        raise ValueError(f"Cannot resume: provider {raw} is not configured")
+    return raw
+
+
 def _stored_coding(data: dict, project: Path | None) -> bool:
     if "coding" not in data:
         return False
@@ -88,6 +99,7 @@ class SessionInfo:
     model: str
     updated: float
     preview: str
+    provider: str | None = None
 
 
 def parse_command(text: str) -> tuple[str, str] | None:
@@ -106,7 +118,8 @@ def session_label(info: SessionInfo, index: int) -> str:
     when = moment.strftime("%b %d %H:%M")
     short = info.workspace.name[:8]
     preview = info.preview if info.preview else "(empty)"
-    return f"{index + 1}. {short}  {when}  {info.model}  {preview}"
+    model = model_label(info.provider, info.model)
+    return f"{index + 1}. {short}  {when}  {model}  {preview}"
 
 
 def list_sessions(root: Path | str | None = None) -> list[SessionInfo]:
@@ -177,17 +190,21 @@ def _session_info(workspace: Path) -> SessionInfo | None:
     preview = _first_preview(data["messages"])
     if preview is None:
         return None
+    provider = data.get("provider")
     return SessionInfo(
         workspace=workspace.resolve(),
         model=data["model"],
         updated=path.stat().st_mtime,
         preview=preview,
+        provider=provider if isinstance(provider, str) and provider else None,
     )
 
 
 def _save_transcript(session: Session) -> None:
     path = session.workspace / TRANSCRIPT_FILE
     payload = {"model": session.model, "messages": session.messages}
+    if session.provider is not None:
+        payload["provider"] = session.provider
     if _count(session.context_tokens) is not None:
         payload["context_tokens"] = session.context_tokens
     rounds = getattr(session, "cache_rounds", None)

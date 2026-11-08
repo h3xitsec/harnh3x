@@ -33,33 +33,46 @@ poetry install
 
 The client reads `~/.config/harnh3x/harnh3x.yaml`, or `$XDG_CONFIG_HOME/harnh3x/harnh3x.yaml` when that variable is set. A missing file changes nothing, and the process does not create it. [`harnh3x.yaml.example`](harnh3x.yaml.example) lists every setting. If an old `harnh3x.conf` is still there and the YAML file is not, startup exits and tells you to move the settings.
 
+Each model server is a named entry under `providers`. `type` is `openai` (any OpenAI-compatible chat API: OpenAI, Ollama, LiteLLM, and so on) or `anthropic` (Claude's Messages API), and it picks the request format. An `openai` entry needs `api_url` and `api_key`. An `anthropic` entry needs `api_key`; its `api_url` defaults to `https://api.anthropic.com`. Provider names use lowercase letters, digits, and hyphens.
+
 ```yaml
-openai_api_key: sk-...
-openai_api_url: http://127.0.0.1:11434/v1
-model: qwen3.5-128k
+providers:
+  ollama:
+    type: openai
+    api_url: http://127.0.0.1:11434/v1
+    api_key: ollama
+  litellm:
+    type: openai
+    api_url: http://localhost:4000/v1
+    api_key: sk-...
+  claude:
+    type: anthropic
+    api_key: sk-ant-...
+  azure:
+    type: openai
+    models:
+      - gpt-5-mini
+      - gpt-5
+    api_url: https://your-resource.openai.azure.com/openai/v1
+    api_key: ...
+model: ollama/qwen3.5-128k
 ```
 
-`#` comments are ignored. The same scalar values can be set with environment variables, which override the file when they are non-empty:
+`models` is optional. When it is set, the picker and startup use that list, in that order, and never query the provider's `/models` endpoint. Use it for servers that list every model they know about (Azure AI Foundry does) instead of the ones you deployed. Without it, the list comes from `/models`.
 
-```bash
-OPENAI_API_KEY=...
-OPENAI_BASE_URL=http://127.0.0.1:11434/v1
-HARNH3X_MODEL=qwen3.5-128k
-```
+`model` is the default model. `provider/model` names the provider when the first segment matches a configured provider name; otherwise the whole value is a model id (so `hf.co/unsloth/...` stays one id), and startup uses the first provider, in file order, whose model list contains it. The model picker lists every provider's models in its own section, so you can switch providers without editing this file.
+
+An entry with no `type`, or a `type` other than `openai` or `anthropic`, is skipped. Startup continues, and the reason shows in the red `⚠ N` badge of the status bar (and on stderr outside the full-screen view). A missing `api_url` or `api_key` stops startup with the entry's name. Startup also exits when no provider is configured.
+
+`openai_api_key`, `openai_api_url`, `anthropic_api_key`, and `provider` are no longer read. Startup exits when one of them is in the file; move those values into `providers`. The `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and `ANTHROPIC_API_KEY` environment variables are ignored.
+
+`#` comments are ignored. The scalar settings can also be set with environment variables, which override the file when they are non-empty, for example `HARNH3X_MODEL=ollama/qwen3.5-128k`. Environment variables do not override `providers`.
 
 `python-dotenv` loads a `.env` from the working directory when the process starts, without overriding variables that are already set. Do not commit that file. `--model` overrides the model.
 
-Startup exits with a short error when `openai_api_key` or `openai_api_url` is missing from both the config file and the environment.
+`max_tokens` (default 8192) is sent on every completion with either type of provider, including compaction; an OpenAI-compatible server that rejects the parameter is called again with `max_completion_tokens`.
 
-`provider` is `openai` by default. Set it to `anthropic` to call Claude's Messages API. The key is then `anthropic_api_key`, or `ANTHROPIC_API_KEY` when that variable is set. `openai_api_key` and `openai_api_url` are ignored in that mode, and the URL is `https://api.anthropic.com`. `max_tokens` (default 8192) is sent on every completion with either provider, including compaction; an OpenAI-compatible server that rejects the parameter is called again with `max_completion_tokens`.
-
-`context_limit` sets the window used for compaction with either provider. When it is unset, Claude uses 200000 and an OpenAI-compatible server is asked through Ollama's `/api/show`; a server without that endpoint leaves the limit unknown and compaction off until `context_limit` is set.
-
-```yaml
-provider: anthropic
-anthropic_api_key: sk-ant-...
-model: claude-sonnet-4-6
-```
+`context_limit` sets the window used for compaction with every provider. When it is unset, Claude uses 200000 and an OpenAI-compatible server is asked through Ollama's `/api/show`; a server without that endpoint leaves the limit unknown and compaction off until `context_limit` is set.
 
 Other tunables use the same file: `max_turns`, `subagent_max_turns`, `compact_at`, `max_tool_result`, `fetch_timeout`, `fetch_max_bytes`, `fetch_max_redirects`, `search_max_results`, `feed_max_items`, `shell_timeout`, `shell_max_timeout`, `shell_max_output`, `list_files_max`, `search_files_max`, `pdf_max_pages`, `preview_rows`, `wikipedia_lang`, and `base_dir`. Each one also accepts `HARNH3X_` plus that name in uppercase, such as `HARNH3X_MAX_TURNS`. `shell_max_output` (default 1000000 bytes) kills a shell or Python command whose combined output passes that size and says so in the result. Startup exits with the setting's name when a count or limit is not a positive integer, when `fetch_max_redirects` is negative, when `compact_at` is not above 0 and at most 1, or when `shell_max_timeout` is below `shell_timeout`. `base_dir` defaults to `~/.harnh3x`: sessions are created under `workspaces/` inside it, and `memory.md` sits next to that directory. `HARNH3X_CONFIG` points at a different file; an empty value skips the file.
 
@@ -77,7 +90,7 @@ mcp:
 
 Install [caido-mcp-server](https://github.com/c0tton-fluff/caido-mcp-server) yourself and put the local Caido access token in `env`. Leave `CAIDO_ALLOW_SENSITIVE_HEADERS` unset unless you need real credential headers in tool output. Another server is another key under `mcp`. Environment variables do not override this block. An MCP skill is omitted when an `http` or `https` URL in its `env` is not accepting connections.
 
-The built-in model is `qwen3.5-128k` when nothing else sets it. Point `openai_api_url` or `OPENAI_BASE_URL` at whatever server hosts it.
+The built-in model is `qwen3.5-128k` when nothing else sets it.
 
 ## Usage
 
@@ -99,7 +112,7 @@ poetry run harnh3x --coding ~/Github/my-project
 poetry run harnh3x --debug
 ```
 
-`--model` with a name selects that model. `--model` alone lists models from the API: a Textual picker on a tty, a numbered prompt otherwise. Escape closes the Textual picker and exits. When the configured default is not in that list, startup uses the same chooser and says that model is missing from this provider. An explicit name is used as given. A list that cannot be fetched leaves the configured default in place.
+`--model` with a name selects that model; `--model litellm/gpt-4.1` also names the provider. `--model` alone lists the models of every configured provider, one section per provider: a Textual picker on a tty, a numbered prompt otherwise. A provider whose list cannot be fetched shows its error in its section. Escape closes the Textual picker and exits. When the configured default is not listed, startup uses the same chooser and says which provider it is missing from. An explicit name is used as given: a bare name goes to the first provider that lists it, or the first provider. When no provider's list can be fetched, the configured default stays in place. The chosen provider is stored in `transcript.json` and restored by `/resume`. A transcript from before providers uses the first configured provider. A provider that is no longer configured stops the resume.
 
 `--coding PATH` grants sandboxed read, write, and shell access to an existing directory and starts a coding session there. The path is expanded and must not be `/` or overlap the session workspace. Relative tool paths and the shell working directory use that folder. Absolute paths may also use the session workspace. Downloads, plans, and the transcript stay in the session directory. The system prompt is a coding agent: read the project before changing it, load the coding skill before editing source, make the smallest change, and confirm the paths. The path and the coding flag are stored in `transcript.json` and restored by `/resume`. A new session in the same process (Ctrl+N) keeps them. A resumed transcript with no `coding` value clears it. Plain output and the header print `Project:` and `Coding` on the next line.
 
@@ -128,7 +141,7 @@ Enter submits. Shift+Enter inserts a newline.
 | `/export PATH` | Write one response, or every response, to that markdown file. Icons at the bottom right of a response copy it or write it to a markdown file. |
 | `/exit` | Quit and stop the running request |
 
-The header title is Harnh3x, then the workspace, the project when one is set, and Coding when the session is a coding session. The composer is a tall box, clear until it is focused, with a `❯` that becomes `☰` once the draft has a newline. It grows with the draft, then scrolls so the cursor stays in view. A sent message renders as Markdown under a You label. The status bar under the composer, with a blank row between them, is a row of colored badges. On the left are the model, the context the last completion used against the model's limit (for example `ctx 5k/262k 2%`, yellow near the compaction point and red at or past it), `YOLO` with `--yolo`, and `DEBUG` with `--debug`. On the right are the built-in skills, with `+N` for the [custom skills](#custom-skills) (`skills 12+1`), the tools, the MCP servers and their tools when any are connected (`mcp 1 · 67 tools`), a red `⚠ N` badge when an MCP server or custom skill is unavailable, and the package version. Click the skills or tools badge to see which skills are loaded and which are not, with the tools each one provides. Click the model badge to switch to another model the API lists; the conversation continues with that model, and its context limit is looked up again. Escape, or a click outside the box, closes any of these boxes. On a narrow terminal the least important badges are dropped first: the version, then the skill and tool counts, then MCP, then `DEBUG`, then the context. YOLO and the warning badge are dropped last. YOLO stays for a new session or a resumed transcript. Tool calls for a turn share one box, which keeps the last three lines until you click it. Each model completion is labeled `Turn N`, starting at 1, with a line under the label. The thinking box keeps the last three lines until you click it. With `--debug`, the first completion adds a cyan System box, and a later completion adds another only when the prompt changed. Every completion adds a cyan Request box. Both collapse the same way. Ctrl+H hides those, the turn headings, and the thinking, tool, and compaction boxes. When the history is compacted, the transcript shows a compaction note and then the answer as Markdown.
+The header title is Harnh3x, then the workspace, the project when one is set, and Coding when the session is a coding session. The composer is a tall box, clear until it is focused, with a `❯` that becomes `☰` once the draft has a newline. It grows with the draft, then scrolls so the cursor stays in view. A sent message renders as Markdown under a You label. The status bar under the composer, with a blank row between them, is a row of colored badges. On the left are the model, the context the last completion used against the model's limit (for example `ctx 5k/262k 2%`, yellow near the compaction point and red at or past it), `YOLO` with `--yolo`, and `DEBUG` with `--debug`. On the right are the built-in skills, with `+N` for the [custom skills](#custom-skills) (`skills 12+1`), the tools, the MCP servers and their tools when any are connected (`mcp 1 · 67 tools`), a red `⚠ N` badge when a provider entry was skipped or an MCP server or custom skill is unavailable, and the package version. With more than one provider, the model badge reads `provider/model`. Click the skills or tools badge to see which skills are loaded and which are not, with the tools each one provides. Click the model badge to switch to another model; the list has one section per provider, and typing filters by model or provider name. The conversation continues with that model, and its context limit is looked up again. Switching to another provider drops the earlier turns' provider-specific replay data (Claude thinking signatures and Responses API items) and keeps their reasoning text. Escape, or a click outside the box, closes any of these boxes. On a narrow terminal the least important badges are dropped first: the version, then the skill and tool counts, then MCP, then `DEBUG`, then the context. YOLO and the warning badge are dropped last. YOLO stays for a new session or a resumed transcript. Tool calls for a turn share one box, which keeps the last three lines until you click it. Each model completion is labeled `Turn N`, starting at 1, with a line under the label. The thinking box keeps the last three lines until you click it. With `--debug`, the first completion adds a cyan System box, and a later completion adds another only when the prompt changed. Every completion adds a cyan Request box. Both collapse the same way. Ctrl+H hides those, the turn headings, and the thinking, tool, and compaction boxes. When the history is compacted, the transcript shows a compaction note and then the answer as Markdown.
 
 One-shot on a tty, when the model returned reasoning, waits for Enter before the process exits.
 

@@ -4,14 +4,17 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.events import Key
 from textual.screen import ModalScreen
+from textual.visual import VisualType
 from textual.widgets import OptionList, Static
+from textual.widgets.option_list import Option
 
-from harnh3x.agent import session_label
+from harnh3x.agent import ModelRef, ProviderModels, session_label
 from harnh3x.tui.export import answer_preview
 from harnh3x.tui.modals import BackdropCloses
 from harnh3x.tui.theme import ANSI_THEME, THEME
@@ -20,6 +23,7 @@ _PROMPT = "Use up/down and Enter, or type a number."
 _FILTER_PROMPT = "Use up/down and Enter, type a number, or type to filter."
 _BACK = "Press Enter or Escape to go back."
 _CANCEL = Binding("escape", "cancel", "Cancel", priority=True)
+_EXTRA = -1
 
 
 class NumberedPicker(ModalScreen):
@@ -30,8 +34,11 @@ class NumberedPicker(ModalScreen):
     ``choose``. ``extra_label`` adds one trailing option outside the
     numbered range that ``choose_extra`` handles. ``empty_text`` replaces
     the list when there is nothing to pick. When ``filterable`` is set,
-    typed text that is not a number narrows the list to labels containing
-    it; the labels keep their original numbers.
+    typed text that is not a number narrows the list to labels (or their
+    ``search`` text) containing it; the labels keep their original numbers.
+    ``sections`` holds ``(start, end, rows)``: disabled rows shown before
+    label ``start`` for the labels in ``[start, end)``; while filtering, a
+    section's rows show only when one of its labels matches.
     """
 
     BINDINGS: ClassVar[list[Binding]] = [
@@ -74,13 +81,21 @@ class NumberedPicker(ModalScreen):
     empty_text: ClassVar[str | None] = None
     extra_label: ClassVar[str | None] = None
 
-    def __init__(self, labels: list[str]) -> None:
+    def __init__(
+        self,
+        labels: list[str],
+        sections: list[tuple[int, int, list[VisualType]]] | None = None,
+        search: list[str] | None = None,
+    ) -> None:
         super().__init__()
         self.labels = labels
+        self.sections = sections or []
+        self.search = search
         self.digits = ""
         self.error = ""
         self.note = ""
         self.shown = list(range(len(labels)))
+        self._positions: list[int | None] = []
 
     def choose(self, index: int) -> None:
         raise NotImplementedError
@@ -101,11 +116,42 @@ class NumberedPicker(ModalScreen):
         prompt = _FILTER_PROMPT if self.filterable else _PROMPT
         return f"{prompt} Escape cancels." if self.cancellable else prompt
 
-    def _options(self) -> list[str]:
-        options = [self.labels[index] for index in self.shown]
+    def _options(self) -> list[Option]:
+        options: list[Option] = []
+        positions: list[int | None] = []
+        shown = set(self.shown)
+        for index in range(len(self.labels) + 1):
+            for start, end, rows in self.sections:
+                if start != index or not self._section_visible(start, end, shown):
+                    continue
+                for row in rows:
+                    options.append(Option(row, disabled=True))
+                    positions.append(None)
+            if index < len(self.labels) and index in shown:
+                options.append(Option(self.labels[index]))
+                positions.append(index)
         if self.extra_label is not None:
-            options.append(self.extra_label)
+            options.append(Option(self.extra_label))
+            positions.append(_EXTRA)
+        self._positions = positions
         return options
+
+    def _section_visible(self, start: int, end: int, shown: set[int]) -> bool:
+        if not self._filtering:
+            return True
+        return any(index in shown for index in range(start, end))
+
+    def _position_of(self, index: int) -> int | None:
+        try:
+            return self._positions.index(index)
+        except ValueError:
+            return None
+
+    def _first_position(self) -> int | None:
+        for position, index in enumerate(self._positions):
+            if index is not None:
+                return position
+        return None
 
     def compose(self) -> ComposeResult:
         with Vertical(id="picker-box"):
@@ -121,7 +167,11 @@ class NumberedPicker(ModalScreen):
     def on_mount(self) -> None:
         self.query_one("#picker-box", Vertical).border_title = self.heading
         if not self._empty:
-            self.query_one(NumberedOptions).focus()
+            options = self.query_one(NumberedOptions)
+            options.focus()
+            highlighted = options.highlighted
+            if highlighted is None or self._positions[highlighted] is None:
+                options.highlighted = self._first_position()
 
     def add_digit(self, digit: str) -> None:
         self.add_text(digit)
@@ -165,12 +215,15 @@ class NumberedPicker(ModalScreen):
         count = len(self.labels)
         if self.digits == "" or self._filtering:
             highlighted = self.query_one(NumberedOptions).highlighted
-            if highlighted is None:
+            if highlighted is None or highlighted >= len(self._positions):
                 return
-            if highlighted >= len(self.shown):
+            index = self._positions[highlighted]
+            if index is None:
+                return
+            if index == _EXTRA:
                 self.choose_extra()
                 return
-            self.choose(self.shown[highlighted])
+            self.choose(index)
             return
         number = int(self.digits)
         if str(number) == self.digits and 1 <= number <= count:
@@ -191,10 +244,9 @@ class NumberedPicker(ModalScreen):
             return
         if self._filtering:
             needle = self.digits.lower()
+            texts = self.search or self.labels
             shown = [
-                index
-                for index, label in enumerate(self.labels)
-                if needle in label.lower()
+                index for index, text in enumerate(texts) if needle in text.lower()
             ]
         else:
             shown = list(range(len(self.labels)))
@@ -203,7 +255,7 @@ class NumberedPicker(ModalScreen):
             self.shown = shown
             options.clear_options()
             options.add_options(self._options())
-            options.highlighted = 0 if self._options() else None
+            options.highlighted = self._first_position()
         self._follow_digits()
         self._refresh_status()
 
@@ -211,7 +263,9 @@ class NumberedPicker(ModalScreen):
         if self.digits.isdigit() and str(int(self.digits)) == self.digits:
             number = int(self.digits)
             if 1 <= number <= len(self.labels):
-                self.query_one(NumberedOptions).highlighted = number - 1
+                position = self._position_of(number - 1)
+                if position is not None:
+                    self.query_one(NumberedOptions).highlighted = position
 
     def _refresh_status(self) -> None:
         if self._empty:
@@ -250,6 +304,38 @@ ResumeOptions = NumberedOptions
 ExportOptions = NumberedOptions
 
 
+def model_rows(
+    groups: list[ProviderModels],
+) -> tuple[
+    list[ModelRef], list[str], list[tuple[int, int, list[VisualType]]], list[str]
+]:
+    """Picker rows for provider groups: refs, numbered labels, sections, search text.
+
+    More than one group puts a heading row above each provider's models; a
+    provider that could not be listed shows its error as a disabled row.
+    """
+    headed = len(groups) > 1
+    indent = "  " if headed else ""
+    refs: list[ModelRef] = []
+    labels: list[str] = []
+    search: list[str] = []
+    sections: list[tuple[int, int, list[VisualType]]] = []
+    for group in groups:
+        rows: list[VisualType] = []
+        if headed:
+            rows.append(Text(group.provider, style="bold"))
+        if group.error:
+            rows.append(Text(f"{indent}{group.error}", style="italic"))
+        start = len(refs)
+        for name in group.models:
+            refs.append(ModelRef(group.provider, name))
+            labels.append(f"{indent}{len(refs)}. {name}")
+            search.append(f"{group.provider}/{name}")
+        if rows:
+            sections.append((start, len(refs), rows))
+    return refs, labels, sections, search
+
+
 class ModelScreen(NumberedPicker):
     BINDINGS: ClassVar[list[Binding]] = [_CANCEL]
 
@@ -257,9 +343,10 @@ class ModelScreen(NumberedPicker):
     option_id = "models"
     cancellable = True
 
-    def __init__(self, models: list[str], reason: str | None = None) -> None:
-        super().__init__([f"{index + 1}. {name}" for index, name in enumerate(models)])
-        self.models = models
+    def __init__(self, groups: list[ProviderModels], reason: str | None = None) -> None:
+        refs, labels, sections, search = model_rows(groups)
+        super().__init__(labels, sections, search)
+        self.models = refs
         self.note = reason or ""
 
     def choose(self, index: int) -> None:
@@ -275,36 +362,37 @@ class SwitchModelScreen(BackdropCloses, ModelScreen):
     cancellable = True
     filterable = True
 
-    def __init__(self, models: list[str], current: str | None) -> None:
-        super().__init__(models)
+    def __init__(self, groups: list[ProviderModels], current: ModelRef | None) -> None:
+        super().__init__(groups)
         self.current = current
         self.labels = [
-            f"{label} (current)" if name == current else label
-            for label, name in zip(self.labels, models, strict=True)
+            f"{label} (current)" if ref == current else label
+            for label, ref in zip(self.labels, self.models, strict=True)
         ]
 
     def on_mount(self) -> None:
         super().on_mount()
         if self.current in self.models:
-            options = self.query_one(NumberedOptions)
-            options.highlighted = self.models.index(self.current)
+            position = self._position_of(self.models.index(self.current))
+            if position is not None:
+                self.query_one(NumberedOptions).highlighted = position
 
 
-class ModelApp(App[str]):
-    def __init__(self, models: list[str], reason: str | None = None) -> None:
+class ModelApp(App[ModelRef]):
+    def __init__(self, groups: list[ProviderModels], reason: str | None = None) -> None:
         super().__init__()
         self.theme = THEME
         self.ansi_theme_dark = ANSI_THEME
-        self.models = models
+        self.groups = groups
         self.reason = reason
 
     def on_mount(self) -> None:
-        self.push_screen(ModelScreen(self.models, self.reason), self.exit)
+        self.push_screen(ModelScreen(self.groups, self.reason), self.exit)
 
 
-def pick_model(models: list[str], reason: str | None = None) -> str:
-    chosen = ModelApp(models, reason).run()
-    if not isinstance(chosen, str):
+def pick_model(groups: list[ProviderModels], reason: str | None = None) -> ModelRef:
+    chosen = ModelApp(groups, reason).run()
+    if not isinstance(chosen, ModelRef):
         raise SystemExit(1)
     return chosen
 

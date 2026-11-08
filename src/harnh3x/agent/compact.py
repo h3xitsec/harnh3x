@@ -247,7 +247,7 @@ def _summary_response(session: Session, api, body: str):
 def compact_session(
     session: Session, client: OpenAI | AnthropicClient | None = None
 ) -> str:
-    api = client or api_client.get_client()
+    api = client or api_client.get_client(session.provider)
     if _compact(session, api, force=True):
         _save_transcript(session)
         return "Context compacted."

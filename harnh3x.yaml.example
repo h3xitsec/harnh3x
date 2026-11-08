@@ -1,15 +1,34 @@
 # Copy to ~/.config/harnh3x/harnh3x.yaml
 # A non-empty environment variable overrides the matching scalar.
-# Environment variables do not override mcp.
+# Environment variables do not override providers or mcp.
 
-openai_api_key: [enter openai api key]
-openai_api_url: http://127.0.0.1:11434/v1
-anthropic_api_key: [enter anthropic api key]
-model: model_name
+# One entry per model server. type is required: openai or anthropic.
+# An entry without a valid type is skipped and listed as a warning.
+providers:
+  ollama:
+    type: openai
+    api_url: http://127.0.0.1:11434/v1
+    api_key: [enter api key]
+  # litellm:
+  #   type: openai
+  #   api_url: http://localhost:4000/v1
+  #   api_key: sk-...
+  # claude:
+  #   type: anthropic
+  #   api_key: sk-ant-...
+  #   # api_url defaults to https://api.anthropic.com
+  # azure:
+  #   type: openai
+  #   # models replaces the /models listing for this provider.
+  #   models:
+  #     - gpt-5-mini
+  #     - gpt-5
+  #   api_url: https://your-resource.openai.azure.com/openai/v1
+  #   api_key: ...
 
-# provider: openai
-# provider: anthropic
-# anthropic_api_key: sk-ant-...
+# provider/model, or a bare model id served by the first provider that lists it.
+model: ollama/model_name
+
 # max_tokens: 8192
 # context_limit: 200000
 # max_turns: 45

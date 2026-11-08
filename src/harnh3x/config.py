@@ -21,7 +21,14 @@ PLAN_FILE = "plan.md"
 TRANSCRIPT_FILE = "transcript.json"
 ANTHROPIC_API_URL = "https://api.anthropic.com"
 ANTHROPIC_CONTEXT_LIMIT = 200_000
-_PROVIDERS = {"openai", "anthropic"}
+PROVIDER_TYPES = ("openai", "anthropic")
+_PROVIDER_FIELDS = {"type", "api_url", "api_key", "models"}
+_REMOVED_SETTINGS = (
+    "openai_api_key",
+    "openai_api_url",
+    "anthropic_api_key",
+    "provider",
+)
 _SERVER_NAME = re.compile(r"[a-z0-9][a-z0-9-]*\Z")
 _SERVER_FIELDS = {
     "command",
@@ -49,6 +56,23 @@ class McpServer:
     exclude: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class Provider:
+    name: str
+    kind: str
+    api_url: str
+    api_key: str
+    models: tuple[str, ...] | None = None
+
+
+@dataclass(frozen=True)
+class Providers:
+    """The parsed providers block: usable entries and `(location, reason)` skips."""
+
+    entries: tuple[Provider, ...] = ()
+    warnings: tuple[tuple[str, str], ...] = ()
+
+
 class _Setting:
     def __init__(self, attr: str, env: str, default: object, kind: type):
         self.attr = attr
@@ -58,10 +82,6 @@ class _Setting:
 
 
 _SETTINGS = {
-    "provider": _Setting("PROVIDER", "HARNH3X_PROVIDER", "openai", str),
-    "openai_api_key": _Setting("OPENAI_API_KEY", "OPENAI_API_KEY", None, str),
-    "openai_api_url": _Setting("OPENAI_API_URL", "OPENAI_BASE_URL", None, str),
-    "anthropic_api_key": _Setting("ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY", None, str),
     "max_tokens": _Setting("MAX_TOKENS", "HARNH3X_MAX_TOKENS", 8192, int),
     "context_limit": _Setting("CONTEXT_LIMIT", "HARNH3X_CONTEXT_LIMIT", None, int),
     "model": _Setting("MODEL", "HARNH3X_MODEL", "qwen3.5-128k", str),
@@ -123,7 +143,7 @@ def config_location(
 
 def parse_config(
     text: str, path: Path
-) -> tuple[dict[str, object], tuple[McpServer, ...]]:
+) -> tuple[dict[str, object], tuple[McpServer, ...], Providers]:
     try:
         loaded = yaml.safe_load(text)
     except yaml.YAMLError as exc:
@@ -134,16 +154,25 @@ def parse_config(
         raise SystemExit(f"{path}: expected a mapping")
     values: dict[str, object] = {}
     servers: list[McpServer] = []
+    providers = Providers()
     for key, raw in loaded.items():
         if not isinstance(key, str):
             raise SystemExit(f"{path}: expected a string key")
         if key == "mcp":
             servers = _parse_mcp(raw, path)
             continue
+        if key == "providers":
+            providers = _parse_providers(raw, path)
+            continue
+        if key in _REMOVED_SETTINGS:
+            raise SystemExit(
+                f"{path}: {key} is no longer read. "
+                "Declare providers under providers: (see harnh3x.yaml.example)."
+            )
         if key not in _SETTINGS:
             raise SystemExit(f"{path}: unknown setting {key}")
         values[key] = raw
-    return values, tuple(servers)
+    return values, tuple(servers), providers
 
 
 def resolve_settings(
@@ -165,12 +194,13 @@ def resolve_settings(
             origins[spec.attr] = origin
             continue
         resolved[spec.attr] = spec.default
-    _apply_provider(resolved, origins)
     _validate_ranges(resolved, origins)
     return resolved
 
 
 _POSITIVE_SETTINGS = (
+    ("MAX_TOKENS", "max_tokens"),
+    ("CONTEXT_LIMIT", "context_limit"),
     ("MAX_TURNS", "max_turns"),
     ("SUBAGENT_MAX_TURNS", "subagent_max_turns"),
     ("MAX_TOOL_RESULT", "max_tool_result"),
@@ -204,24 +234,6 @@ def _validate_ranges(resolved: dict[str, object], origins: dict[str, str]) -> No
         raise SystemExit(f"{origin}: shell_max_timeout must be at least shell_timeout")
 
 
-def _apply_provider(
-    resolved: dict[str, object],
-    origins: dict[str, str],
-) -> None:
-    provider = resolved["PROVIDER"]
-    if not isinstance(provider, str) or provider not in _PROVIDERS:
-        origin = origins.get("PROVIDER", "provider")
-        raise SystemExit(f"{origin}: expected openai or anthropic")
-    _require_positive(resolved, origins, "MAX_TOKENS", "max_tokens")
-    _require_positive(resolved, origins, "CONTEXT_LIMIT", "context_limit")
-    if provider == "anthropic":
-        resolved["API_KEY"] = resolved["ANTHROPIC_API_KEY"]
-        resolved["API_URL"] = ANTHROPIC_API_URL
-        return
-    resolved["API_KEY"] = resolved["OPENAI_API_KEY"]
-    resolved["API_URL"] = resolved["OPENAI_API_URL"]
-
-
 def _require_positive(
     resolved: dict[str, object],
     origins: dict[str, str],
@@ -238,29 +250,20 @@ def _require_positive(
 
 
 def require_api_settings() -> None:
-    missing: list[str] = []
-    if PROVIDER == "anthropic":
-        if not API_KEY:
-            missing.append("anthropic_api_key (ANTHROPIC_API_KEY)")
-    else:
-        if not API_KEY:
-            missing.append("openai_api_key (OPENAI_API_KEY)")
-        if not API_URL:
-            missing.append("openai_api_url (OPENAI_BASE_URL)")
-    if not missing:
+    if PROVIDERS:
         return
     path, _explicit = config_location()
-    where = "the environment" if path is None else f"{path} or the environment"
-    listed = " and ".join(missing)
-    pronoun = "it" if len(missing) == 1 else "them"
-    raise SystemExit(f"Missing {listed}. Set {pronoun} in {where}.")
+    where = "the config file" if path is None else str(path)
+    lines = [f"No provider is configured. Add one under providers: in {where}."]
+    lines.extend(f"{location}: {reason}" for location, reason in PROVIDER_WARNINGS)
+    raise SystemExit("\n".join(lines))
 
 
 def load_settings(environ: Mapping[str, str] | None = None) -> dict[str, object]:
     env = os.environ if environ is None else environ
     path, explicit = config_location(env)
     if path is None:
-        return _with_servers(resolve_settings({}, env, Path("harnh3x.yaml")), ())
+        return _with_blocks(resolve_settings({}, env, Path("harnh3x.yaml")))
     if not path.is_file():
         if explicit:
             raise SystemExit(f"{path}: config file not found")
@@ -269,20 +272,99 @@ def load_settings(environ: Mapping[str, str] | None = None) -> dict[str, object]
             raise SystemExit(
                 f"{legacy} is no longer read. Move its settings into {path}."
             )
-        return _with_servers(resolve_settings({}, env, path), ())
+        return _with_blocks(resolve_settings({}, env, path))
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
         raise SystemExit(f"{path}: {exc.strerror}") from None
-    values, servers = parse_config(text, path)
-    return _with_servers(resolve_settings(values, env, path), servers)
+    values, servers, providers = parse_config(text, path)
+    return _with_blocks(resolve_settings(values, env, path), servers, providers)
 
 
-def _with_servers(
-    resolved: dict[str, object], servers: tuple[McpServer, ...]
+def _with_blocks(
+    resolved: dict[str, object],
+    servers: tuple[McpServer, ...] = (),
+    providers: Providers | None = None,
 ) -> dict[str, object]:
+    providers = providers or Providers()
     resolved["MCP_SERVERS"] = servers
+    resolved["PROVIDERS"] = providers.entries
+    resolved["PROVIDER_WARNINGS"] = providers.warnings
     return resolved
+
+
+def _parse_providers(raw: object, path: Path) -> Providers:
+    if raw is None:
+        return Providers()
+    if not isinstance(raw, dict):
+        raise SystemExit(f"{path}: providers: expected a mapping")
+    entries: list[Provider] = []
+    warnings: list[tuple[str, str]] = []
+    for name, block in raw.items():
+        if not isinstance(name, str) or _SERVER_NAME.fullmatch(name) is None:
+            shown = name if isinstance(name, str) else ""
+            raise SystemExit(f"{path}: providers.{shown}: invalid provider name")
+        location = f"providers.{name}"
+        origin = f"{path}: {location}"
+        if not isinstance(block, dict):
+            raise SystemExit(f"{origin}: expected a mapping")
+        unknown = [key for key in block if key not in _PROVIDER_FIELDS]
+        if unknown:
+            raise SystemExit(f"{origin}: unknown setting {unknown[0]}")
+        kind = block.get("type")
+        if kind is None:
+            warnings.append(
+                (location, "type is required (openai or anthropic); provider skipped")
+            )
+            continue
+        if kind not in PROVIDER_TYPES:
+            warnings.append(
+                (
+                    location,
+                    f"type {kind} is not openai or anthropic; provider skipped",
+                )
+            )
+            continue
+        api_key = _provider_string(block, "api_key", origin)
+        api_url = _provider_string(block, "api_url", origin)
+        if api_key is None:
+            raise SystemExit(f"{origin}: api_key is required")
+        if api_url is None:
+            if kind == "openai":
+                raise SystemExit(f"{origin}: api_url is required")
+            api_url = ANTHROPIC_API_URL
+        entries.append(
+            Provider(
+                name=name,
+                kind=kind,
+                api_url=api_url,
+                api_key=api_key,
+                models=_provider_models(block, origin),
+            )
+        )
+    return Providers(tuple(entries), tuple(warnings))
+
+
+def _provider_models(block: dict, origin: str) -> tuple[str, ...] | None:
+    if block.get("models") is None:
+        return None
+    raw = block["models"]
+    if (
+        not isinstance(raw, list)
+        or not raw
+        or not all(isinstance(item, str) and item.strip() for item in raw)
+    ):
+        raise SystemExit(f"{origin}: models must be a non-empty list of model names")
+    return tuple(dict.fromkeys(item.strip() for item in raw))
+
+
+def _provider_string(block: dict, key: str, origin: str) -> str | None:
+    if key not in block or block[key] is None:
+        return None
+    value = block[key]
+    if not isinstance(value, str) or not value.strip():
+        raise SystemExit(f"{origin}: {key} must be a non-empty string")
+    return value.strip()
 
 
 def _parse_mcp(raw: object, path: Path) -> list[McpServer]:
@@ -393,9 +475,6 @@ def _coerce(kind: type, raw: object, origin: str) -> object:
 
 
 _loaded = load_settings()
-PROVIDER = _loaded["PROVIDER"]
-API_KEY = _loaded["API_KEY"]
-API_URL = _loaded["API_URL"]
 MAX_TOKENS = _loaded["MAX_TOKENS"]
 CONTEXT_LIMIT = _loaded["CONTEXT_LIMIT"]
 MODEL = _loaded["MODEL"]
@@ -418,3 +497,5 @@ PREVIEW_ROWS = _loaded["PREVIEW_ROWS"]
 WIKIPEDIA_LANG = _loaded["WIKIPEDIA_LANG"]
 BASE_DIR = _loaded["BASE_DIR"]
 MCP_SERVERS = _loaded["MCP_SERVERS"]
+PROVIDERS = _loaded["PROVIDERS"]
+PROVIDER_WARNINGS = _loaded["PROVIDER_WARNINGS"]

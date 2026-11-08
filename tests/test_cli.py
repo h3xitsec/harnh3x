@@ -8,10 +8,13 @@ import pytest
 from helpers import _delta, _export_messages, _load_cli, _past_workspace, _unreachable
 
 import harnh3x.agent.client as agent_client
-from harnh3x import agent
+from harnh3x import agent, config
+from harnh3x.agent import ModelRef, ProviderModels
 from harnh3x.commands import DETAILS_PLAIN
-from harnh3x.config import MODEL
+from harnh3x.config import MODEL, Provider
 from harnh3x.tui import EXPORT_USAGE, NO_EXPORT, YOLO_PLAIN
+
+_LOCAL = ProviderModels("local", ["alpha", "beta"])
 
 
 def test_version_flag_prints_the_package_version(capsys):
@@ -360,7 +363,7 @@ def test_plain_stdout_streams_tokens_before_the_turn_returns(
     client = SimpleNamespace(
         chat=SimpleNamespace(completions=SimpleNamespace(create=create))
     )
-    monkeypatch.setattr(agent_client, "get_client", lambda: client)
+    monkeypatch.setattr(agent_client, "get_client", lambda provider=None: client)
 
     cli.main(["fix the notes"])
 
@@ -447,14 +450,63 @@ def test_list_models_exits_when_the_api_is_unreachable():
         agent.list_models(client)
 
 
+def test_list_provider_models_keeps_order_and_each_providers_error(monkeypatch):
+    _two_providers(monkeypatch)
+    clients = {
+        "routerly": SimpleNamespace(
+            models=SimpleNamespace(
+                list=lambda: [SimpleNamespace(id="qwen"), SimpleNamespace(id="gemma")]
+            )
+        ),
+        "claude": SimpleNamespace(
+            models=SimpleNamespace(
+                list=lambda: (_ for _ in ()).throw(_unreachable("connection"))
+            )
+        ),
+    }
+    monkeypatch.setattr(
+        agent_client, "get_client", lambda provider=None: clients[provider]
+    )
+
+    assert agent.list_provider_models() == [
+        ProviderModels("routerly", ["gemma", "qwen"]),
+        ProviderModels("claude", [], "Could not reach the API."),
+    ]
+    assert agent.list_provider_models("routerly") == [
+        ProviderModels("routerly", ["gemma", "qwen"])
+    ]
+
+
+def test_configured_models_skip_the_models_endpoint(monkeypatch):
+    azure = Provider(
+        "azure", "openai", "http://azure/v1", "k", models=("gpt-5-mini", "gpt-5")
+    )
+    local = Provider("local", "openai", "http://local/v1", "k")
+    monkeypatch.setattr(config, "PROVIDERS", (azure, local))
+    listing = SimpleNamespace(
+        models=SimpleNamespace(list=lambda: [SimpleNamespace(id="qwen")])
+    )
+
+    def client_for(provider=None):
+        assert provider == "local", "azure lists its configured models"
+        return listing
+
+    monkeypatch.setattr(agent_client, "get_client", client_for)
+
+    assert agent.list_provider_models() == [
+        ProviderModels("azure", ["gpt-5-mini", "gpt-5"]),
+        ProviderModels("local", ["qwen"]),
+    ]
+
+
 def test_model_option_selects_that_model(monkeypatch, capsys, tmp_path):
     cli = _load_cli()
     seen = {}
 
-    def refuse_list():
-        raise AssertionError("list_models")
+    def refuse_list(only=None):
+        raise AssertionError("list_provider_models")
 
-    monkeypatch.setattr(cli, "list_models", refuse_list)
+    monkeypatch.setattr(cli, "list_provider_models", refuse_list)
     monkeypatch.setattr(
         cli,
         "Session",
@@ -467,6 +519,7 @@ def test_model_option_selects_that_model(monkeypatch, capsys, tmp_path):
     cli.main(["--model", "gemma4:12b", "fix the notes"])
 
     assert seen["model"] == "gemma4:12b"
+    assert seen["provider"] == "local"
     assert "Model: gemma4:12b" in capsys.readouterr().out
 
 
@@ -479,7 +532,11 @@ def test_configured_model_skips_the_chooser_when_it_is_listed(
     def refuse_prompt(prompt=""):
         raise AssertionError(prompt)
 
-    monkeypatch.setattr(cli, "list_models", lambda: [MODEL, "other"])
+    monkeypatch.setattr(
+        cli,
+        "list_provider_models",
+        lambda only=None: [ProviderModels("local", [MODEL, "other"])],
+    )
     monkeypatch.setattr("builtins.input", refuse_prompt)
     monkeypatch.setattr(
         cli,
@@ -502,11 +559,11 @@ def test_missing_configured_model_prompts(monkeypatch, capsys, tmp_path):
     calls = []
     answers = iter(["0", "nope", "2"])
 
-    def listed():
+    def listed(only=None):
         calls.append(True)
-        return ["alpha", "beta"]
+        return [_LOCAL]
 
-    monkeypatch.setattr(cli, "list_models", listed)
+    monkeypatch.setattr(cli, "list_provider_models", listed)
     monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
     monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
@@ -523,10 +580,9 @@ def test_missing_configured_model_prompts(monkeypatch, capsys, tmp_path):
 
     assert calls == [True]
     assert seen["model"] == "beta"
+    assert seen["provider"] == "local"
     output = capsys.readouterr().out
-    assert (
-        f"{MODEL} is missing from this provider. Choose a model to continue." in output
-    )
+    assert f"{MODEL} is missing from local. Choose a model to continue." in output
     assert "1. alpha" in output
     assert "2. beta" in output
     assert "Enter a number from 1 to 2." in output
@@ -536,22 +592,21 @@ def test_missing_configured_model_prompts(monkeypatch, capsys, tmp_path):
 def test_missing_configured_model_tells_the_textual_picker_why(monkeypatch):
     cli = _load_cli()
     seen = {}
-    monkeypatch.setattr(cli, "list_models", lambda: ["alpha", "beta"])
+    monkeypatch.setattr(cli, "list_provider_models", lambda only=None: [_LOCAL])
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
 
-    def fake_pick(models, reason=None):
-        seen["models"] = models
+    def fake_pick(groups, reason=None):
+        seen["groups"] = groups
         seen["reason"] = reason
-        return "alpha"
+        return ModelRef("local", "alpha")
 
     monkeypatch.setattr(cli, "pick_model", fake_pick)
 
-    assert cli.resolve_model(None) == "alpha"
-    assert seen["models"] == ["alpha", "beta"]
-    assert (
-        seen["reason"]
-        == f"{MODEL} is missing from this provider. Choose a model to continue."
+    assert cli.resolve_model(None) == ModelRef("local", "alpha")
+    assert seen["groups"] == [_LOCAL]
+    assert seen["reason"] == (
+        f"{MODEL} is missing from local. Choose a model to continue."
     )
 
 
@@ -561,13 +616,13 @@ def test_unreachable_model_list_keeps_the_configured_model(
     cli = _load_cli()
     seen = {}
 
-    def unreachable():
-        raise SystemExit("Could not reach the API.")
+    def unreachable(only=None):
+        return [ProviderModels("local", [], "Could not reach the API.")]
 
     def refuse_prompt(prompt=""):
         raise AssertionError(prompt)
 
-    monkeypatch.setattr(cli, "list_models", unreachable)
+    monkeypatch.setattr(cli, "list_provider_models", unreachable)
     monkeypatch.setattr("builtins.input", refuse_prompt)
     monkeypatch.setattr(
         cli,
@@ -588,7 +643,7 @@ def test_model_flag_without_a_name_prompts(monkeypatch, capsys, tmp_path):
     cli = _load_cli()
     seen = {}
     answers = iter(["0", "nope", "2"])
-    monkeypatch.setattr(cli, "list_models", lambda: ["alpha", "beta"])
+    monkeypatch.setattr(cli, "list_provider_models", lambda only=None: [_LOCAL])
     monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
     monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
@@ -605,7 +660,7 @@ def test_model_flag_without_a_name_prompts(monkeypatch, capsys, tmp_path):
 
     assert seen["model"] == "beta"
     output = capsys.readouterr().out
-    assert "missing from this provider" not in output
+    assert "is missing from" not in output
     assert "1. alpha" in output
     assert "2. beta" in output
     assert "Enter a number from 1 to 2." in output
@@ -614,10 +669,171 @@ def test_model_flag_without_a_name_prompts(monkeypatch, capsys, tmp_path):
 
 def test_model_menu_exits_when_the_api_has_no_models(monkeypatch):
     cli = _load_cli()
-    monkeypatch.setattr(cli, "list_models", list)
+    monkeypatch.setattr(
+        cli, "list_provider_models", lambda only=None: [ProviderModels("local", [])]
+    )
 
     with pytest.raises(SystemExit, match="No models available"):
         cli.main(["--model"])
+
+    monkeypatch.setattr(
+        cli,
+        "list_provider_models",
+        lambda only=None: [ProviderModels("local", [], "Could not reach the API.")],
+    )
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(["--model"])
+    assert str(stopped.value).splitlines() == [
+        "No models available from the API.",
+        "local: Could not reach the API.",
+    ]
+
+
+def _two_providers(monkeypatch):
+    monkeypatch.setattr(
+        config,
+        "PROVIDERS",
+        (
+            Provider("routerly", "openai", "http://localhost:3000/v1", "k1"),
+            Provider("claude", "anthropic", "https://api.anthropic.com", "k2"),
+        ),
+    )
+
+
+def test_parse_model_ref_splits_only_on_a_configured_provider(monkeypatch):
+    _two_providers(monkeypatch)
+
+    assert agent.parse_model_ref("routerly/qwen3.5:9b") == ModelRef(
+        "routerly", "qwen3.5:9b"
+    )
+    assert agent.parse_model_ref("claude/claude-sonnet") == ModelRef(
+        "claude", "claude-sonnet"
+    )
+    assert agent.parse_model_ref("hf.co/unsloth/gpt-oss") == ModelRef(
+        None, "hf.co/unsloth/gpt-oss"
+    )
+    assert agent.parse_model_ref("openai/gpt-4o") == ModelRef(None, "openai/gpt-4o")
+    assert agent.parse_model_ref("routerly/") == ModelRef(None, "routerly/")
+    assert agent.parse_model_ref("gemma") == ModelRef(None, "gemma")
+
+
+def test_explicit_model_resolves_its_provider(monkeypatch):
+    cli = _load_cli()
+    _two_providers(monkeypatch)
+    calls = []
+
+    def listed(only=None):
+        calls.append(only)
+        return [
+            ProviderModels("routerly", [], "Could not reach the API."),
+            ProviderModels("claude", ["claude-sonnet", "shared"]),
+        ]
+
+    monkeypatch.setattr(cli, "list_provider_models", listed)
+
+    assert cli.resolve_model("claude/opus") == ModelRef("claude", "opus")
+    assert calls == []
+    assert cli.resolve_model("shared") == ModelRef("claude", "shared")
+    assert cli.resolve_model("unlisted") == ModelRef("routerly", "unlisted")
+    assert calls == [None, None]
+
+
+def test_configured_model_uses_the_first_provider_that_lists_it(monkeypatch):
+    cli = _load_cli()
+    _two_providers(monkeypatch)
+    monkeypatch.setattr(cli, "MODEL", "shared")
+    monkeypatch.setattr(
+        cli,
+        "list_provider_models",
+        lambda only=None: [
+            ProviderModels("routerly", ["shared"]),
+            ProviderModels("claude", ["shared"]),
+        ],
+    )
+
+    assert cli.resolve_model(None) == ModelRef("routerly", "shared")
+
+
+def test_missing_qualified_default_lists_every_provider(monkeypatch, capsys):
+    cli = _load_cli()
+    _two_providers(monkeypatch)
+    monkeypatch.setattr(cli, "MODEL", "claude/gone")
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
+    monkeypatch.setattr("builtins.input", lambda prompt="": "2")
+    calls = []
+    groups = {
+        "routerly": ProviderModels("routerly", ["qwen"]),
+        "claude": ProviderModels("claude", ["claude-sonnet"]),
+    }
+
+    def listed(only=None):
+        calls.append(only)
+        return [groups[only]] if only else list(groups.values())
+
+    monkeypatch.setattr(cli, "list_provider_models", listed)
+
+    assert cli.resolve_model(None) == ModelRef("claude", "claude-sonnet")
+    assert calls == ["claude", None]
+    output = capsys.readouterr().out
+    assert "gone is missing from claude. Choose a model to continue." in output
+    assert output.splitlines()[1:] == [
+        "Available models:",
+        "  routerly",
+        "    1. qwen",
+        "  claude",
+        "    2. claude-sonnet",
+    ]
+
+
+def test_missing_bare_default_names_every_provider(monkeypatch, capsys):
+    cli = _load_cli()
+    _two_providers(monkeypatch)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
+    monkeypatch.setattr("builtins.input", lambda prompt="": "1")
+    monkeypatch.setattr(
+        cli,
+        "list_provider_models",
+        lambda only=None: [
+            ProviderModels("routerly", [], "Could not reach the API."),
+            ProviderModels("claude", ["claude-sonnet"]),
+        ],
+    )
+
+    assert cli.resolve_model(None) == ModelRef("claude", "claude-sonnet")
+    output = capsys.readouterr().out
+    assert (
+        f"{MODEL} is missing from every configured provider. Choose a model to continue."
+        in output
+    )
+    assert "  routerly\n    Could not reach the API.\n  claude\n" in output
+
+
+def test_unreachable_providers_keep_a_qualified_default(monkeypatch):
+    cli = _load_cli()
+    _two_providers(monkeypatch)
+    monkeypatch.setattr(cli, "MODEL", "claude/opus")
+    monkeypatch.setattr(
+        cli,
+        "list_provider_models",
+        lambda only=None: [ProviderModels("claude", [], "Could not reach the API.")],
+    )
+
+    assert cli.resolve_model(None) == ModelRef("claude", "opus")
+
+
+def test_plain_output_names_the_provider_with_several(monkeypatch, capsys, tmp_path):
+    cli = _load_cli()
+    _two_providers(monkeypatch)
+    monkeypatch.setattr(
+        cli, "Session", lambda **kwargs: SimpleNamespace(workspace=tmp_path, **kwargs)
+    )
+    monkeypatch.setattr(cli, "run", lambda *args, **kwargs: "final answer")
+
+    cli.main(["--model", "claude/opus", "fix the notes"])
+
+    assert "Model: claude/opus" in capsys.readouterr().out
 
 
 def _plain_export_session(tmp_path, messages):

@@ -74,6 +74,7 @@ from harnh3x.tui.pickers import (
     ResumeOptions,
     ResumeScreen,
     SwitchModelScreen,
+    model_rows,
     pick_model,
 )
 from harnh3x.tui.status import (
@@ -200,6 +201,7 @@ __all__ = [
     "mention_children",
     "mention_menu",
     "mention_window",
+    "model_rows",
     "pick_model",
     "render_export",
     "replace_mention_query",
